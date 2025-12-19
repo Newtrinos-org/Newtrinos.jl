@@ -13,7 +13,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
 
     - name: Set up Julia
       uses: julia-actions/setup-julia@v2
@@ -30,7 +30,7 @@ jobs:
         julia --project=. src/analysis/analysis.jl --experiments dayabay minos kamland deepcore orca --task profile --name test_IO --ordering IO --plot
 
     - name: Upload output
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: newtrinos-output
         path: |

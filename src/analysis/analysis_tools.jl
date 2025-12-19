@@ -3,7 +3,8 @@ using Distributions
 using DensityInterface
 using InverseFunctions
 using Base
-using ForwardDiff
+import ForwardDiff
+import PolyesterForwardDiff
 using BAT
 using Optimization
 using Optim
@@ -46,11 +47,10 @@ end
 # end
 
 "Find Maximum Likelihood Estimator (MLE)"
-function find_mle(likelihood, prior, params)
+function find_mle(likelihood, prior, params; adsel = AutoPolyesterForwardDiff())
     
     try
-
-        adsel = AutoForwardDiff()
+        
         set_batcontext(ad = adsel)
         
         posterior = PosteriorMeasure(likelihood, prior)

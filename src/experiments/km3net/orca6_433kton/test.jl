@@ -27,8 +27,8 @@ physics = (; osc, atm_flux, earth_layers, xsec);
 experiments = (orca = Newtrinos.orca.configure(physics),)
 
 vars_to_scan = OrderedDict()
-vars_to_scan[:θ₂₃] = 11
-vars_to_scan[:Δm²₃₁] = 11
+vars_to_scan[:θ₂₃] = 21
+vars_to_scan[:Δm²₃₁] = 21
 
 likelihood = Newtrinos.generate_likelihood(experiments);
 
@@ -42,6 +42,7 @@ priors = Newtrinos.get_priors(experiments)
 
 @reset priors.Δm²₃₁ = Uniform(0.0015, 0.003)
 @reset priors.θ₂₃ = Uniform(pi/4-0.25, pi/4+0.25)
+@reset priors.atm_flux_updown_sigma = 0.0
 
 result = Newtrinos.profile(likelihood, priors, vars_to_scan, p, cache_dir="test")
 
