@@ -54,11 +54,13 @@ function build_params_and_priors(isotopes)
         :cevns_xsec_b => Uniform(-2.0, 1.0),
         :cevns_xsec_c => Uniform(-3000, 3000),
         :cevns_xsec_d => Uniform(-1e6, 1e6),
-        :sin2thetaW => truncated(Normal(0.231, 0.00013), 0.2, 0.26),
+        #:sin2thetaW => truncated(Normal(0.231, 0.00013), 0.2, 0.26),
+        :sin2thetaW => Uniform(0.2, 0.26),
     )
     for iso in isotopes
         param_dict[iso.Rn_key] = iso.Rn_nom
-        prior_dict[iso.Rn_key] = Uniform(iso.Rn_nom - 0.05*iso.Rn_nom, iso.Rn_nom + 0.05*iso.Rn_nom) # allow up to ±5% expansion from nominal Rn
+        prior_dict[iso.Rn_key] = truncated(Normal(iso.Rn_nom, iso.Rn_nom*0.05), 0.8*iso.Rn_nom, 1.2*iso.Rn_nom)
+        #prior_dict[iso.Rn_key] = Uniform(0.5*iso.Rn_nom, 1.5*iso.Rn_nom) # allow up to ±5% expansion from nominal Rn
     end
     return ((; param_dict...), (; prior_dict...))
 end

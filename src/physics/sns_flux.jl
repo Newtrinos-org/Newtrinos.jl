@@ -53,7 +53,7 @@ function get_priors(use_data)
     if use_data
         (
             flux_norm = truncated(Normal(1.0, 0.1), 0.7, 1.3),
-            flux_onset = truncated(Normal(0.0, 100.0), -500.0, 500.0),
+            flux_onset = Uniform(-500.0, 500.0),
         )
     else
         (

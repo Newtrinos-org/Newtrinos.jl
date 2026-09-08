@@ -4,6 +4,7 @@ using DensityInterface
 using DataFrames
 using Accessors
 using Optimization, ADTypes
+using Optim
 using MeasureBase
 using LinearAlgebra
 using PositiveFactorizations
@@ -83,7 +84,7 @@ function make_init_samples(posterior, nseeds::Int=10, nsamples::Int=10_000)
         #@show seeds[i]
         adsel = AutoForwardDiff()
         set_batcontext(ad = adsel)
-        r = bat_findmode(pstr, OptimizationAlg(optalg=Optimization.LBFGS(), init = ExplicitInit([seeds[i]])))
+        r = bat_findmode(pstr, OptimAlg(optalg=Optim.LBFGS(), init = ExplicitInit([seeds[i]])))
         #@show r.result
         components[i] = local_MGVI_approx(pstr, r.result)
     end
@@ -134,7 +135,7 @@ function make_init_samples(posterior, seed_points::DataFrame, nsamples::Int=10_0
         #@show seeds[i]
         adsel = AutoForwardDiff()
         set_batcontext(ad = adsel)
-        r = bat_findmode(pstr, OptimizationAlg(optalg=Optimization.LBFGS(), init = ExplicitInit([seeds[i]]), kwargs = (reltol=1e-4, maxiters=100)))
+        r = bat_findmode(pstr, OptimAlg(optalg=Optim.LBFGS(), init = ExplicitInit([seeds[i]]), reltol=1e-4, maxiters=100))
         @show r.result
         components[i] = local_MGVI_approx(pstr, r.result)
     end

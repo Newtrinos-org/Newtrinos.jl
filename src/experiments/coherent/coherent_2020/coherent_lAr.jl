@@ -210,7 +210,7 @@ end
 
 function sigma_keVee(keVee, assets)
     a = assets.resolution
-    return @. a * sqrt(keVee)  # keVee ≥ 0 due to qf clamp; works with Duals
+    return @. a * sqrt(keVee + 1e-10)  # 1e-10 floor avoids sqrt(0) NaN partials in ForwardDiff
 end
 
 function construct_response_matrix(params, assets)
@@ -360,7 +360,9 @@ function get_forward_model(physics, assets)
         bkg_pbrn, bkg_delbrn, bkg_ss_bkg = get_backgrounds(params, assets)
         total_bkg = bkg_pbrn .+ bkg_delbrn .+ bkg_ss_bkg
         exp_events = signal .+ total_bkg
-        distprod(Poisson.(exp_events))
+        # Clamp to tiny positive: NaN/negative exp_events from extreme params would fail Poisson(λ>=0)
+        exp_safe = map(x -> (isnan(x) || x < oftype(x, 1e-10)) ? oftype(x, 1e-10) : x, exp_events)
+        distprod(Poisson.(exp_safe))
     end
 end
 
