@@ -151,7 +151,7 @@ end
 
 
 
-function get_neutrinomass(cfg=NND)
+function get_neutrinomass(cfg::Newtrinos.osc.NND)
     function NeutrinoMassNN(params::NamedTuple)
         U = Newtrinos.osc.get_PMNS(params)
   
@@ -274,7 +274,7 @@ function mixing_angles(params::NamedTuple,cfg=NND)
 end    
 
 
-function get_neutrinomass_SM(cfg=ThreeFlavour())
+function get_neutrinomass(cfg::Newtrinos.osc.ThreeFlavour)
     function NeutrinoMass_SM(params::NamedTuple)
 
         U=  Newtrinos.osc.get_PMNS(params)
