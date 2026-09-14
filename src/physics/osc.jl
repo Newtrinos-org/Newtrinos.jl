@@ -6,6 +6,7 @@ using ArraysOfArrays, StructArrays
 using DataStructures
 using Distributions
 using Interpolations
+using ForwardDiff
 using ..Newtrinos
 
 export ftype
@@ -1700,7 +1701,7 @@ end
 
 
 
-function get_matrices(cfg::NND)
+function get_matrices(cfg::NND, eigen_method::EigenMethod=DefaultEigen())
 
    function get_Nnaturalness(params::NamedTuple)
         
@@ -1858,7 +1859,7 @@ function get_matrices(cfg::NND)
 end
 
 
-function get_matrices(cfg::NNM)
+function get_matrices(cfg::NNM, eigen_method::EigenMethod=DefaultEigen())
    function get_Nnaturalness(params::NamedTuple)
 
        
