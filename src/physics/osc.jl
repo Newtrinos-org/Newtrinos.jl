@@ -19,9 +19,29 @@ export OscillationConfig
 export EigenMethod, DefaultEigen, decompose
 export configure
 
+"""
+    ftype
+
+Type alias for `Float64`, used as the default floating-point precision throughout the
+oscillation module.
+"""
 const ftype = Float64
 
 # struct for matter layers
+"""
+    Layer{T, U}
+
+A spherical shell of matter with uniform proton and neutron number densities.
+
+Used to represent concentric layers of the Earth in the PREM density model
+(see [`Newtrinos.earth_layers.EarthLayers`](@ref) in `earth_layers.jl`). A neutrino trajectory through the
+Earth is described by a sequence of [`Path`](@ref) segments, each referencing one layer.
+
+# Fields
+- `radius::T`: outer radius of the shell [km].
+- `p_density::U`: proton number density [mol/cm``^3``].
+- `n_density::U`: neutron number density [mol/cm``^3``].
+"""
 struct Layer{T, U}
     radius::T
     p_density::U
@@ -29,6 +49,18 @@ struct Layer{T, U}
 end
 
 # struct for matter paths
+"""
+    Path
+
+A single segment of a neutrino propagation path through one matter [`Layer`](@ref).
+
+A full baseline is represented as a `Vector{Path}`, one entry per layer traversed.
+For vacuum oscillations the total baseline is simply `sum(segment.length for segment in path)`.
+
+# Fields
+- `length::Float64`: segment length [km].
+- `layer_idx::Int`: index into the corresponding `StructVector{Layer}`.
+"""
 struct Path
     length::Float64
     layer_idx::Int
@@ -45,11 +77,63 @@ const umev = 5.067730716156395
 
 # TYPE DEFINITIONS
 
+"""
+    PropagationModel
+
+Abstract type governing how neutrino quantum states evolve along the baseline.
+
+Subtypes select different physical approximations for the oscillation amplitude:
+- [`Basic`](@ref): standard coherent quantum-mechanical propagation.
+- [`Decoherent`](@ref): density-matrix evolution with off-diagonal damping.
+- [`Damping`](@ref): amplitude-level low-pass filter with incoherent recovery.
+"""
 abstract type PropagationModel end
+"""
+    Basic <: PropagationModel
+
+Standard coherent quantum-mechanical propagation (no decoherence effects).
+
+The oscillation amplitude is computed as
+
+```math
+A_{\\alpha\\beta} = \\bigl(U \\, \\mathrm{diag}\\bigl(e^{-i\\,\\Delta m^2_j\\, L \\,/\\, 4E}\\bigr) \\, U^\\dagger\\bigr)_{\\alpha\\beta}
+```
+
+and the transition probability is ``P_{\\alpha\\beta} = |A_{\\alpha\\beta}|^2``.
+"""
 struct Basic <: PropagationModel end
+"""
+    Decoherent <: PropagationModel
+
+Propagation with energy-dependent decoherence via density-matrix evolution.
+
+Off-diagonal elements of the density matrix in the mass eigenbasis are damped by
+
+```math
+D_{ij} = \\exp\\!\\bigl(-2\\,|\\Delta\\phi_{ij}|\\,\\sigma_e^2\\bigr), \\qquad
+\\Delta\\phi_{ij} = \\frac{\\Delta m^2_{ij}\\, L}{4E}
+```
+
+after coherent phase evolution at each layer crossing.
+
+# Fields
+- `σₑ::Float64 = 0.1`: decoherence strength parameter (dimensionless).
+"""
 @kwdef struct Decoherent <: PropagationModel 
     σₑ::Float64=0.1
 end
+"""
+    Damping <: PropagationModel
+
+Propagation with a low-pass filter that damps fast-oscillating amplitudes.
+
+Each mass-eigenstate phase factor is multiplied by a decay
+``d_j = \\exp(-2\\,|\\phi_j|\\,\\sigma_e^2)`` and the probability is corrected by an
+incoherent recovery term ``|U|^2 \\, \\mathrm{diag}(1-d_j^2) \\, |U|^{2\\,\\prime}``.
+
+# Fields
+- `σₑ::Float64 = 0.1`: damping strength parameter (dimensionless).
+"""
 @kwdef struct Damping <: PropagationModel
     σₑ::Float64=0.1
 end
@@ -59,33 +143,209 @@ end
     σ_h::Float64 = 10.0           # production height uncertainty [km]
 end
 
+"""
+    StateSelector
+
+Abstract type controlling which mass eigenstates contribute to the coherent oscillation
+calculation. Subtypes:
+- [`All`](@ref): include every eigenstate (default).
+- [`Cut`](@ref): exclude eigenstates above a mass-squared cutoff.
+"""
 abstract type StateSelector end
+"""
+    All <: StateSelector
+
+Include all mass eigenstates in the oscillation calculation. This is the default.
+"""
 struct All <: StateSelector end
+"""
+    Cut <: StateSelector
+
+Exclude mass eigenstates whose ``\\sqrt{|m^2_j|}`` exceeds a cutoff threshold.
+
+States above the cutoff are averaged incoherently, which is useful for
+[`ADD`](@ref) or dark-dimension models where heavy Kaluza-Klein states oscillate
+too rapidly to be resolved experimentally.
+
+# Fields
+- `cutoff::Float64 = Inf`: mass eigenvalue cutoff [eV]. Default `Inf` keeps all states.
+"""
 @kwdef struct Cut <: StateSelector
     cutoff::Float64 = Inf
 end
 
+"""
+    InteractionModel
+
+Abstract type selecting the neutrino-matter interaction model used when propagating
+through Earth layers. Subtypes:
+- [`Vacuum`](@ref): no matter effects.
+- [`SI`](@ref): Standard Interactions (MSW effect).
+- [`NSI`](@ref): Non-Standard Interactions.
+"""
 abstract type InteractionModel end
+"""
+    Vacuum <: InteractionModel
+
+Vacuum oscillations — no matter effects. Layer densities in [`Layer`](@ref) are ignored;
+the baseline is the sum of [`Path`](@ref) segment lengths.
+"""
 struct Vacuum <: InteractionModel end
+"""
+    NSI <: InteractionModel
+
+Non-Standard Interactions in matter. Extends the matter Hamiltonian beyond the Standard
+Model Wolfenstein potential.
+"""
 struct NSI <: InteractionModel end
+"""
+    SI <: InteractionModel
+
+Standard Interactions — coherent forward scattering in matter (the MSW effect).
+
+Adds the Wolfenstein charged-current potential
+``V_{CC} = \\sqrt{2}\\, G_F\\, N_e`` to the ``(\\nu_e, \\nu_e)`` element and a
+neutral-current potential to all diagonal elements of the effective Hamiltonian.
+The sign is flipped for antineutrinos.
+"""
 struct SI <: InteractionModel end
 
+"""
+    EigenMethod
+
+Abstract type selecting the eigendecomposition algorithm for the effective matter
+Hamiltonian. Subtypes:
+- [`DefaultEigen`](@ref): Julia's built-in `LinearAlgebra.eigen`.
+- [`BargerEigen`](@ref) (defined in `barger_eigen.jl`): fast analytic 3×3 decomposition.
+"""
 abstract type EigenMethod end
+"""
+    DefaultEigen <: EigenMethod
+
+Use Julia's built-in `LinearAlgebra.eigen` for Hermitian matrix diagonalization.
+"""
 struct DefaultEigen <: EigenMethod end
 
+"""
+    decompose(H::Hermitian, method::EigenMethod) -> Eigen
+
+Eigendecompose the Hermitian Hamiltonian `H` using the selected [`EigenMethod`](@ref).
+
+This is the extension point for custom eigensolvers. To add a new method, define a
+subtype of [`EigenMethod`](@ref) and a corresponding `decompose` dispatch.
+
+# Arguments
+- `H::Hermitian`: effective Hamiltonian matrix (mass-squared basis or matter-modified).
+- `method::EigenMethod`: algorithm selector.
+
+# Returns
+An `Eigen` factorization with fields `vectors` and `values`.
+"""
 decompose(H::Hermitian, ::DefaultEigen) = eigen(H)
 export DefaultEigen
 
+"""
+    FlavourModel
+
+Abstract type selecting the neutrino mass/flavour model.
+
+Each subtype defines its own set of oscillation parameters (mixing angles, mass splittings,
+and any BSM quantities) via `get_params` and `get_priors` dispatches, as well as a
+`get_matrices` method that returns the mixing matrix ``U`` and mass-squared eigenvalues.
+
+Standard and BSM subtypes:
+- [`ThreeFlavour`](@ref): standard three-neutrino oscillations.
+- [`ThreeFlavourXYCP`](@ref): three-flavour with shell parametrization of ``\\delta_{CP}``.
+- [`Sterile`](@ref): 3+1 sterile neutrino model.
+- [`ADD`](@ref): Arkani-Hamed–Dimopoulos–Dvali large extra dimensions.
+- `Darkdim_Lambda`, `Darkdim_Masses`, `Darkdim_cas`: dark-dimension model variants.
+"""
 abstract type FlavourModel end
+"""
+    ThreeFlavour <: FlavourModel
+
+Standard three-flavour neutrino oscillation model.
+
+The PMNS mixing matrix is constructed as
+``U_{PMNS} = R_{23}(\\theta_{23}) \\cdot R_{13}(\\theta_{13},\\, \\delta_{CP}) \\cdot R_{12}(\\theta_{12})``
+and the oscillation parameters are:
+
+| Parameter   | Description                          | Default           |
+|:----------- |:------------------------------------ |:----------------- |
+| `θ₁₂`      | Solar mixing angle                   | ``\\arcsin(\\sqrt{0.307})`` |
+| `θ₁₃`      | Reactor mixing angle                 | ``\\arcsin(\\sqrt{0.021})`` |
+| `θ₂₃`      | Atmospheric mixing angle             | ``\\arcsin(\\sqrt{0.57})``  |
+| `δCP`       | Dirac CP-violation phase             | 1.0 rad           |
+| `Δm²₂₁`    | Solar mass-squared splitting [eV²]   | ``7.53 \\times 10^{-5}`` |
+| `Δm²₃₁`    | Atmospheric mass-squared splitting [eV²] | depends on ordering |
+
+# Fields
+- `ordering::Symbol = :NO`: neutrino mass ordering. `:NO` for normal ordering
+  (``\\Delta m^2_{31} > 0``), `:IO` for inverted ordering (``\\Delta m^2_{31} < 0``).
+"""
 @kwdef struct ThreeFlavour <: FlavourModel 
     ordering::Symbol = :NO
 end
+"""
+    ThreeFlavourXYCP <: FlavourModel
+
+Three-flavour model with a shell (Cartesian) parametrization of ``\\delta_{CP}``.
+
+Replaces the scalar `δCP` parameter with a 2-vector `δCPshell` to avoid discontinuities
+at the circular boundary ``[0, 2\\pi)`` during gradient-based fitting.
+
+# Fields
+- `three_flavour::ThreeFlavour = ThreeFlavour()`: underlying three-flavour configuration.
+
+See also [`ThreeFlavour`](@ref).
+"""
 @kwdef struct ThreeFlavourXYCP <: FlavourModel
     three_flavour::ThreeFlavour = ThreeFlavour()
 end
+"""
+    Sterile <: FlavourModel
+
+3+1 sterile neutrino model extending the standard three flavours.
+
+Adds a fourth mass eigenstate with mass-squared splitting `Δm²₄₁` and three new mixing
+angles `θ₁₄`, `θ₂₄`, `θ₃₄`. The PMNS matrix is extended to 4×4 via
+
+```math
+U_{4\\times4} = R_{34}\\, R_{24}\\, R_{14} \\cdot
+\\begin{pmatrix} U_{PMNS} & 0 \\\\ 0 & 1 \\end{pmatrix}
+```
+
+# Fields
+- `three_flavour::ThreeFlavour = ThreeFlavour()`: underlying three-flavour configuration.
+
+See also [`ThreeFlavour`](@ref).
+"""
 @kwdef struct Sterile <: FlavourModel
     three_flavour::ThreeFlavour = ThreeFlavour()
 end
+"""
+    ADD <: FlavourModel
+
+Arkani-Hamed–Dimopoulos–Dvali (ADD) large extra dimensions model.
+
+Introduces a tower of ``N_{KK}`` Kaluza-Klein excitations for each active neutrino,
+yielding a ``3(N_{KK}+1) \\times 3(N_{KK}+1)`` mass matrix. The Dirac mass matrix
+is constructed from the PMNS matrix and absolute neutrino masses, with off-diagonal
+couplings controlled by the extra-dimension compactification radius.
+
+Additional parameters beyond [`ThreeFlavour`](@ref):
+
+| Parameter    | Description                                  | Default |
+|:------------ |:-------------------------------------------- |:------- |
+| `m₀`         | Lightest neutrino mass [eV]                 | 0.01    |
+| `ADD_radius`  | Extra-dimension compactification radius [μm] | 0.01    |
+
+# Fields
+- `three_flavour::ThreeFlavour = ThreeFlavour()`: underlying three-flavour configuration.
+- `N_KK::Int = 5`: number of Kaluza-Klein modes to include.
+
+See also [`Cut`](@ref) for excluding heavy KK states from coherent oscillation.
+"""
 @kwdef struct ADD <: FlavourModel 
     three_flavour::ThreeFlavour = ThreeFlavour()
     N_KK::Int = 5
@@ -106,6 +366,39 @@ end
     N_KK::Int = 5
 end
 
+"""
+    OscillationConfig{F, I, P, S, E}
+
+Master configuration for the neutrino oscillation probability engine.
+
+Each type parameter selects a different physical model via multiple dispatch.
+Construct with keyword arguments and pass to [`configure`](@ref) to obtain a
+ready-to-use [`Osc`](@ref) physics module.
+
+# Fields
+- `flavour::F = ThreeFlavour()`: neutrino mass/flavour model ([`FlavourModel`](@ref)).
+- `interaction::I = Vacuum()`: matter interaction model ([`InteractionModel`](@ref)).
+- `propagation::P = Basic()`: propagation mechanism ([`PropagationModel`](@ref)).
+- `states::S = All()`: eigenstate selection strategy ([`StateSelector`](@ref)).
+- `eigen_method::E = DefaultEigen()`: eigendecomposition algorithm ([`EigenMethod`](@ref)).
+
+# Examples
+```julia
+# Standard 3-flavour vacuum oscillations (all defaults)
+cfg = OscillationConfig()
+
+# Inverted ordering with MSW matter effects
+cfg = OscillationConfig(flavour=ThreeFlavour(ordering=:IO), interaction=SI())
+
+# ADD model with decoherence and Barger eigensolver
+cfg = OscillationConfig(
+    flavour=ADD(N_KK=3),
+    interaction=SI(),
+    propagation=Decoherent(σₑ=0.05),
+    eigen_method=BargerEigen()
+)
+```
+"""
 @kwdef struct OscillationConfig{F<:FlavourModel, I<:InteractionModel, P<:PropagationModel, S<:StateSelector, E<:EigenMethod}
     flavour::F = ThreeFlavour()
     interaction::I = Vacuum()
@@ -114,6 +407,23 @@ end
     eigen_method::E = DefaultEigen()
 end
 
+"""
+    Osc <: Newtrinos.Physics
+
+Configured oscillation physics module, returned by [`configure`](@ref).
+
+This struct satisfies the `Newtrinos.Physics` interface and can be passed into any
+experiment's `configure(physics=...)` method.
+
+# Fields
+- `cfg::OscillationConfig`: the full configuration used to build this module.
+- `params::NamedTuple`: default oscillation parameter values (e.g. `θ₁₂`, `Δm²₃₁`, …).
+- `priors::NamedTuple`: prior distributions for each parameter.
+- `matrices::Function`: closure `matrices(params) -> (U, h)` returning mixing matrix and
+  mass-squared eigenvalues.
+- `osc_prob::Function`: closure computing oscillation probabilities. See
+  [`get_osc_prob`](@ref) for the two call signatures.
+"""
 @kwdef struct Osc <: Newtrinos.Physics
     cfg::OscillationConfig
     params::NamedTuple
@@ -122,6 +432,33 @@ end
     osc_prob::Function
 end
 
+"""
+    configure(cfg::OscillationConfig=OscillationConfig()) -> Osc
+
+Create a fully configured oscillation physics module from the given configuration.
+
+Assembles default parameters, priors, mixing-matrix closure, and oscillation-probability
+closure into an [`Osc`](@ref) struct ready for use in experiment forward models.
+
+# Arguments
+- `cfg::OscillationConfig`: oscillation configuration (defaults to standard 3-flavour vacuum).
+
+# Returns
+An [`Osc`](@ref) instance.
+
+# Examples
+```julia
+using Newtrinos
+
+# Default 3-flavour vacuum
+physics = Newtrinos.osc.configure()
+
+# With matter effects and inverted ordering
+physics = Newtrinos.osc.configure(
+    OscillationConfig(flavour=ThreeFlavour(ordering=:IO), interaction=SI())
+)
+```
+"""
 function configure(cfg::OscillationConfig=OscillationConfig())
     Osc(
         cfg=cfg,
@@ -136,7 +473,38 @@ end
 # PARAMS & PRIORS
 
 # for now only the flavour model has any params...to be changed
+"""
+    get_params(cfg::OscillationConfig) -> NamedTuple
+    get_params(cfg::FlavourModel) -> NamedTuple
+
+Return the default oscillation parameter values for the given configuration or flavour model.
+
+Delegates to the flavour-model-specific method. Each [`FlavourModel`](@ref) subtype defines
+its own set of parameters (mixing angles, mass splittings, and any BSM quantities).
+
+# Arguments
+- `cfg`: an [`OscillationConfig`](@ref) or a [`FlavourModel`](@ref) subtype instance.
+
+# Returns
+A `NamedTuple` of `Symbol => Float64` (or `Vector` for shell parameters) with the nominal
+parameter values.
+"""
 get_params(cfg::OscillationConfig) = get_params(cfg.flavour)
+"""
+    get_priors(cfg::OscillationConfig) -> NamedTuple
+    get_priors(cfg::FlavourModel) -> NamedTuple
+
+Return prior distributions for each oscillation parameter.
+
+Delegates to the flavour-model-specific method. Priors are `Distributions.jl` objects
+(typically `Uniform` or `LogUniform`) used for sampling and inference.
+
+# Arguments
+- `cfg`: an [`OscillationConfig`](@ref) or a [`FlavourModel`](@ref) subtype instance.
+
+# Returns
+A `NamedTuple` of `Symbol => Distribution` mapping each parameter to its prior.
+"""
 get_priors(cfg::OscillationConfig) = get_priors(cfg.flavour)
 
 function get_params(cfg::ThreeFlavour)
@@ -305,6 +673,27 @@ function get_priors(cfg::Darkdim_cas)
     NamedTuple(priors)
 end
 
+"""
+    get_PMNS(params) -> SMatrix{3,3}
+
+Construct the ``3 \\times 3`` PMNS leptonic mixing matrix from oscillation parameters.
+
+The matrix is built as
+
+```math
+U_{PMNS} = R_{23}(\\theta_{23}) \\;\\cdot\\; R_{13}(\\theta_{13},\\, \\delta_{CP}) \\;\\cdot\\; R_{12}(\\theta_{12})
+```
+
+where each rotation matrix uses `zero(T)` / `one(T)` to preserve `ForwardDiff.Dual`
+number types for automatic differentiation.
+
+# Arguments
+- `params::NamedTuple`: must contain `θ₂₃`, `θ₁₃`, `θ₁₂`, and `δCP`.
+
+# Returns
+`SMatrix{3,3,Complex{T}}` — the PMNS mixing matrix, where `T` is inferred from the
+parameter types.
+"""
 function get_PMNS(params)
     T = typeof(params.θ₂₃)
     U1 = SMatrix{3,3}(one(T), zero(T), zero(T), zero(T), cos(params.θ₂₃), -sin(params.θ₂₃), zero(T), sin(params.θ₂₃), cos(params.θ₂₃))
@@ -315,6 +704,24 @@ function get_PMNS(params)
     U = U1 * U2 * U3
 end
 
+"""
+    get_abs_masses(params) -> (m1, m2, m3)
+
+Compute the absolute neutrino masses from the lightest mass and mass-squared splittings.
+
+For normal ordering (``\\Delta m^2_{31} > 0``): ``m_1 = m_0``,
+``m_2 = \\sqrt{\\Delta m^2_{21} + m_0^2}``, ``m_3 = \\sqrt{\\Delta m^2_{31} + m_0^2}``.
+
+For inverted ordering (``\\Delta m^2_{31} < 0``): ``m_3 = m_0``,
+``m_1 = \\sqrt{-\\Delta m^2_{31} + m_0^2}``,
+``m_2 = \\sqrt{\\Delta m^2_{21} - \\Delta m^2_{31} + m_0^2}``.
+
+# Arguments
+- `params::NamedTuple`: must contain `m₀`, `Δm²₂₁`, and `Δm²₃₁`.
+
+# Returns
+A tuple `(m1, m2, m3)` of absolute neutrino masses [eV].
+"""
 function get_abs_masses(params)
     if params.Δm²₃₁ > 0
         m1 = params.m₀
@@ -332,18 +739,75 @@ end
 
 
 # Oscillation Kernel Simple
+"""
+    osc_kernel(U, H, e, l) -> AbstractMatrix
+
+Compute the coherent oscillation amplitude matrix for a single energy and baseline.
+
+Evaluates ``A = U \\, \\mathrm{diag}\\!\\bigl(e^{-i\\, \\phi_j}\\bigr) \\, U^\\dagger``
+where ``\\phi_j = \\frac{\\Delta m^2_j \\, L}{4E}`` (in natural units via `F_units`).
+
+# Arguments
+- `U::AbstractMatrix{<:Number}`: mixing matrix (unitary, ``n \\times n``).
+- `H::AbstractVector{<:Number}`: mass-squared eigenvalues [eV²].
+- `e::Real`: neutrino energy [GeV].
+- `l::Real`: baseline length [km].
+
+# Returns
+An ``n \\times n`` complex amplitude matrix ``A_{\\beta\\alpha}``.
+"""
 function osc_kernel(U::AbstractMatrix{<:Number}, H::AbstractVector{<:Number}, e::Real, l::Real)
     phase_factors = -F_units * 1im * (l / e) .* H
     U * Diagonal(exp.(phase_factors)) * U'
 end
 
 # Oscillation Kernel with Low pass filter
+"""
+    osc_kernel(U, H, e, l, σₑ) -> (A, decay)
+
+Compute the oscillation amplitude matrix with low-pass damping.
+
+Same as the coherent [`osc_kernel`](@ref) but each phase factor is additionally
+multiplied by a decay ``d_j = \\exp(-2\\,|\\phi_j|\\,\\sigma_e^2)``.
+
+# Arguments
+- `U::AbstractMatrix{<:Number}`: mixing matrix.
+- `H::AbstractVector{<:Number}`: mass-squared eigenvalues [eV²].
+- `e::Real`: neutrino energy [GeV].
+- `l::Real`: baseline length [km].
+- `σₑ::Real`: damping strength parameter.
+
+# Returns
+A tuple `(A, decay)` where `A` is the damped amplitude matrix and `decay` is the
+per-eigenstate decay vector.
+"""
 function osc_kernel(U::AbstractMatrix{<:Number}, H::AbstractVector{<:Number}, e::Real, l::Real, σₑ::Real)
     phase_factors = -F_units * (l / e) .* H
     decay = exp.(-2 * abs.(phase_factors) * σₑ^2) #exp.(-abs.(σₑ / e * phase_factors)/2)
     U * Diagonal(exp.(1im * phase_factors) .* decay) * U', decay
 end
 
+"""
+    compute_matter_matrices(H_eff, e, layer, anti, interaction::SI, eigen_method=DefaultEigen()) -> (U, h)
+
+Add the MSW matter potential to the effective Hamiltonian and diagonalize.
+
+Modifies `H_eff` by adding the Wolfenstein charged-current and neutral-current potentials
+for the given [`Layer`](@ref) density, then eigendecomposes the result via
+[`decompose`](@ref). Two methods are provided: one for generic `AbstractMatrix` and an
+optimized one for `SMatrix{3,3}`.
+
+# Arguments
+- `H_eff`: effective Hamiltonian in the flavour basis (``U\\,\\mathrm{diag}(h)\\,U^\\dagger``).
+- `e::Real`: neutrino energy [GeV].
+- `layer::Layer`: matter layer with proton and neutron densities.
+- `anti::Bool`: `true` for antineutrinos (flips potential sign).
+- `interaction::SI`: matter interaction selector.
+- `eigen_method::EigenMethod`: eigendecomposition algorithm.
+
+# Returns
+A tuple `(U_m, h_m)` of matter-modified eigenvectors and eigenvalues.
+"""
 function compute_matter_matrices(H_eff::AbstractMatrix{<:Number}, e, layer, anti, interaction::SI, eigen_method::EigenMethod=DefaultEigen())
     H = copy(H_eff)
     if anti
@@ -585,6 +1049,27 @@ function matter_osc_per_e(H_eff, e, layers, paths, anti, propagation::Spray, int
     end)
 end
 
+"""
+    osc_reduce(matter_matrices, path, e, propagation) -> Matrix
+
+Combine per-layer oscillation amplitudes along a multi-layer path into a single
+transition probability matrix for one energy.
+
+Dispatches on [`PropagationModel`](@ref):
+- [`Basic`](@ref): multiplies amplitude matrices across layers, then takes ``|\\cdot|^2``.
+- [`Damping`](@ref): multiplies damped amplitudes and adds an incoherent recovery term
+  using a path-length-weighted average of ``|U|^2``.
+
+# Arguments
+- `matter_matrices`: vector of `(U_m, h_m)` tuples, one per layer (from
+  [`compute_matter_matrices`](@ref)).
+- `path::Vector{Path}`: sequence of path segments for this baseline.
+- `e::Real`: neutrino energy [GeV].
+- `propagation::PropagationModel`: propagation model instance.
+
+# Returns
+An ``n \\times n`` real matrix of transition probabilities ``P_{\\beta\\alpha}``.
+"""
 function osc_reduce(matter_matrices, path, e, propagation::Damping)
     res = map(section -> osc_kernel(matter_matrices[section.layer_idx]..., e, section.length, propagation.σₑ), path)
     decay = abs2.(reduce(.*, last.(res)))
@@ -612,6 +1097,29 @@ function osc_reduce(matter_matrices, path, e, propagation::Basic)
 end
     
 
+"""
+    matter_osc_per_e(H_eff, e, layers, paths, anti, propagation, interaction, eigen_method=DefaultEigen()) -> Array
+
+Compute matter-affected oscillation probabilities at a single energy across all paths.
+
+For each [`Layer`](@ref), computes the matter-modified eigensystem via
+[`compute_matter_matrices`](@ref), then reduces along each path via
+[`osc_reduce`](@ref) (for [`Basic`](@ref)/[`Damping`](@ref)) or via explicit
+density-matrix evolution (for [`Decoherent`](@ref)).
+
+# Arguments
+- `H_eff`: effective Hamiltonian in the flavour basis.
+- `e::Real`: neutrino energy [GeV].
+- `layers::StructVector{Layer}`: Earth density layers.
+- `paths`: per-baseline layer traversals (`VectorOfVectors{Path}`).
+- `anti::Bool`: `true` for antineutrinos.
+- `propagation::PropagationModel`: propagation model.
+- `interaction::InteractionModel`: matter interaction model.
+- `eigen_method::EigenMethod`: eigendecomposition algorithm.
+
+# Returns
+An `Array` of shape `(n_flav, n_flav, n_paths)` with ``P_{\\beta\\alpha}`` for each path.
+"""
 function matter_osc_per_e(H_eff, e, layers, paths, anti, propagation::Union{Basic, Damping}, interaction, eigen_method::EigenMethod=DefaultEigen())
     matter_matrices = compute_matter_matrices.(Ref(H_eff), e, layers, anti, Ref(interaction), Ref(eigen_method))
     p = stack(map(path -> osc_reduce(matter_matrices, path, e, propagation), paths))
@@ -667,6 +1175,28 @@ function matter_osc_per_e(H_eff, e, layers, paths, anti, propagation::Decoherent
     p = stack(ps)
 end
 
+"""
+    select(U, h, cfg::StateSelector) -> (U_sel, h_sel, rest)
+
+Partition mass eigenstates into coherent and incoherent subsets based on the
+[`StateSelector`](@ref) strategy.
+
+- [`All`](@ref): returns all states unchanged with `rest = 0.0`.
+- [`Cut`](@ref): states with ``\\sqrt{|m^2_j|}`` below the cutoff are kept for coherent
+  oscillation; states above it are averaged incoherently and their contribution is returned
+  as the `rest` matrix.
+
+# Arguments
+- `U`: mixing matrix (``n_{flav} \\times n_{states}``).
+- `h`: mass-squared eigenvalues vector.
+- `cfg::StateSelector`: selection strategy.
+
+# Returns
+A tuple `(U_sel, h_sel, rest)` where:
+- `U_sel`: mixing matrix columns for coherent states.
+- `h_sel`: eigenvalues for coherent states.
+- `rest`: incoherent probability correction matrix (scalar `0.0` or ``n \\times n`` matrix).
+"""
 function select(U, h, cfg::All)
     return U, h, 0.
 end
@@ -686,6 +1216,36 @@ function select(U, h, cfg::Cut)
 end
 
 
+"""
+    propagate(U, h, E, L, propagation) -> Array{T,4}
+    propagate(U, h, E, paths, layers, propagation, interaction, anti, ...) -> Array{T,4}
+
+Compute oscillation probabilities over grids of energy and baseline/path.
+
+**Vacuum methods** (dispatched by baseline vector `L`):
+Loops over all `(E, L)` pairs, evaluating [`osc_kernel`](@ref) and squaring amplitudes.
+Dispatches on [`PropagationModel`](@ref) for [`Basic`](@ref), [`Damping`](@ref), and
+[`Decoherent`](@ref) propagation.
+
+**Matter methods** (dispatched by `paths::VectorOfVectors{Path}`):
+- [`Vacuum`](@ref) interaction: collapses paths to total lengths and delegates to the
+  vacuum method.
+- [`SI`](@ref)/[`NSI`](@ref): reconstructs the flavour-basis Hamiltonian and calls
+  [`matter_osc_per_e`](@ref) for each energy.
+
+# Arguments
+- `U`: mixing matrix.
+- `h`: mass-squared eigenvalues [eV²].
+- `E`: neutrino energies [GeV].
+- `L`: baselines [km] (vacuum) or `paths`/`layers` (matter).
+- `propagation::PropagationModel`: propagation model.
+- `interaction::InteractionModel`: matter interaction model (matter methods only).
+- `anti::Bool`: `true` for antineutrinos (matter methods only).
+
+# Returns
+`Array{T,4}` of shape `(n_flav, n_flav, n_E, n_L)` with ``P_{\\beta\\alpha}``
+(note: the caller [`get_osc_prob`](@ref) transposes this to `(n_E, n_L, n_flav, n_flav)`).
+"""
 function propagate(U, h, E, L, propagation::Basic)
     n = size(U, 1)
     RT = real(promote_type(eltype(U), eltype(h), eltype(E), eltype(L)))
@@ -810,6 +1370,38 @@ function _add_rest_and_permute(p_raw, rest)
     result
 end
 
+"""
+    get_osc_prob(cfg::OscillationConfig) -> Function
+
+Construct the oscillation probability closure for the given configuration.
+
+The returned function `osc_prob` has two methods:
+
+**Vacuum-style** (baselines as distances):
+```julia
+osc_prob(E::AbstractVector, L::AbstractVector, params::NamedTuple; anti=false)
+```
+
+**Matter-style** (baselines as Earth layer paths):
+```julia
+osc_prob(E::AbstractVector, paths::VectorOfVectors{Path}, layers::StructVector{Layer},
+         params::NamedTuple; anti=false)
+```
+
+# Arguments
+- `E`: neutrino energies [GeV].
+- `L`: baselines [km] (vacuum method).
+- `paths`: per-baseline layer traversals (matter method), from [`Newtrinos.earth_layers.EarthLayers`](@ref).
+- `layers`: Earth density layers (matter method).
+- `params::NamedTuple`: oscillation parameters (mixing angles, mass splittings, etc.).
+- `anti::Bool = false`: set `true` for antineutrinos (conjugates the PMNS matrix).
+
+# Returns
+`Array{T,4}` of shape `(n_E, n_L, n_flav, n_flav)` where entry
+`result[i, j, α, β]` gives the transition probability
+``P(\\nu_\\alpha \\to \\nu_\\beta)`` at energy `E[i]` and baseline/path index `j`
+(3rd index = input/source flavour, 4th index = output/detected flavour).
+"""
 function get_osc_prob(cfg::OscillationConfig)
 
     # Returns P[i, j, α, β] = P(να → νβ), i.e.:
@@ -852,6 +1444,32 @@ function get_osc_prob(cfg::OscillationConfig)
 end
 
 
+"""
+    get_matrices(cfg::FlavourModel, eigen_method::EigenMethod=DefaultEigen()) -> Function
+
+Construct a closure that computes the mixing matrix and mass-squared eigenvalues from
+oscillation parameters.
+
+The returned function has signature `matrices(params::NamedTuple) -> (U, h)` where:
+- `U` is the mixing matrix (unitary).
+- `h` is a vector of mass-squared eigenvalues [eV²].
+
+For [`ThreeFlavour`](@ref), returns `SMatrix{3,3}` and `SVector{3}` (zero-allocation).
+For [`Sterile`](@ref), returns 4×4 dense matrices.
+For [`ADD`](@ref) and dark-dimension models, returns ``3(N_{KK}+1) \\times 3(N_{KK}+1)``
+dense matrices obtained by diagonalizing the full KK mass matrix via
+[`decompose`](@ref).
+
+The closure is ForwardDiff-compatible: all intermediate computations preserve dual-number
+types through `zero(T)` / `one(T)` patterns and type promotion.
+
+# Arguments
+- `cfg::FlavourModel`: flavour model instance (dispatches to the appropriate method).
+- `eigen_method::EigenMethod`: eigendecomposition algorithm (only used by models that
+  diagonalize a mass matrix, e.g. [`ADD`](@ref)).
+
+See also [`get_PMNS`](@ref), [`configure`](@ref).
+"""
 function get_matrices(cfg::ThreeFlavour, eigen_method::EigenMethod=DefaultEigen())
     function matrices(params::NamedTuple)
         U = get_PMNS(params)
