@@ -136,14 +136,14 @@ using Test
         sys_shifted = af.sys_flux(nominal, params_shifted)
         @test !(sys_shifted.numu ≈ nominal.numu)
 
-        # nue/nuebar ratio scaling 
-        params_nue = merge(af.params, (atm_flux_nuenuebar_sigma = 1.0,))
+        # nue/nuebar ratio scaling (split into sub-GeV/1-10 GeV/>10 GeV energy ranges)
+        params_nue = merge(af.params, (atm_flux_nuenuebar_sigma_lo = 1.0, atm_flux_nuenuebar_sigma_mid = 1.0, atm_flux_nuenuebar_sigma_hi = 1.0))
         sys_nue = af.sys_flux(nominal, params_nue)
         @test sys_nue.nue .+ sys_nue.nuebar ≈ nominal.nue .+ nominal.nuebar atol=1e-6
         @test !(sys_nue.nue ≈ nominal.nue)
 
-        # numu/numubar ratio scaling 
-        params_numu = merge(af.params, (atm_flux_numunumubar_sigma = 1.0,))
+        # numu/numubar ratio scaling (split into sub-GeV/1-10 GeV/>10 GeV energy ranges)
+        params_numu = merge(af.params, (atm_flux_numunumubar_sigma_lo = 1.0, atm_flux_numunumubar_sigma_mid = 1.0, atm_flux_numunumubar_sigma_hi = 1.0))
         sys_numu = af.sys_flux(nominal, params_numu)
         @test sys_numu.numu .+ sys_numu.numubar ≈ nominal.numu .+ nominal.numubar atol=1e-6
         @test !(sys_numu.numu ≈ nominal.numu)

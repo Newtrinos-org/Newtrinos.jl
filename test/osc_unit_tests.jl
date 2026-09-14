@@ -484,7 +484,8 @@ using StaticArrays
             for (ie, e) in enumerate(E), (il, l) in enumerate(L)
                 phases = -F * 1im * (l / e) .* h
                 A = U_manual * Diagonal(exp.(phases)) * U_manual'
-                expected[ie, il, :, :] = abs2.(A)
+                # expected[α, β] = P(α → β) = |A[β, α]|² (A[out, in] convention)
+                expected[ie, il, :, :] = abs2.(A)'
             end
 
             @test result ≈ expected atol = 1e-10
@@ -535,7 +536,8 @@ using StaticArrays
             for (ie, e) in enumerate(E), (il, l) in enumerate(L)
                 phases = -F * 1im * (l / e) .* h
                 A = U_anti * Diagonal(exp.(phases)) * U_anti'
-                expected_anti[ie, il, :, :] = abs2.(A)
+                # expected[α, β] = P(α → β) = |A[β, α]|² (A[out, in] convention)
+                expected_anti[ie, il, :, :] = abs2.(A)'
             end
 
             @test result_anti ≈ expected_anti atol = 1e-10

@@ -111,7 +111,7 @@ end
     interaction::I = Vacuum()
     propagation::P = Basic()
     states::S = All()
-    eigen_method::E = Newtrinos.BargerEigen()
+    eigen_method::E = DefaultEigen()
 end
 
 @kwdef struct Osc <: Newtrinos.Physics
