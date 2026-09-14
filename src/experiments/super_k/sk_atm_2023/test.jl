@@ -107,6 +107,11 @@ for row in eachrow(official_profiled)
 end
 official_dchi2 = official_chi2 .- minimum(official_chi2)
 
+# The official grid's "Delta m^2" column is Δm²₃₂, not Δm²₃₁ (matches paper_plots.ipynb's
+# `dm .+ 7.5e-5` — our axis below is Δm²₃₁, so shift the official grid the same way to
+# compare on a common axis: Δm²₃₁ = Δm²₃₂ + Δm²₂₁).
+official_dm231 = official_dm2 .+ p.Δm²₂₁
+
 if !isdir(joinpath(@__DIR__, "test_output"))
     mkdir(joinpath(@__DIR__, "test_output"))
 end
@@ -114,7 +119,7 @@ end
 fig = Figure()
 ax = Axis(fig[1, 1], xlabel = "sin²θ₂₃", ylabel = "Δm²₃₁ (eV²)",
           title = "Super-K NO 90% C.L. contour")
-contour!(ax, official_s2th23, official_dm2, permutedims(official_dchi2),
+contour!(ax, official_s2th23, official_dm231, permutedims(official_dchi2),
          levels = [4.61], color = :red)
 converted = Newtrinos.NewtrinosResult(
     axes = (sin2theta23 = sin.(result.axes.θ₂₃) .^ 2, Δm²₃₁ = result.axes.Δm²₃₁),
