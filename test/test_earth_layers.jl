@@ -1,6 +1,7 @@
 using Test
 using Newtrinos
 using StructArrays
+using Distributions
 
 @testset "Earth Layers" begin
 
@@ -8,6 +9,59 @@ using StructArrays
         el = Newtrinos.earth_layers.configure()
         @test el isa Newtrinos.earth_layers.EarthLayers
         @test el.cfg isa Newtrinos.earth_layers.PREM
+    end
+
+    @testset "VariableDensity configuration" begin
+        el = Newtrinos.earth_layers.configure(Newtrinos.earth_layers.VariableDensity())
+        @test el isa Newtrinos.earth_layers.EarthLayers
+        @test el.cfg isa Newtrinos.earth_layers.VariableDensity
+        @test haskey(el.params, :electron_density_scale)
+        @test el.params.electron_density_scale == 1.0
+        @test haskey(el.priors, :electron_density_scale)
+        @test Distributions.insupport(el.priors.electron_density_scale, el.params.electron_density_scale)
+
+        # compute_layers/compute_paths are unaffected by VariableDensity itself (delegate
+        # to the wrapped PREM profile) — the scale is applied separately, see scale_densities
+        el_prem = Newtrinos.earth_layers.configure(Newtrinos.earth_layers.PREM())
+        layers_var = el.compute_layers()
+        layers_prem = el_prem.compute_layers()
+        @test layers_var.radius == layers_prem.radius
+        @test layers_var.p_density == layers_prem.p_density
+        @test layers_var.n_density == layers_prem.n_density
+    end
+
+    @testset "scale_densities" begin
+        el = Newtrinos.earth_layers.configure()
+        layers = el.compute_layers()
+
+        # scale = 1.0 is a no-op
+        layers_unit = Newtrinos.earth_layers.scale_densities(layers, 1.0)
+        @test layers_unit.p_density ≈ layers.p_density
+        @test layers_unit.n_density ≈ layers.n_density
+        @test layers_unit.radius == layers.radius
+
+        # scale > 1: proton (electron) density increases proportionally
+        scale = 1.2
+        layers_scaled = Newtrinos.earth_layers.scale_densities(layers, scale)
+        @test layers_scaled.p_density ≈ layers.p_density .* scale
+
+        # total density (proton + neutron) is conserved
+        @test layers_scaled.p_density .+ layers_scaled.n_density ≈ layers.p_density .+ layers.n_density atol = 1e-10
+
+        # radii untouched
+        @test layers_scaled.radius == layers.radius
+
+        # scale < 1 also conserves total density and stays non-negative for physical scales
+        layers_down = Newtrinos.earth_layers.scale_densities(layers, 0.8)
+        @test layers_down.p_density .+ layers_down.n_density ≈ layers.p_density .+ layers.n_density atol = 1e-10
+        @test all(layers_down.p_density .>= -1e-10)
+
+        # end-to-end: VariableDensity's electron_density_scale param, applied via
+        # scale_densities, reproduces the same layers as calling scale_densities directly
+        el_var = Newtrinos.earth_layers.configure(Newtrinos.earth_layers.VariableDensity())
+        params = merge(el_var.params, (electron_density_scale = scale,))
+        layers_via_param = Newtrinos.earth_layers.scale_densities(el_var.compute_layers(), params.electron_density_scale)
+        @test layers_via_param.p_density ≈ layers_scaled.p_density
     end
 
     @testset "ray_circle_path_length" begin

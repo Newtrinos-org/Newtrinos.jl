@@ -8,7 +8,7 @@ using Distributions
 
 using ..Newtrinos
 export configure
-export PREM
+export PREM, VariableDensity
 
 const datadir = @__DIR__
 
@@ -46,6 +46,24 @@ zones defined by density boundaries.
     atm_heihgt::Float64 = 20.
 end
 
+"""
+    VariableDensity <: DensityModel
+
+PREM density model exposing an overall Earth-density normalization nuisance parameter.
+
+Wraps a [`PREM`](@ref) profile unchanged, but its [`configure`](@ref) method additionally
+registers an `electron_density_scale` parameter and prior. Unlike [`PREM`](@ref)'s
+`compute_layers`/`compute_paths` closures, `VariableDensity` does not itself rescale the
+layers — the caller is responsible for applying [`scale_densities`](@ref) to the nominal
+layers with `params.electron_density_scale` inside the forward model (see `calc_weights`
+in `src/experiments/super_k/sk_atm_2023/super_k.jl`). This lets a
+global fit float the overall normalization of the Earth's matter density (relevant to
+matter-effect systematics in atmospheric neutrino oscillations) without refitting the
+underlying PREM shell structure.
+
+# Fields
+- `prem::PREM = PREM()`: the underlying PREM density profile to be scaled.
+"""
 @kwdef struct VariableDensity <: DensityModel
     prem::PREM = PREM()
 end
@@ -106,6 +124,23 @@ function configure(cfg::PREM=PREM())
         )
 end
 
+"""
+    configure(cfg::VariableDensity) -> EarthLayers
+
+Create an Earth density physics module with a floatable overall density normalization.
+
+Uses the same `compute_layers`/`compute_paths` closures as [`configure(::PREM)`](@ref)
+(built from `cfg.prem`), but additionally registers an `electron_density_scale`
+parameter (nominal `1.0`, prior `Normal(1.0, 0.068)`). The scale is not applied by
+`compute_layers` itself — callers that want it applied must pass the parameter to
+[`scale_densities`](@ref) explicitly.
+
+# Arguments
+- `cfg::VariableDensity`: density model wrapping the [`PREM`](@ref) profile to be scaled.
+
+# Returns
+An [`EarthLayers`](@ref) instance with the `electron_density_scale` parameter and prior.
+"""
 function configure(cfg::VariableDensity)
     EarthLayers(
         cfg=cfg,
@@ -156,6 +191,25 @@ function get_compute_layers(cfg::PREM)
     end
 end
 
+"""
+    scale_densities(layers, scale) -> StructVector{Layer}
+
+Rescale the proton (electron) density of every layer by `scale`, holding total density
+(proton + neutron) fixed.
+
+Used to apply the [`VariableDensity`](@ref) `electron_density_scale` nuisance parameter:
+`p_density` is multiplied by `scale`, and `n_density` is adjusted (``\\Delta n = -\\Delta
+p``) so `p_density + n_density` is unchanged. This shifts the electron number density
+that drives the matter-effect potential without altering the total (PREM) mass density
+profile.
+
+# Arguments
+- `layers::StructVector{Layer}`: nominal Earth density layers from `compute_layers()`.
+- `scale`: multiplicative factor applied to each layer's proton (electron) density.
+
+# Returns
+A new `StructVector{Layer}` with rescaled `p_density`/`n_density`.
+"""
 function scale_densities(layers, scale)
     p_old = layers.p_density
     p = p_old .* scale

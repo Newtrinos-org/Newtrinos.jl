@@ -18,6 +18,8 @@ Subtypes:
 - [`SimpleScaling`](@ref): global normalization for NC and ``\\nu_\\tau`` CC channels.
 - [`Differential_H2O`](@ref): per-interaction-mode differential scaling for water
   Cherenkov detectors.
+- [`H2O_PCA`](@ref): GENIE-tune-based per-channel PCA shape and normalization
+  systematics for water Cherenkov detectors.
 """
 abstract type XsecModel end
 
@@ -54,6 +56,34 @@ cross-section ratio, applied in a normalization-conserving way).
 """
 struct Differential_H2O <: XsecModel end
 
+"""
+    H2O_PCA <: XsecModel
+
+GENIE-based cross-section model for water (H₂O) targets with per-channel PCA shape and
+normalization systematics.
+
+Cross-section curves for six interaction channels (CC1p1h, CC2p2h, CC1π, CCDIS, CCother,
+NC) are read from a fixed grid of GENIE generator tunes (`G18_10a`, `G21_11a`, `G18_02a`)
+plus the NEUT5.4.0 reference, stored in `xsec_genie_data.jld2`. For each channel, a
+principal-component decomposition of the spread across tunes yields a single leading
+shape mode; the `xsec_*_shape` nuisance parameters move the nominal curve along that
+mode, while `xsec_*_norm` parameters independently scale each channel's overall rate.
+`xsec_*_nubar_ratio` parameters allow the ``\\bar{\\nu}/\\nu`` cross-section ratio to
+float per channel (normalization-conserving), and `xsec_cc1p1h_nue_numu_ratio` allows an
+independent ``\\nu_e/\\nu_\\mu`` CC1p1h ratio (nuclear-model uncertainty, e.g. RFG vs LFG).
+Reweighting can be applied per-energy-bin (`scale`/`get_scale`), per-event using GENIE
+interaction-mode codes (`scale_event`/`get_scale_event`, with a precomputed
+`event_weights`/`get_event_weights` fast path), or on an energy grid without per-event
+channel information (`grid_weights`/`get_grid_weights`).
+
+# Fields
+- `nominal::Symbol = :NEUT5_4_0`: reference generator tune that defines unit scaling
+  (`xsec_*_norm = 1`, `xsec_*_shape = 0`). One of `:NEUT5_4_0`, `:G18_10a`, `:G21_11a`,
+  `:G18_02a`.
+- `mc_nominal::Symbol = :NEUT5_4_0`: the cross-section model actually used to generate
+  the Monte Carlo being reweighted; per-event/grid weights are computed relative to
+  this baseline rather than `nominal`.
+"""
 @kwdef struct H2O_PCA <: XsecModel
     nominal::Symbol = :NEUT5_4_0   # reference curve (norm=1): :NEUT5_4_0, :G18_10a, :G21_11a, :G18_02a
     mc_nominal::Symbol = :NEUT5_4_0 # cross-section model used to generate the MC being reweighted

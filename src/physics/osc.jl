@@ -86,6 +86,7 @@ Subtypes select different physical approximations for the oscillation amplitude:
 - [`Basic`](@ref): standard coherent quantum-mechanical propagation.
 - [`Decoherent`](@ref): density-matrix evolution with off-diagonal damping.
 - [`Damping`](@ref): amplitude-level low-pass filter with incoherent recovery.
+- [`Spray`](@ref): analytic ray-to-spray averaging over nearby energy/angle trajectories.
 """
 abstract type PropagationModel end
 """
@@ -137,6 +138,28 @@ incoherent recovery term ``|U|^2 \\, \\mathrm{diag}(1-d_j^2) \\, |U|^{2\\,\\prim
 @kwdef struct Damping <: PropagationModel
     σₑ::Float64=0.1
 end
+"""
+    Spray <: PropagationModel
+
+Ray-to-spray oscillation averaging (Maltoni, [arXiv:2308.00037](https://arxiv.org/abs/2308.00037)).
+
+Rather than evaluating the oscillation probability for a single ``(E, \\cos\\theta_z)`` ray,
+each ray is treated as the center of a small "spray" of nearby trajectories, and the
+probability is analytically averaged over that spray using the diagonalized energy
+(and, optionally, zenith-angle) kernel matrices ``K_E``, ``K_\\Theta``. This smooths out
+fast-oscillating features that would otherwise need to be resolved by a fine grid,
+replacing costly numerical oversampling with a closed-form average. Averaging is
+performed jointly across layer boundaries for multi-layer (matter) propagation.
+
+# Fields
+- `averaging::Symbol = :gaussian`: shape of the averaging kernel. `:gaussian` applies a
+  Gaussian damping envelope in the diagonalized eigenbasis; `:uniform` applies a top-hat
+  (unnormalized sinc) envelope.
+- `σ_E::Float64 = 0.15`: fractional energy smearing scale, ``\\Delta E / E``, i.e. the
+  width of the spray in energy.
+- `σ_h::Float64 = 10.0`: production-height smearing scale [km], accounting for the
+  spread in atmospheric neutrino production altitude.
+"""
 @kwdef struct Spray <: PropagationModel
     averaging::Symbol = :gaussian  # :gaussian or :uniform (sinc)
     σ_E::Float64 = 0.15           # fractional energy smearing (ΔE/E)
