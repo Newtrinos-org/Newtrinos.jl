@@ -27,7 +27,7 @@ function parse_command_line()
         required = true
 
         "--task"
-        help = "Task to perform: Choice of NestedSampling, ImportanceSampling, Profile, Scan, IFTProfile"
+        help = "Task to perform: Choice of NestedSampling, ImportanceSampling, Profile, Scan, IFTProfile, bestfit"
         arg_type = String
         required = true
 
@@ -255,12 +255,14 @@ end
 #
 priors = Newtrinos.condition(priors, conditional_vars, p)
 
+# oc / dc
 #@reset priors.Δm²₃₁ = Uniform(0.002, 0.003)
-@reset priors.θ₂₃ = Uniform(0.2 * pi, 0.3 * pi)
-@reset priors.Δm²₃₁ = Uniform(0.0022, 0.0029)
-@reset priors.θ₁₃ = Uniform(0.13, 0.165)
 #@reset priors.θ₁₃ = Truncated(Normal(0.156, 0.008), 0.12, 0.18)
-#@reset priors.θ₂₃ = Uniform(pi/4-0.1, pi/4+0.1)
+#@reset priors.θ₂₃ = Uniform(0.2 * pi, 0.3 * pi)
+# global
+@reset priors.θ₂₃ = Uniform(pi/4-0.14, pi/4+0.14)
+@reset priors.Δm²₃₁ = Uniform(0.00206, 0.0029)
+@reset priors.θ₁₃ = Uniform(0.13, 0.165)
 ### IO
 if lowercase(args["ordering"]) == "io"
     if p.Δm²₃₁ > 0
@@ -288,6 +290,11 @@ elseif lowercase(args["task"]) == "importancesampling"
     FileIO.save(name * "_init_samples.jld2", Dict(String(a)=>init_samples[a] for a in keys(init_samples)))
     whack_samples = whack_many_moles(posterior, init_samples, target_samplesize=10_000, cache_dir=name)
     FileIO.save(name * ".jld2", Dict(String(a)=>whack_samples[a] for a in keys(whack_samples)))
+
+elseif lowercase(args["task"]) == "bestfit"
+    prior = distprod(;priors...)
+    log_l, log_p, mles, converged = Newtrinos.find_mle(likelihood, prior, p)
+    FileIO.save(name * ".jld2", Dict("llh"=>log_l, "logp"=>log_p, "params"=>mles, "converged"=>converged))
 else
     sequential = args["sequential"]
 

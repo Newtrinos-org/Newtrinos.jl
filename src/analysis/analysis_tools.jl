@@ -363,7 +363,7 @@ function find_mle(likelihood, prior, params; adsel = select_ad(length(params)))
         end
 
         @info msg
-        res = bat_findmode(posterior, OptimAlg(optalg=Optim.LBFGS(), init = ExplicitInit([params]), maxiters=2000, kwargs = (f_abstol=1e-2,)))
+        res = bat_findmode(posterior, OptimAlg(optalg=Optim.LBFGS(), init = ExplicitInit([params]), maxiters=1000, kwargs = (g_tol=1e-3,)))
 
         converged = Optim.converged(res.info)
         converged || @warn "Optimizer did not converge (iters=$(Optim.iterations(res.info)), g_residual=$(Optim.g_residual(res.info)))"
@@ -497,7 +497,7 @@ function find_mle_cached(likelihood, prior, params, cache_dir)
     end
 
     if isnothing(opt_result)
-        opt_result = find_mle_ext(likelihood, prior, params)
+        opt_result = find_mle(likelihood, prior, params)
     end
 
     if !isnothing(cache_dir)
@@ -840,6 +840,9 @@ function bestfit(result::NewtrinosResult)
     NamedTuple(bf)
 end
 
+function bestfit(result::NamedTuple)
+    return result
+end
 """
     add_meta!(meta::Dict)
 
