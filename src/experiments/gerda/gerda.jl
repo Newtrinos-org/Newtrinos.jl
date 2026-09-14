@@ -56,7 +56,7 @@ function get_assets(physics; datadir = @__DIR__)
 end
 
 
-function get_neutrinomass_SM(cfg=ThreeFlavour())
+function get_neutrinomass_SM(cfg::Newtrinos.osc.ThreeFlavour)
     function NeutrinoMass_SM(params::NamedTuple)
 
         U=  Newtrinos.osc.get_PMNS(params)
@@ -155,7 +155,7 @@ function get_neutrinomassSTD(cfg=NNM(three_flavour=Newtrinos.osc.ThreeFlavour(or
 end
 
 
-function get_neutrinomass(cfg=NNM(three_flavour=Newtrinos.osc.ThreeFlavour(ordering=:NO)))
+function get_neutrinomass(cfg::Newtrinos.osc.NNM)
     function NeutrinoMassNNM(params::NamedTuple)
 
         
