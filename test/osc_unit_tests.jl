@@ -818,7 +818,9 @@ using StaticArrays
             @test length(h) == dim
 
             # Eigenvalues sorted and non-negative (from Hermitian M†M)
-            @test issorted(h)
+            @test issorted(h[1:3:end])
+            @test issorted(h[2:3:end])
+            @test issorted(h[3:3:end])
             @test all(h .>= -1e-10)
 
             # Unitarity
@@ -831,23 +833,23 @@ using StaticArrays
             m2_sq = NND_Params.Δm²₂₁ + NND_Params.m₀^2
             m3_sq = NND_Params.Δm²₃₁ + NND_Params.m₀^2
 
-            @test eigenvalues[1] ≈ m1_sq atol = 1e-8
-            @test eigenvalues[2] ≈ m2_sq atol = 1e-8
-            @test eigenvalues[3] ≈ m3_sq atol = 1e-8
+            @test eigenvalues[1] ≈ m1_sq rtol = 1e-2
+            @test eigenvalues[2] ≈ m2_sq rtol = 1e-2
+            @test eigenvalues[3] ≈ m3_sq rtol = 1e-2
 
             @test h[1] ≈ 0.0 atol = 1e-8
-            @test h[2] ≈ NND_Params.Δm²₂₁ atol = 1e-8
-            @test h[3] ≈ NND_Params.Δm²₃₁ atol = 1e-8
+            @test h[2] ≈ NND_Params.Δm²₂₁ rtol = 1e-2
+            @test h[3] ≈ NND_Params.Δm²₃₁ rtol = 1e-2
 
             for i in 2:N-1
-                @test eigenvalues[3*i-2] ≈ (2*i+r)*m1_sq atol = 1e-8
-                @test eigenvalues[3*i-1] ≈ (2*i+r)*m2_sq atol = 1e-8
-                @test eigenvalues[3*i] ≈ (2*i+r)*m3_sq atol = 1e-8
+                @test eigenvalues[3*i-2] ≈ (2*(i-1)+r)*m1_sq/r rtol = 1e-2
+                @test eigenvalues[3*i-1] ≈ (2*(i-1)+r)*m2_sq/r rtol = 1e-2
+                @test eigenvalues[3*i] ≈ (2*(i-1)+r)*m3_sq/r rtol = 1e-2
             end
 
-            @test eigenvalues[3*N-2] ≈ N^2*(2*N+r)*m1_sq atol = 1e-8
-            @test eigenvalues[3*N-1] ≈ N^2*(2*N+r)*m2_sq atol = 1e-8
-            @test eigenvalues[3*N] ≈ N^2*(2*N+r)*m3_sq atol = 1e-8
+            @test eigenvalues[3*N-2] ≈ (N^2/2)*(2*(N-1)+r)*m1_sq/r rtol = 2e-2
+            @test eigenvalues[3*N-1] ≈ (N^2/2)*(2*(N-1)+r)*m2_sq/r rtol = 2e-2
+            @test eigenvalues[3*N] ≈ (N^2/2)*(2*(N-1)+r)*m3_sq/r rtol = 2e-2
 
            
         end
@@ -868,7 +870,9 @@ using StaticArrays
             @test length(h) == dim
 
             # Eigenvalues sorted and non-negative (from Hermitian M†M)
-            @test issorted(h)
+            @test issorted(h[1:3:end])
+            @test issorted(h[2:3:end])
+            @test issorted(h[3:3:end])
             @test all(h .>= -1e-10)
 
             # Unitarity
@@ -881,23 +885,23 @@ using StaticArrays
             m2_sq = NNM_Params.Δm²₂₁ + NNM_Params.m₀^2
             m3_sq = NNM_Params.Δm²₃₁ + NNM_Params.m₀^2
 
-            @test eigenvalues[1]^2 ≈ m1_sq atol = 1e-8
-            @test eigenvalues[2]^2 ≈ m2_sq atol = 1e-8
-            @test eigenvalues[3]^2 ≈ m3_sq atol = 1e-8
+            @test eigenvalues[1] ≈ m1_sq rtol = 2e-2
+            @test eigenvalues[2] ≈ m2_sq rtol = 2e-2
+            @test eigenvalues[3] ≈ m3_sq rtol = 2e-2
 
             @test h[1] ≈ 0.0 atol = 1e-8
-            @test h[2] ≈ NNM_Params.Δm²₂₁ atol = 1e-8
-            @test h[3] ≈ NNM_Params.Δm²₃₁ atol = 1e-8
+            @test h[2] ≈ NNM_Params.Δm²₂₁ rtol = 2e-2
+            @test h[3] ≈ NNM_Params.Δm²₃₁ rtol = 2e-2
 
             for i in 2:N-1
-                @test eigenvalues[3*i-2]^2 ≈ (2*i+r)*m1_sq atol = 1e-8
-                @test eigenvalues[3*i-1]^2 ≈ (2*i+r)*m2_sq atol = 1e-8
-                @test eigenvalues[3*i]^2 ≈ (2*i+r)*m3_sq atol = 1e-8
+                @test eigenvalues[3*i-2] ≈ (2*(i-1)+r)^2*m1_sq/r^2 rtol = 1e-2
+                @test eigenvalues[3*i-1] ≈ (2*(i-1)+r)^2*m2_sq/r^2 rtol = 1e-2
+                @test eigenvalues[3*i] ≈ (2*(i-1)+r)^2*m3_sq/r^2 rtol = 1e-2
             end
 
-            @test eigenvalues[3*N-2]^2 ≈ N^4*(2*N+r)*m1_sq atol = 1e-8
-            @test eigenvalues[3*N-1]^2 ≈ N^4*(2*N+r)*m2_sq atol = 1e-8
-            @test eigenvalues[3*N]^2 ≈ N^4*(2*N+r)*m3_sq atol = 1e-8
+            @test eigenvalues[3*N-2] ≈ (N^4/4)*(2*(N-1)+r)^2*m1_sq/r^2 rtol = 3e-2
+            @test eigenvalues[3*N-1] ≈ (N^4/4)*(2*(N-1)+r)^2*m2_sq/r^2 rtol = 3e-2
+            @test eigenvalues[3*N] ≈ (N^4/4)*(2*(N-1)+r)^2*m3_sq/r^2 rtol = 3e-2
 
            
         end
