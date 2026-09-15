@@ -484,7 +484,8 @@ using StaticArrays
             for (ie, e) in enumerate(E), (il, l) in enumerate(L)
                 phases = -F * 1im * (l / e) .* h
                 A = U_manual * Diagonal(exp.(phases)) * U_manual'
-                expected[ie, il, :, :] = abs2.(A)
+                # expected[α, β] = P(α → β) = |A[β, α]|² (A[out, in] convention)
+                expected[ie, il, :, :] = abs2.(A)'
             end
 
             @test result ≈ expected atol = 1e-10
@@ -535,7 +536,8 @@ using StaticArrays
             for (ie, e) in enumerate(E), (il, l) in enumerate(L)
                 phases = -F * 1im * (l / e) .* h
                 A = U_anti * Diagonal(exp.(phases)) * U_anti'
-                expected_anti[ie, il, :, :] = abs2.(A)
+                # expected[α, β] = P(α → β) = |A[β, α]|² (A[out, in] convention)
+                expected_anti[ie, il, :, :] = abs2.(A)'
             end
 
             @test result_anti ≈ expected_anti atol = 1e-10
@@ -564,6 +566,48 @@ using StaticArrays
             r_basic = Newtrinos.osc.get_osc_prob(Newtrinos.osc.OscillationConfig(propagation = Newtrinos.osc.Basic()))(E, L, params)
             r_damp = Newtrinos.osc.get_osc_prob(Newtrinos.osc.OscillationConfig(propagation = Newtrinos.osc.Damping()))(E, L, params)
             @test !(r_basic ≈ r_damp)
+        end
+
+        # Spray needs matter propagation (interaction=SI) through real Earth layers/paths,
+        # since its dL/dh production-height correction reads layers.radius[1:2] as the
+        # atmosphere/next-layer boundary — unlike Basic/Damping/Decoherent it has no plain
+        # vacuum (E, L) method.
+        @testset "Spray propagation" begin
+            earth = Newtrinos.earth_layers.configure()
+            layers = earth.compute_layers()
+            cz = [-1.0, -0.5, -0.1, 0.3, 1.0]
+            paths = earth.compute_paths(cz, layers)
+
+            params = Newtrinos.osc.get_params(Newtrinos.osc.ThreeFlavour())
+            E = [1.0, 5.0, 10.0]
+
+            cfg_basic = Newtrinos.osc.OscillationConfig(interaction = Newtrinos.osc.SI(), propagation = Newtrinos.osc.Basic())
+            result_basic = Newtrinos.osc.get_osc_prob(cfg_basic)(E, paths, layers, params)
+
+            @testset "$(averaging) averaging" for averaging in (:gaussian, :uniform)
+                # essentially unsmeared: should reproduce the un-averaged Basic result
+                cfg_tiny = Newtrinos.osc.OscillationConfig(interaction = Newtrinos.osc.SI(),
+                    propagation = Newtrinos.osc.Spray(averaging = averaging, σ_E = 1e-6, σ_h = 1e-4))
+                result_tiny = Newtrinos.osc.get_osc_prob(cfg_tiny)(E, paths, layers, params)
+
+                @test size(result_tiny) == size(result_basic)
+                @test result_tiny ≈ result_basic atol = 1e-4
+
+                # default smearing widths: still a valid probability distribution
+                cfg_default = Newtrinos.osc.OscillationConfig(interaction = Newtrinos.osc.SI(),
+                    propagation = Newtrinos.osc.Spray(averaging = averaging))
+                result_default = Newtrinos.osc.get_osc_prob(cfg_default)(E, paths, layers, params)
+
+                @test size(result_default) == size(result_basic)
+                @test all(isfinite, result_default)
+                @test all(result_default .>= -1e-8) && all(result_default .<= 1.0 + 1e-8)
+                for ie in axes(result_default, 1), ip in axes(result_default, 2), α in axes(result_default, 3)
+                    @test sum(result_default[ie, ip, α, :]) ≈ 1.0 atol = 1e-6
+                end
+
+                # non-trivial smearing actually changes the result vs. the un-averaged case
+                @test !(result_default ≈ result_basic)
+            end
         end
 
     end
