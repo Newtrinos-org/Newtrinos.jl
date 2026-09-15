@@ -150,6 +150,6 @@ Newtrinos.jl has been used to produce the results presented in:
 * [Testing the number of neutrino species with a global fit of neutrino data](https://arxiv.org/abs/2402.00490) - Published in: Phys.Rev.D 109 (2024) 9, 095016
 * [Constraints on non-unitary neutrino mixing in light of atmospheric and reactor neutrino data](https://arxiv.org/abs/2407.20388) - Published in: JHEP 05 (2025) 130
 * [A neutrino data analysis of extra-dimensional theories with massive bulk fields](https://arxiv.org/abs/2508.04274) - Published in: Phys.Rev.D 112 (2025) 5, 055009
-* [Atmospheric Neutrino Oscillations: the Full Picture](https://arxiv.org/abs/2606.09714) - under review 
+* [Atmospheric Neutrino Oscillations: the Full Picture](https://arxiv.org/abs/2606.09714) - Published in: Phys.Rev.D 114 (2026) 5, 053005
 * [Searching for the N-naturalness tower of neutrinos](https://arxiv.org/abs/2607.14243) - under review
 
