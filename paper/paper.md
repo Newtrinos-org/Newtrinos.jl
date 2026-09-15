@@ -87,6 +87,7 @@ Several existing software projects address related but distinct use cases:
 - **PEANUTS** [@Gonzalo:2023mdh]: Focused on solar neutrino modelling.
 - **PhyLiNO** [@Hellwig:2025jxe]: A high-performance framework for reactor neutrino data.
 - **PISA** [@IceCube:2018ikn]: Designed for atmospheric neutrino analyses.
+- **MANGO** [@Granger:2026qdr]: Oscillation probability calculations with automatic differentiation support.
 
 *Newtrinos.jl* complements these efforts by focusing on the neutrino sector, offering a simple, extensible, and efficient design. It is currently the only framework in this domain supporting automatic differentiation. The software has been used in [@Ettengruber:2024fcq], [@Kozynets:2024xgt], [@Eller:2025lsh], and [@Eller:2026urd].
 
