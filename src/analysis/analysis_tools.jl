@@ -6,6 +6,7 @@ import ForwardDiff
 import PolyesterForwardDiff
 using BAT
 using Optimization
+using OptimizationLBFGSB
 using IterTools
 using DataStructures
 using ADTypes
@@ -543,11 +544,18 @@ function find_mle(likelihood, prior, params; adsel = AutoPolyesterForwardDiff())
         end
 
         @info msg
-        res = bat_findmode(posterior, OptimizationAlg(optalg=Optimization.LBFGS(), init = ExplicitInit([params]), kwargs = (reltol=1e-7, maxiters=1000)))
+        res = bat_findmode(posterior, TransformedMaxDensity(optalg=OptimizationAlg(optalg=OptimizationLBFGSB.LBFGSB(), kwargs = (reltol=1e-7, maxiters=1000)), init = ExplicitInit([params])))
 
         return logdensityof(likelihood, res.result), logdensityof(posterior, res.result), res.result
     catch e
-        if e isa ArgumentError
+        # BAT v5's checked_logdensityof wraps a caught error in BAT.EvalException,
+        # whose constructor requires an `AbstractMeasure` target; a plain `Likelihood`
+        # (as produced by `likelihoodof`) doesn't qualify, so the wrapping itself
+        # throws a MethodError instead of propagating the original ArgumentError
+        # (see https://github.com/bat/BAT.jl, BAT.EvalException in v5.1.0).
+        is_wrapped_argerror = e isa MethodError && e.f === BAT.EvalException &&
+            length(e.args) >= 4 && e.args[4] isa ArgumentError
+        if e isa ArgumentError || is_wrapped_argerror
             return NaN, NaN, (; (k => NaN for k in keys(params))... )
         else
             rethrow(e)
