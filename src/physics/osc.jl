@@ -262,6 +262,8 @@ Standard and BSM subtypes:
 - [`Sterile`](@ref): 3+1 sterile neutrino model.
 - [`ADD`](@ref): Arkani-Hamed–Dimopoulos–Dvali large extra dimensions.
 - `Darkdim_Lambda`, `Darkdim_Masses`, `Darkdim_cas`: dark-dimension model variants.
+- ['NND'](@ref): N-Naturalness with Dirac neutrinos. 
+- ['NNM'](@ref): N-Naturalness with Majorana neutrinos.
 """
 abstract type FlavourModel end
 
@@ -373,6 +375,31 @@ end
     N_KK::Int = 5
 end
 
+"""
+    NND <: FlavourModel
+    NNM <: FlavourModel
+N-Naturalness models (with N dark dimensions) for Dirac (NND) and Majorana (NNM) neutrinos
+
+Introduce N sectors with increasing Higgs vev and therefore a tower of N neutrinos with increasing mass.
+The Dirac mass matrix is constructed from the Yukawa matrix and the Higgs vev expression. 
+The off-diagonal coupling respect the unitarity bound.
+η is the ratio between intrasector Yukawa coupling/intersector Yukawa coupling, fixed at 1+1/N.
+The Majorana mass matrix is the same as Dirac but squared.
+
+
+Additional parameters beyond [`ThreeFlavour`](@ref):
+
+| Parameter    | Description                                  | Default |
+|:------------ |:-------------------------------------------- |:------- |
+| `m₀`         | Lightest neutrino mass [eV]                  | 0.01    |
+| `N `         |  Number of sectors                           | 50      |
+| `r`          |  fine-tuning parameter*                      |1e-8     |
+
+*for fine-tuned placement of the sectors (r=0 completely fine-tuned, r=1 non fined-tuned) 
+
+# Fields
+- `three_flavour::ThreeFlavour = ThreeFlavour()`: underlying three-flavour configuration.
+"""
 @kwdef struct NND <: FlavourModel      
     three_flavour::ThreeFlavour = ThreeFlavour()
 end
@@ -1256,6 +1283,8 @@ For [`Sterile`](@ref), returns 4×4 dense matrices.
 For [`ADD`](@ref) and dark-dimension models, returns ``3(N_{KK}+1) \\times 3(N_{KK}+1)``
 dense matrices obtained by diagonalizing the full KK mass matrix via
 [`decompose`](@ref).
+For [NND](@ref) and [NNM](@ref) returns the eigenvectors matrix 3Nx3N, a 3N vector of mass squared differences (from m1^2),
+a 3N vector of mass eigenvalues, 3 NxN eigenvector matrices (one per-flavour) V_e, V_m, V_t.
 
 The closure is ForwardDiff-compatible: all intermediate computations preserve dual-number
 types through `zero(T)` / `one(T)` patterns and type promotion.
