@@ -84,7 +84,7 @@ Several existing software projects address related but distinct use cases:
 - **PISA** [@IceCube:2018ikn]: Designed for atmospheric neutrino analyses.
 - **MANGO** [@Granger:2026qdr]: Does not contain any experimental likelihoods or forward models, but provides oscillation probability calculations with automatic differentiation support.
 
-Newtrinos.jl complements these efforts by focusing on the neutrino sector, offering a simple, extensible, and efficient design. It is currently the only framework in this domain supporting automatic differentiation. The software has been used in in multiple research publications [@Ettengruber:2024fcq; @Kozynets:2024xgt; @Eller:2025lsh; @Eller:2026urd; Lonardi:2026exa].
+Newtrinos.jl complements these efforts by focusing on the neutrino sector, offering a simple, extensible, and efficient design. It is currently the only framework in this domain supporting automatic differentiation. The software has been used in in multiple research publications [@Ettengruber:2024fcq; @Kozynets:2024xgt; @Eller:2025lsh; @Eller:2026urd; @Lonardi:2026exa].
 
 # Acknowledgements
 This work was supported by Germany's Federal Ministry of Research, Technology and Space (BMFTR) within the ErUM-Data programme under grant FKZ 05D25PC1 (DEMOS consortium), and partially by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) under Germany's Excellence Strategy – EXC-2094/2 – 390783311, the SFB 1258 – 283604770, and NFDI 39/1.
