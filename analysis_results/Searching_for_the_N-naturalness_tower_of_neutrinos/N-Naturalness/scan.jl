@@ -65,7 +65,7 @@ println("\n" * "="^70)
 println("  NEUTRINO PHYSICS SCANNING SYSTEM")
 println("="^70)
 println("\nReading configuration from N-Naturalness/config.txt...")
-config = parse_config("N-Naturalness/config.txt")
+config = parse_config(joinpath(@__DIR__, "config.txt"))
 
 model = config["model"]
 ordering = Symbol(config["ordering"])
