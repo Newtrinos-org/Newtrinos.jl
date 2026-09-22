@@ -5,8 +5,10 @@ using Distributions
 using DataStructures
 using Makie
 using CairoMakie
-import Makie: plot, plot!, plot_heatmap_NN
+import Makie: plot, plot!
 using Makie
+import CairoMakie: plot_heatmap_NN
+using CairoMakie
 using BAT
 using ValueShapes
 using ArraysOfArrays
