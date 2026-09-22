@@ -133,7 +133,7 @@ add a dashed red contour at 10^4.
 log_colormap=false: If true, visualize log10.(values_to_plot).
 
 """
-function CairoMakie.plot_heatmap_NN(result::NewtrinosResult; title="Parameter Estimation Results", log=0, mass=0, values_to_plot=nothing, log_colormap=false)
+function plot_heatmap_NN(result::NewtrinosResult; title="Parameter Estimation Results", log=0, mass=0, values_to_plot=nothing, log_colormap=false)
     dLLH = 2 * (maximum(result.values.log_posterior) .- result.values.log_posterior)
     
     # Find best fit values
