@@ -14,6 +14,8 @@ const ALL_REFERENCE_VALUES = (
     orca         = -1164.2506083927215,
     coherent_csi = -574.3416032522271,
     coherent_lAr = -1754.9946939034153,
+    katrin       = 0.4549394122046937,
+    gerda        = -85.50961704258683,
 )
 
 # Parse --experiments from ARGS if present, otherwise run all
