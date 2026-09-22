@@ -133,7 +133,7 @@ add a dashed red contour at 10^4.
 log_colormap=false: If true, visualize log10.(values_to_plot).
 
 """
-function CairoMakie.plot(result::NewtrinosResult; title="Parameter Estimation Results", log=0, mass=0, values_to_plot=nothing, log_colormap=false)
+function CairoMakie.plot_heatmap_NN(result::NewtrinosResult; title="Parameter Estimation Results", log=0, mass=0, values_to_plot=nothing, log_colormap=false)
     dLLH = 2 * (maximum(result.values.log_posterior) .- result.values.log_posterior)
     
     # Find best fit values
@@ -238,62 +238,6 @@ function CairoMakie.plot(result::NewtrinosResult; title="Parameter Estimation Re
     end
     
     f
-end
-
-function corner(samples::DensitySampleVector; variables=nothing)
-
-    println("WEIGHTS ARE IGNORED!!!")
-
-    println(kwargs)
-    
-    if isnothing(variables)
-        variables = keys(samples.v[1])
-    end
-    
-    x = NamedTuple(Dict(var=>[x[var] for x in flatview(samples.v)] for var in variables));
-    pairplot(x)
-
-
-end
-    
-
-function plot!(ax, result::NewtrinosResult; max_llh=maximum(result.values.log_posterior), levels=1 .- 2*ccdf(Normal(), 1:3), label=["68%", "90%", "95%"], color=:blue, linestyle=:solid, cmap=:Blues, filled=false, edge=true, transform_x=identity, transform_y=identity)
-    neg2dllh = 2*(max_llh .- result.values.log_posterior)
-
-    if length(result.axes) == 1
-        x = transform_x(result.axes[1])
-
-        hlines!(ax, quantile(Chisq(1), levels), color=:black, linestyle=linestyle,
-            label=label, linewidth=2)
-        lines!(ax, x, neg2dllh, linewidth=2,
-            color=color,
-            linestyle=linestyle,
-            label=label)
-        
-    elseif length(result.axes) == 2
-        x = transform_x(result.axes[1])
-        y = transform_y(result.axes[2])
-        
-        if filled
-        contourf!(ax, x, y,
-                neg2dllh,
-                levels=quantile(Chisq(2), levels),
-                colormap=cmap)
-        end
-        if edge
-            contour!(ax, x, y, 
-                neg2dllh, 
-                levels=quantile(Chisq(2), levels),
-                linewidth=2,
-                color=color,
-                linestyle=linestyle)
-            lines!(ax, [NaN], [NaN], color = color, linestyle=linestyle, label = label)
-        end
-    else
-        DimensionMismatch("Cannot plot contours in $(length(result.axes)) dimesions")
-    end
-        
-    ax
 end
 
     
