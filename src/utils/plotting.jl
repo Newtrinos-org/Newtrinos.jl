@@ -5,7 +5,7 @@ using Distributions
 using DataStructures
 using Makie
 using CairoMakie
-import Makie: plot, plot!
+import Makie: plot, plot!, plot_heatmap_NN
 using Makie
 using BAT
 using ValueShapes
@@ -110,7 +110,7 @@ end
 
 
 """
-    CairoMakie.plot(
+   CairoMakie.plot_heatmap_NN(
         result::NewtrinosResult;
         title="Parameter Estimation Results",
         log=0,
