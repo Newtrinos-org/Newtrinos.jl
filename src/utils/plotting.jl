@@ -107,6 +107,32 @@ function plot(result::NewtrinosResult; kwargs...)
     plot!(ax, result; kwargs...)
     fig
 end
+
+
+"""
+    CairoMakie.plot(
+        result::NewtrinosResult;
+        title="Parameter Estimation Results",
+        log=0,
+        mass=0,
+        values_to_plot=nothing,
+        log_colormap=false,
+    )
+
+Create a two-dimensional CairoMakie heatmap from a `NewtrinosResult`.
+By default, the heatmap displays the likelihood-difference statistic.
+
+title="Parameter Estimation Results": Title displayed above the plot.
+log=0: Axis scaling mode: 0 for linear axes, 1 for logarithmic x-axis,
+2 for logarithmic y-axis, and 3 for logarithmic x- and y-axes.
+mass=0: Unit-label mode: 1 appends " (eV)" to the x-axis label and
+2 appends it to the y-axis label. The default 0 leaves labels unchanged.
+values_to_plot=nothing: Matrix to visualize. If nothing, plot dLLH
+and add likelihood confidence contours. If supplied, plot these values and
+add a dashed red contour at 10^4.
+log_colormap=false: If true, visualize log10.(values_to_plot).
+
+"""
 function CairoMakie.plot(result::NewtrinosResult; title="Parameter Estimation Results", log=0, mass=0, values_to_plot=nothing, log_colormap=false)
     dLLH = 2 * (maximum(result.values.log_posterior) .- result.values.log_posterior)
     
