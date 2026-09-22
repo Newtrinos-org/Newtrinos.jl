@@ -905,13 +905,15 @@ end
 """
     add_meta!(meta::Dict)
 
-Populate a metadata dictionary with execution environment information.
+Populate a metadata dictionary with execution environment information. When Newtrinos 
+is loaded from the julia package index, it marks the git-repo information as missing.
 
 Adds the following keys in-place:
 - `"hostname"`: result of `gethostname()`.
 - `"username"`: from `ENV["USER"]` or `ENV["USERNAME"]`.
 - `"date"`: current date-time formatted as `"yyyy-mm-dd HH:MM:SS"`.
-- `"repo"`: path to the Newtrinos.jl repository root.
+- `"repo"`: path to the Newtrinos.jl root.
+- `"package_version"`: loaded version of the Newtrinos.jl package.
 - `"commit_hash"`: current HEAD commit hash.
 - `"repo_clean"`: `true` if the repository has no uncommitted changes.
 
@@ -930,6 +932,12 @@ function add_meta!(meta)
     meta["date"] = Dates.format(now(), "yyyy-mm-dd HH:MM:SS")
     repo = dirname(dirname(pathof(Newtrinos)))
     meta["repo"] = repo
-    meta["commit_hash"] = LibGit2.head(repo)
-    meta["repo_clean"] = !LibGit2.isdirty(LibGit2.GitRepo(repo))
+    meta["package_version"] = pkgversion(Newtrinos)
+    try
+        meta["commit_hash"] = LibGit2.head(repo)
+        meta["repo_clean"] = !LibGit2.isdirty(LibGit2.GitRepo(repo))
+    catch e    
+        meta["commit_hash"] = missing
+        meta["repo_clean"] = missing
+    end
 end
