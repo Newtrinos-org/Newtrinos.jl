@@ -508,6 +508,86 @@ function _load_genie_data()
     end
 end
 
+"""Build a flat-extrapolated linear interpolation of `vals` over `E_grid`."""
+function make_itp(vals, E_grid)
+    itp = interpolate((E_grid,), vals, Gridded(Linear()))
+    return extrapolate(itp, Flat())
+end
+
+"""Map `(flav, anti)` to the `wester_xsec`/`all_xsec` flavor key."""
+function get_flavor_key(flav::Symbol, anti::Bool)
+    if flav == :nue
+        return anti ? "nuebar" : "nue"
+    elseif flav == :numu || flav == :nutau
+        return anti ? "numubar" : "numu"
+    else
+        return anti ? "nuebar" : "nue"
+    end
+end
+
+"""Extend a NEUT/Wester-digitized curve above `i_last` using the GENIE shape,
+scaled to match at the boundary (no discontinuity)."""
+function extend_neut(neut_vals, genie_vals, i_last)
+    extended = copy(neut_vals)
+    g = genie_vals[i_last]
+    n = neut_vals[i_last]
+    if g > 0 && n > 0
+        sc = n / g
+        extended[i_last+1:end] .= genie_vals[i_last+1:end] .* sc
+    end
+    return extended
+end
+
+"""σ/E curve for `(key, flav, ch)`. `NEUT5_4_0` is the digitized Wester curve
+extended above its valid range using the G18_10a GENIE shape."""
+function get_curve(wester_xsec, all_xsec, key, flav, ch, i_last)
+    key == "NEUT5_4_0" ? extend_neut(wester_xsec[flav][ch], all_xsec["G18_10a"][flav][ch], i_last) : all_xsec[key][flav][ch]
+end
+
+"""ν+ν̄-averaged σ/E curve for `(source, ch)`, used as PCA input (shape is
+flavor-symmetric)."""
+function get_ch_curve(wester_xsec, all_xsec, source, ch, i_last)
+    if source == "NEUT5_4_0"
+        gn = all_xsec["G18_10a"]["nue"][ch]; gnb = all_xsec["G18_10a"]["nuebar"][ch]
+        return (extend_neut(wester_xsec["nue"][ch], gn, i_last) .+ extend_neut(wester_xsec["nuebar"][ch], gnb, i_last)) ./ 2
+    else
+        return (all_xsec[source]["nue"][ch] .+ all_xsec[source]["nuebar"][ch]) ./ 2
+    end
+end
+
+"""Fit the leading shape-PCA mode of `alt_curves`' fractional deviation from
+`nom` (masked to the valid `E_pca_mask` range and tapered), plus the norm-spread
+std across nom/alt means over the full `E_grid` range. Returns `(itp, norm_sigma)`."""
+function compute_shape_pca(nom, alt_curves, E_grid, E_pca_mask, taper)
+    n_E = length(E_grid)
+    nom_mean = sum(nom) / n_E
+    all_means = Float64[nom_mean]
+    for alt in alt_curves
+        push!(all_means, sum(alt) / n_E)
+    end
+    norm_sigma = std(all_means ./ nom_mean)
+
+    n_pca = sum(E_pca_mask)
+    Delta = zeros(n_pca, length(alt_curves))
+    nom_pca = nom[E_pca_mask]
+    nom_pca_mean = sum(nom_pca) / n_pca
+    for (i, alt) in enumerate(alt_curves)
+        alt_pca = alt[E_pca_mask]
+        alt_pca_mean = sum(alt_pca) / n_pca
+        alt_rescaled = alt_pca .* (nom_pca_mean / alt_pca_mean)
+        frac_dev = (alt_rescaled .- nom_pca) ./ nom_pca
+        frac_dev[isnan.(frac_dev) .| isinf.(frac_dev)] .= 0.0
+        Delta[:, i] = frac_dev
+    end
+
+    U, S, _ = svd(Delta)
+    pc_full = zeros(n_E)
+    pc_full[E_pca_mask] = U[:, 1] .* S[1]
+    pc_full .*= taper
+
+    return make_itp(pc_full, E_grid), norm_sigma
+end
+
 function get_scale(cfg::H2O_PCA)
     E_grid, wester_xsec, all_xsec = _load_genie_data()
 
@@ -516,46 +596,19 @@ function get_scale(cfg::H2O_PCA)
     cc_channels = ("CC1p1h", "CC2p2h", "CC1pi", "CCDIS", "CCother")
     all_channels = (cc_channels..., "NC")
 
-    function make_itp(vals)
-        itp = interpolate((E_grid,), vals, Gridded(Linear()))
-        return extrapolate(itp, Flat())
-    end
-
-    # Get nominal σ/E per channel per flavor
     # Wester CSV data only valid up to ~26 GeV. Above that, extend using GENIE
     # G18_10a shape scaled to match Wester at the boundary (no discontinuity).
-    E_wester_max = 26.0
-    i_wester_last = findlast(E_grid .<= E_wester_max)
-
-    function extend_wester(wester_vals, genie_vals)
-        # Above E_wester_max: use GENIE shape scaled to match Wester at boundary
-        extended = copy(wester_vals)
-        g_at_boundary = genie_vals[i_wester_last]
-        w_at_boundary = wester_vals[i_wester_last]
-        if g_at_boundary > 0 && w_at_boundary > 0
-            scale = w_at_boundary / g_at_boundary
-            extended[i_wester_last+1:end] .= genie_vals[i_wester_last+1:end] .* scale
-        end
-        return extended
-    end
-
-    function get_nominal(flav, ch)
-        if nominal_key == "NEUT5_4_0"
-            return extend_wester(wester_xsec[flav][ch], all_xsec["G18_10a"][flav][ch])
-        else
-            return all_xsec[nominal_key][flav][ch]
-        end
-    end
+    i_neut_last = findlast(E_grid .<= 26.0)
 
     # Precompute nominal channel fractions per flavor (for CC reweight)
     flav_keys = ("nue", "nuebar", "numu", "numubar")
     nom_frac_itps = Dict{String, NamedTuple}()
     for fk in flav_keys
-        total_cc = sum(get_nominal(fk, ch) for ch in cc_channels)
+        total_cc = sum(get_curve(wester_xsec, all_xsec, nominal_key, fk, ch, i_neut_last) for ch in cc_channels)
         fracs = NamedTuple{Symbol.(cc_channels)}(begin
-            f = get_nominal(fk, ch) ./ total_cc
+            f = get_curve(wester_xsec, all_xsec, nominal_key, fk, ch, i_neut_last) ./ total_cc
             f[isnan.(f) .| isinf.(f)] .= 0.0
-            make_itp(f)
+            make_itp(f, E_grid)
         end for ch in cc_channels)
         nom_frac_itps[fk] = fracs
     end
@@ -580,68 +633,25 @@ function get_scale(cfg::H2O_PCA)
     end
     n_alt = length(alt_keys)
 
-    function get_channel_curve(source, ch)
-        if source == "NEUT5_4_0"
-            g_nue = all_xsec["G18_10a"]["nue"][ch]
-            g_nuebar = all_xsec["G18_10a"]["nuebar"][ch]
-            return (extend_wester(wester_xsec["nue"][ch], g_nue) .+ extend_wester(wester_xsec["nuebar"][ch], g_nuebar)) ./ 2
-        else
-            return (all_xsec[source]["nue"][ch] .+ all_xsec[source]["nuebar"][ch]) ./ 2
-        end
-    end
-
     # Only use E range where all sources have real data for shape PCA
     E_pca_mask = E_grid .<= E_valid_max
 
     process_shape_itps = Dict{String, Any}()
     process_norm_sigmas = Dict{String, Float64}()
 
-    function compute_shape_pca(nom, alt_curves)
-        n_E = length(E_grid)
-        # Norm spread: use full E range
-        nom_mean = sum(nom) / n_E
-        all_means = Float64[nom_mean]
-        for alt in alt_curves
-            push!(all_means, sum(alt) / n_E)
-        end
-        norm_sigma = std(all_means ./ nom_mean)
-
-        # Shape PCA: only use valid E range, then taper
-        n_pca = sum(E_pca_mask)
-        Delta = zeros(n_pca, length(alt_curves))
-        nom_pca = nom[E_pca_mask]
-        nom_pca_mean = sum(nom_pca) / n_pca
-        for (i, alt) in enumerate(alt_curves)
-            alt_pca = alt[E_pca_mask]
-            alt_pca_mean = sum(alt_pca) / n_pca
-            alt_rescaled = alt_pca .* (nom_pca_mean / alt_pca_mean)
-            frac_dev = (alt_rescaled .- nom_pca) ./ nom_pca
-            frac_dev[isnan.(frac_dev) .| isinf.(frac_dev)] .= 0.0
-            Delta[:, i] = frac_dev
-        end
-
-        U, S, _ = svd(Delta)
-        # Embed back into full E grid with taper
-        pc_full = zeros(n_E)
-        pc_full[E_pca_mask] = U[:, 1] .* S[1]
-        pc_full .*= taper
-
-        return make_itp(pc_full), norm_sigma
-    end
-
     for ch in all_channels
-        nom = get_channel_curve(nominal_key == "NEUT5_4_0" ? "NEUT5_4_0" : nominal_key, ch)
-        alts = [get_channel_curve(k, ch) for k in alt_keys]
-        itp, ns = compute_shape_pca(nom, alts)
+        nom = get_ch_curve(wester_xsec, all_xsec, nominal_key, ch, i_neut_last)
+        alts = [get_ch_curve(wester_xsec, all_xsec, k, ch, i_neut_last) for k in alt_keys]
+        itp, ns = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
         process_shape_itps[ch] = itp
         process_norm_sigmas[ch] = ns
     end
 
     # NC: ν and ν̄ have different shapes — compute separate NC shape PCs
     for (label, flav) in [("NC_nu", "nue"), ("NC_nubar", "nuebar")]
-        nom = nominal_key == "NEUT5_4_0" ? extend_wester(wester_xsec[flav]["NC"], all_xsec["G18_10a"][flav]["NC"]) : all_xsec[nominal_key][flav]["NC"]
-        alts = [(k == "NEUT5_4_0" ? extend_wester(wester_xsec[flav]["NC"], all_xsec["G18_10a"][flav]["NC"]) : all_xsec[k][flav]["NC"]) for k in alt_keys]
-        itp, _ = compute_shape_pca(nom, alts)
+        nom = get_curve(wester_xsec, all_xsec, nominal_key, flav, "NC", i_neut_last)
+        alts = [get_curve(wester_xsec, all_xsec, k, flav, "NC", i_neut_last) for k in alt_keys]
+        itp, _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
         process_shape_itps[label] = itp
     end
 
@@ -668,16 +678,6 @@ function get_scale(cfg::H2O_PCA)
         CCDIS  = :xsec_ccdis_nubar_ratio,
         CCother = :xsec_ccother_nubar_ratio,
     )
-
-    function get_flavor_key(flav::Symbol, anti::Bool)
-        if flav == :nue
-            return anti ? "nuebar" : "nue"
-        elseif flav == :numu || flav == :nutau
-            return anti ? "numubar" : "numu"
-        else
-            return anti ? "nuebar" : "nue"
-        end
-    end
 
     function scale(E::AbstractArray, flav::Symbol, interaction::Symbol, anti::Bool, params::NamedTuple)
         T = promote_type(eltype(E), typeof(params.xsec_nc_norm))
@@ -736,46 +736,21 @@ function get_dσdE(cfg::H2O_PCA)
     nominal_key = string(cfg.nominal)
     cc_channels = ("CC1p1h", "CC2p2h", "CC1pi", "CCDIS", "CCother")
 
-    function make_itp(vals)
-        itp = interpolate((E_grid,), vals, Gridded(Linear()))
-        return extrapolate(itp, Flat())
-    end
-
     # Extend Wester above valid range using GENIE shape (same as get_scale)
-    E_wester_max = 26.0
-    i_wester_last = findlast(E_grid .<= E_wester_max)
-
-    function extend_wester(wester_vals, genie_vals)
-        extended = copy(wester_vals)
-        g_at_boundary = genie_vals[i_wester_last]
-        w_at_boundary = wester_vals[i_wester_last]
-        if g_at_boundary > 0 && w_at_boundary > 0
-            scale = w_at_boundary / g_at_boundary
-            extended[i_wester_last+1:end] .= genie_vals[i_wester_last+1:end] .* scale
-        end
-        return extended
-    end
-
-    function get_nominal(flav, ch)
-        if nominal_key == "NEUT5_4_0"
-            return extend_wester(wester_xsec[flav][ch], all_xsec["G18_10a"][flav][ch])
-        else
-            return all_xsec[nominal_key][flav][ch]
-        end
-    end
+    i_neut_last = findlast(E_grid .<= 26.0)
 
     # Precompute absolute σ/E interpolations per channel per flavor
     flav_keys = ("nue", "nuebar", "numu", "numubar")
     nom_xsec_itps = Dict{String, NamedTuple}()
     for fk in flav_keys
-        xsecs = NamedTuple{Symbol.(cc_channels)}(make_itp(get_nominal(fk, ch)) for ch in cc_channels)
+        xsecs = NamedTuple{Symbol.(cc_channels)}(make_itp(get_curve(wester_xsec, all_xsec, nominal_key, fk, ch, i_neut_last), E_grid) for ch in cc_channels)
         nom_xsec_itps[fk] = xsecs
     end
 
     # NC σ/E per flavor
     nc_itps = Dict{String, Any}()
     for fk in flav_keys
-        nc_itps[fk] = make_itp(get_nominal(fk, "NC"))
+        nc_itps[fk] = make_itp(get_curve(wester_xsec, all_xsec, nominal_key, fk, "NC", i_neut_last), E_grid)
     end
 
     # Reuse shape PCA and sym mappings from get_scale (computed at configure time)
@@ -791,65 +766,24 @@ function get_dσdE(cfg::H2O_PCA)
     alt_keys = [t for t in genie_tunes if t != nominal_key]
     if nominal_key != "NEUT5_4_0"; push!(alt_keys, "NEUT5_4_0"); end
 
-    function get_channel_curve(source, ch)
-        if source == "NEUT5_4_0"
-            g_nue = all_xsec["G18_10a"]["nue"][ch]
-            g_nuebar = all_xsec["G18_10a"]["nuebar"][ch]
-            return (extend_wester(wester_xsec["nue"][ch], g_nue) .+ extend_wester(wester_xsec["nuebar"][ch], g_nuebar)) ./ 2
-        else
-            return (all_xsec[source]["nue"][ch] .+ all_xsec[source]["nuebar"][ch]) ./ 2
-        end
-    end
-
     E_pca_mask = E_grid .<= E_valid_max
-
-    function compute_shape_pca(nom, alt_curves)
-        n_E = length(E_grid)
-        n_pca = sum(E_pca_mask)
-        Delta = zeros(n_pca, length(alt_curves))
-        nom_pca = nom[E_pca_mask]
-        nom_pca_mean = sum(nom_pca) / n_pca
-        for (i, alt) in enumerate(alt_curves)
-            alt_pca = alt[E_pca_mask]
-            alt_pca_mean = sum(alt_pca) / n_pca
-            alt_rescaled = alt_pca .* (nom_pca_mean / alt_pca_mean)
-            frac_dev = (alt_rescaled .- nom_pca) ./ nom_pca
-            frac_dev[isnan.(frac_dev) .| isinf.(frac_dev)] .= 0.0
-            Delta[:, i] = frac_dev
-        end
-        U, S, _ = svd(Delta)
-        pc_full = zeros(n_E)
-        pc_full[E_pca_mask] = U[:, 1] .* S[1]
-        pc_full .*= taper
-        return make_itp(pc_full)
-    end
 
     process_shape_itps = Dict{String, Any}()
     all_channels = (cc_channels..., "NC")
     for ch in all_channels
-        nom = get_channel_curve(nominal_key == "NEUT5_4_0" ? "NEUT5_4_0" : nominal_key, ch)
-        alts = [get_channel_curve(k, ch) for k in alt_keys]
-        process_shape_itps[ch] = compute_shape_pca(nom, alts)
+        nom = get_ch_curve(wester_xsec, all_xsec, nominal_key, ch, i_neut_last)
+        alts = [get_ch_curve(wester_xsec, all_xsec, k, ch, i_neut_last) for k in alt_keys]
+        process_shape_itps[ch], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
     end
     for (label, flav) in [("NC_nu", "nue"), ("NC_nubar", "nuebar")]
-        nom = nominal_key == "NEUT5_4_0" ? extend_wester(wester_xsec[flav]["NC"], all_xsec["G18_10a"][flav]["NC"]) : all_xsec[nominal_key][flav]["NC"]
-        alts = [(k == "NEUT5_4_0" ? extend_wester(wester_xsec[flav]["NC"], all_xsec["G18_10a"][flav]["NC"]) : all_xsec[k][flav]["NC"]) for k in alt_keys]
-        process_shape_itps[label] = compute_shape_pca(nom, alts)
+        nom = get_curve(wester_xsec, all_xsec, nominal_key, flav, "NC", i_neut_last)
+        alts = [get_curve(wester_xsec, all_xsec, k, flav, "NC", i_neut_last) for k in alt_keys]
+        process_shape_itps[label], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
     end
 
     norm_syms = (CC2p2h=:xsec_cc2p2h_norm, CC1pi=:xsec_cc1pi_norm, CCDIS=:xsec_ccdis_norm, CCother=:xsec_ccother_norm)
     shape_syms = (CC1p1h=:xsec_cc1p1h_shape, CC2p2h=:xsec_cc2p2h_shape, CC1pi=:xsec_cc1pi_shape, CCDIS=:xsec_ccdis_shape, CCother=:xsec_ccother_shape)
     nubar_ratio_syms = (CC1p1h=:xsec_cc1p1h_nubar_ratio, CC2p2h=:xsec_cc2p2h_nubar_ratio, CC1pi=:xsec_cc1pi_nubar_ratio, CCDIS=:xsec_ccdis_nubar_ratio, CCother=:xsec_ccother_nubar_ratio)
-
-    function get_flavor_key(flav::Symbol, anti::Bool)
-        if flav == :nue
-            return anti ? "nuebar" : "nue"
-        elseif flav == :numu || flav == :nutau
-            return anti ? "numubar" : "numu"
-        else
-            return anti ? "nuebar" : "nue"
-        end
-    end
 
     function dσdE(E::AbstractArray, flav::Symbol, interaction::Symbol, anti::Bool, params::NamedTuple)
         T = promote_type(eltype(E), typeof(params.xsec_nc_norm))
@@ -917,32 +851,7 @@ function get_scale_event(cfg::H2O_PCA)
     cc_channels = ("CC1p1h", "CC1pi", "CCDIS", "CCother")
     flav_keys   = ("nue", "nuebar", "numu", "numubar")
 
-    function make_itp(vals)
-        itp = interpolate((E_grid,), vals, Gridded(Linear()))
-        return extrapolate(itp, Flat())
-    end
-
-    E_neut_max   = 26.0
-    i_neut_last  = findlast(E_grid .<= E_neut_max)
-
-    function extend_neut(neut_vals, genie_vals)
-        extended = copy(neut_vals)
-        g_at_boundary = genie_vals[i_neut_last]
-        n_at_boundary = neut_vals[i_neut_last]
-        if g_at_boundary > 0 && n_at_boundary > 0
-            sc = n_at_boundary / g_at_boundary
-            extended[i_neut_last+1:end] .= genie_vals[i_neut_last+1:end] .* sc
-        end
-        return extended
-    end
-
-    function get_curve(key, flav, ch)
-        if key == "NEUT5_4_0"
-            return extend_neut(wester_xsec[flav][ch], all_xsec["G18_10a"][flav][ch])
-        else
-            return all_xsec[key][flav][ch]
-        end
-    end
+    i_neut_last  = findlast(E_grid .<= 26.0)
 
     # Shape PCA (same as get_scale — recomputed here for independent closure)
     E_valid_max  = 30.0
@@ -957,47 +866,16 @@ function get_scale_event(cfg::H2O_PCA)
     alt_keys = [t for t in genie_tunes if t != nominal_key]
     if nominal_key != "NEUT5_4_0"; push!(alt_keys, "NEUT5_4_0"); end
 
-    function get_ch_curve(source, ch)
-        if source == "NEUT5_4_0"
-            gn = all_xsec["G18_10a"]["nue"][ch]
-            gnb = all_xsec["G18_10a"]["nuebar"][ch]
-            return (extend_neut(wester_xsec["nue"][ch], gn) .+ extend_neut(wester_xsec["nuebar"][ch], gnb)) ./ 2
-        else
-            return (all_xsec[source]["nue"][ch] .+ all_xsec[source]["nuebar"][ch]) ./ 2
-        end
-    end
-
-    function compute_shape_pca(nom, alt_curves)
-        n_E   = length(E_grid)
-        n_pca = sum(E_pca_mask)
-        Delta = zeros(n_pca, length(alt_curves))
-        nom_pca      = nom[E_pca_mask]
-        nom_pca_mean = sum(nom_pca) / n_pca
-        for (i, alt) in enumerate(alt_curves)
-            alt_pca      = alt[E_pca_mask]
-            alt_pca_mean = sum(alt_pca) / n_pca
-            alt_rescaled = alt_pca .* (nom_pca_mean / alt_pca_mean)
-            frac_dev     = (alt_rescaled .- nom_pca) ./ nom_pca
-            frac_dev[isnan.(frac_dev) .| isinf.(frac_dev)] .= 0.0
-            Delta[:, i] = frac_dev
-        end
-        U, S, _ = svd(Delta)
-        pc_full = zeros(n_E)
-        pc_full[E_pca_mask] = U[:, 1] .* S[1]
-        pc_full .*= taper
-        return make_itp(pc_full)
-    end
-
     shape_itps = Dict{String, Any}()
     for ch in (cc_channels..., "NC")
-        nom  = get_ch_curve(nominal_key == "NEUT5_4_0" ? "NEUT5_4_0" : nominal_key, ch)
-        alts = [get_ch_curve(k, ch) for k in alt_keys]
-        shape_itps[ch] = compute_shape_pca(nom, alts)
+        nom  = get_ch_curve(wester_xsec, all_xsec, nominal_key, ch, i_neut_last)
+        alts = [get_ch_curve(wester_xsec, all_xsec, k, ch, i_neut_last) for k in alt_keys]
+        shape_itps[ch], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
     end
     for (label, flav) in [("NC_nu", "nue"), ("NC_nubar", "nuebar")]
-        nom  = get_curve(nominal_key, flav, "NC")
-        alts = [get_curve(k, flav, "NC") for k in alt_keys]
-        shape_itps[label] = compute_shape_pca(nom, alts)
+        nom  = get_curve(wester_xsec, all_xsec, nominal_key, flav, "NC", i_neut_last)
+        alts = [get_curve(wester_xsec, all_xsec, k, flav, "NC", i_neut_last) for k in alt_keys]
+        shape_itps[label], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
     end
 
     # Precompute σ_nominal / σ_mc_nominal ratio interpolations per channel per flavor.
@@ -1007,8 +885,8 @@ function get_scale_event(cfg::H2O_PCA)
     for ch in (cc_channels..., "NC")
         ratio_itps[ch] = Dict{String, Any}()
         for fk in flav_keys
-            nom    = get_curve(nominal_key,    fk, ch)
-            mc_nom = get_curve(mc_nominal_key, fk, ch)
+            nom    = get_curve(wester_xsec, all_xsec, nominal_key,    fk, ch, i_neut_last)
+            mc_nom = get_curve(wester_xsec, all_xsec, mc_nominal_key, fk, ch, i_neut_last)
             ratio  = similar(nom)
             for i in eachindex(nom)
                 if mc_nom[i] > 0
@@ -1017,7 +895,7 @@ function get_scale_event(cfg::H2O_PCA)
                     ratio[i] = 1.0  # both zero or mc zero → fallback to no reweight
                 end
             end
-            ratio_itps[ch][fk] = make_itp(ratio)
+            ratio_itps[ch][fk] = make_itp(ratio, E_grid)
         end
     end
 
@@ -1041,16 +919,6 @@ function get_scale_event(cfg::H2O_PCA)
         CCDIS   = :xsec_ccdis_nubar_ratio,
         CCother = :xsec_ccother_nubar_ratio,
     )
-
-    function get_flavor_key(flav::Symbol, anti::Bool)
-        if flav == :nue
-            return anti ? "nuebar" : "nue"
-        elseif flav == :numu || flav == :nutau
-            return anti ? "numubar" : "numu"
-        else
-            return anti ? "nuebar" : "nue"
-        end
-    end
 
     function scale_event(E::AbstractArray, genie_codes, flav::Symbol, interaction::Symbol, anti::Bool, params::NamedTuple)
         T  = promote_type(eltype(E), typeof(params.xsec_nc_norm))
@@ -1121,26 +989,7 @@ function get_event_weights(cfg::H2O_PCA)
     cc_channels = ("CC1p1h", "CC1pi", "CCDIS", "CCother")
     flav_keys   = ("nue", "nuebar", "numu", "numubar")
 
-    function make_itp(vals)
-        itp = interpolate((E_grid,), vals, Gridded(Linear()))
-        return extrapolate(itp, Flat())
-    end
-
-    E_neut_max  = 26.0
-    i_neut_last = findlast(E_grid .<= E_neut_max)
-    function extend_neut(neut_vals, genie_vals)
-        extended = copy(neut_vals)
-        g = genie_vals[i_neut_last]; n = neut_vals[i_neut_last]
-        if g > 0 && n > 0
-            sc = n / g
-            extended[i_neut_last+1:end] .= genie_vals[i_neut_last+1:end] .* sc
-        end
-        return extended
-    end
-
-    function get_curve(key, flav, ch)
-        key == "NEUT5_4_0" ? extend_neut(wester_xsec[flav][ch], all_xsec["G18_10a"][flav][ch]) : all_xsec[key][flav][ch]
-    end
+    i_neut_last = findlast(E_grid .<= 26.0)
 
     # Shape PCA (same setup as get_scale_event)
     E_valid_max  = 30.0
@@ -1155,40 +1004,16 @@ function get_event_weights(cfg::H2O_PCA)
     alt_keys = [t for t in genie_tunes if t != nominal_key]
     if nominal_key != "NEUT5_4_0"; push!(alt_keys, "NEUT5_4_0"); end
 
-    function get_ch_curve(source, ch)
-        if source == "NEUT5_4_0"
-            gn = all_xsec["G18_10a"]["nue"][ch]; gnb = all_xsec["G18_10a"]["nuebar"][ch]
-            return (extend_neut(wester_xsec["nue"][ch], gn) .+ extend_neut(wester_xsec["nuebar"][ch], gnb)) ./ 2
-        else
-            return (all_xsec[source]["nue"][ch] .+ all_xsec[source]["nuebar"][ch]) ./ 2
-        end
-    end
-
-    function compute_shape_pca(nom, alt_curves)
-        n_E = length(E_grid); n_pca = sum(E_pca_mask)
-        Delta = zeros(n_pca, length(alt_curves))
-        nom_pca = nom[E_pca_mask]; nom_mean = sum(nom_pca) / n_pca
-        for (i, alt) in enumerate(alt_curves)
-            alt_pca = alt[E_pca_mask]; alt_mean = sum(alt_pca) / n_pca
-            frac = (alt_pca .* (nom_mean / alt_mean) .- nom_pca) ./ nom_pca
-            frac[isnan.(frac) .| isinf.(frac)] .= 0.0
-            Delta[:, i] = frac
-        end
-        U, S, _ = svd(Delta)
-        pc = zeros(n_E); pc[E_pca_mask] = U[:, 1] .* S[1]; pc .*= taper
-        return make_itp(pc)
-    end
-
     shape_itps = Dict{String, Any}()
     for ch in (cc_channels..., "NC")
-        nom  = get_ch_curve(nominal_key == "NEUT5_4_0" ? "NEUT5_4_0" : nominal_key, ch)
-        alts = [get_ch_curve(k, ch) for k in alt_keys]
-        shape_itps[ch] = compute_shape_pca(nom, alts)
+        nom  = get_ch_curve(wester_xsec, all_xsec, nominal_key, ch, i_neut_last)
+        alts = [get_ch_curve(wester_xsec, all_xsec, k, ch, i_neut_last) for k in alt_keys]
+        shape_itps[ch], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
     end
     for (label, flav) in [("NC_nu", "nue"), ("NC_nubar", "nuebar")]
-        nom  = get_curve(nominal_key, flav, "NC")
-        alts = [get_curve(k, flav, "NC") for k in alt_keys]
-        shape_itps[label] = compute_shape_pca(nom, alts)
+        nom  = get_curve(wester_xsec, all_xsec, nominal_key, flav, "NC", i_neut_last)
+        alts = [get_curve(wester_xsec, all_xsec, k, flav, "NC", i_neut_last) for k in alt_keys]
+        shape_itps[label], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
     end
 
     # σ_nominal / σ_mc_nominal ratio interpolations
@@ -1196,16 +1021,10 @@ function get_event_weights(cfg::H2O_PCA)
     for ch in (cc_channels..., "NC")
         ratio_itps[ch] = Dict{String, Any}()
         for fk in flav_keys
-            nom = get_curve(nominal_key, fk, ch); mc_nom = get_curve(mc_nominal_key, fk, ch)
+            nom = get_curve(wester_xsec, all_xsec, nominal_key, fk, ch, i_neut_last); mc_nom = get_curve(wester_xsec, all_xsec, mc_nominal_key, fk, ch, i_neut_last)
             ratio = map(i -> mc_nom[i] > 0 ? nom[i] / mc_nom[i] : 1.0, eachindex(nom))
-            ratio_itps[ch][fk] = make_itp(ratio)
+            ratio_itps[ch][fk] = make_itp(ratio, E_grid)
         end
-    end
-
-    function get_flavor_key(flav::Symbol, anti::Bool)
-        flav == :nue ? (anti ? "nuebar" : "nue") :
-        (flav == :numu || flav == :nutau) ? (anti ? "numubar" : "numu") :
-        (anti ? "nuebar" : "nue")
     end
 
     # Returns fast eval closure (params) -> weight vector for a given MC component.
@@ -1306,26 +1125,7 @@ function get_grid_weights(cfg::H2O_PCA)
     mc_cc_channels = ("CC1p1h", "CC1pi", "CCDIS", "CCother")
     flav_keys      = ("nue", "nuebar", "numu", "numubar")
 
-    function make_itp(vals)
-        itp = interpolate((E_grid,), vals, Gridded(Linear()))
-        return extrapolate(itp, Flat())
-    end
-
-    E_neut_max  = 26.0
-    i_neut_last = findlast(E_grid .<= E_neut_max)
-    function extend_neut(neut_vals, genie_vals)
-        extended = copy(neut_vals)
-        g = genie_vals[i_neut_last]; n = neut_vals[i_neut_last]
-        if g > 0 && n > 0
-            sc = n / g
-            extended[i_neut_last+1:end] .= genie_vals[i_neut_last+1:end] .* sc
-        end
-        return extended
-    end
-
-    function get_curve(key, flav, ch)
-        key == "NEUT5_4_0" ? extend_neut(wester_xsec[flav][ch], all_xsec["G18_10a"][flav][ch]) : all_xsec[key][flav][ch]
-    end
+    i_neut_last = findlast(E_grid .<= 26.0)
 
     # Shape PCA (same setup as get_event_weights)
     E_valid_max  = 30.0
@@ -1340,40 +1140,16 @@ function get_grid_weights(cfg::H2O_PCA)
     alt_keys = [t for t in genie_tunes if t != nominal_key]
     if nominal_key != "NEUT5_4_0"; push!(alt_keys, "NEUT5_4_0"); end
 
-    function get_ch_curve(source, ch)
-        if source == "NEUT5_4_0"
-            gn = all_xsec["G18_10a"]["nue"][ch]; gnb = all_xsec["G18_10a"]["nuebar"][ch]
-            return (extend_neut(wester_xsec["nue"][ch], gn) .+ extend_neut(wester_xsec["nuebar"][ch], gnb)) ./ 2
-        else
-            return (all_xsec[source]["nue"][ch] .+ all_xsec[source]["nuebar"][ch]) ./ 2
-        end
-    end
-
-    function compute_shape_pca(nom, alt_curves)
-        n_E = length(E_grid); n_pca = sum(E_pca_mask)
-        Delta = zeros(n_pca, length(alt_curves))
-        nom_pca = nom[E_pca_mask]; nom_mean = sum(nom_pca) / n_pca
-        for (i, alt) in enumerate(alt_curves)
-            alt_pca = alt[E_pca_mask]; alt_mean = sum(alt_pca) / n_pca
-            frac = (alt_pca .* (nom_mean / alt_mean) .- nom_pca) ./ nom_pca
-            frac[isnan.(frac) .| isinf.(frac)] .= 0.0
-            Delta[:, i] = frac
-        end
-        U, S, _ = svd(Delta)
-        pc = zeros(n_E); pc[E_pca_mask] = U[:, 1] .* S[1]; pc .*= taper
-        return make_itp(pc)
-    end
-
     shape_itps = Dict{String, Any}()
     for ch in (cc_channels..., "NC")
-        nom  = get_ch_curve(nominal_key == "NEUT5_4_0" ? "NEUT5_4_0" : nominal_key, ch)
-        alts = [get_ch_curve(k, ch) for k in alt_keys]
-        shape_itps[ch] = compute_shape_pca(nom, alts)
+        nom  = get_ch_curve(wester_xsec, all_xsec, nominal_key, ch, i_neut_last)
+        alts = [get_ch_curve(wester_xsec, all_xsec, k, ch, i_neut_last) for k in alt_keys]
+        shape_itps[ch], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
     end
     for (label, flav) in [("NC_nu", "nue"), ("NC_nubar", "nuebar")]
-        nom  = get_curve(nominal_key, flav, "NC")
-        alts = [get_curve(k, flav, "NC") for k in alt_keys]
-        shape_itps[label] = compute_shape_pca(nom, alts)
+        nom  = get_curve(wester_xsec, all_xsec, nominal_key, flav, "NC", i_neut_last)
+        alts = [get_curve(wester_xsec, all_xsec, k, flav, "NC", i_neut_last) for k in alt_keys]
+        shape_itps[label], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
     end
 
     # Absolute σ_nominal per channel per flavor
@@ -1381,30 +1157,24 @@ function get_grid_weights(cfg::H2O_PCA)
     for fk in flav_keys
         nom_xsec_itps[fk] = Dict{String, Any}()
         for ch in (cc_channels..., "NC")
-            nom_xsec_itps[fk][ch] = make_itp(get_curve(nominal_key, fk, ch))
+            nom_xsec_itps[fk][ch] = make_itp(get_curve(wester_xsec, all_xsec, nominal_key, fk, ch, i_neut_last), E_grid)
         end
     end
 
     # MC total CC denominator per flavor (only channels present in mc_nominal)
     mc_total_cc_itps = Dict{String, Any}()
     for fk in flav_keys
-        total = sum(get_curve(mc_nominal_key, fk, ch) for ch in mc_cc_channels)
-        mc_total_cc_itps[fk] = make_itp(max.(total, 1e-30))
+        total = sum(get_curve(wester_xsec, all_xsec, mc_nominal_key, fk, ch, i_neut_last) for ch in mc_cc_channels)
+        mc_total_cc_itps[fk] = make_itp(max.(total, 1e-30), E_grid)
     end
 
     # NC ratio: σ_nominal_NC / σ_mc_nominal_NC per flavor
     nc_ratio_itps = Dict{String, Any}()
     for fk in flav_keys
-        nom_nc = get_curve(nominal_key,    fk, "NC")
-        mc_nc  = get_curve(mc_nominal_key, fk, "NC")
+        nom_nc = get_curve(wester_xsec, all_xsec, nominal_key,    fk, "NC", i_neut_last)
+        mc_nc  = get_curve(wester_xsec, all_xsec, mc_nominal_key, fk, "NC", i_neut_last)
         ratio  = map(i -> mc_nc[i] > 0 ? nom_nc[i] / mc_nc[i] : 1.0, eachindex(nom_nc))
-        nc_ratio_itps[fk] = make_itp(ratio)
-    end
-
-    function get_flavor_key(flav::Symbol, anti::Bool)
-        flav == :nue ? (anti ? "nuebar" : "nue") :
-        (flav == :numu || flav == :nutau) ? (anti ? "numubar" : "numu") :
-        (anti ? "nuebar" : "nue")
+        nc_ratio_itps[fk] = make_itp(ratio, E_grid)
     end
 
     # Returns a closure (params) -> weight_vector of length(E_eval).

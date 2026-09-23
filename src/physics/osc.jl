@@ -1370,17 +1370,6 @@ function propagate(U, h, E, paths::VectorOfVectors{Path}, layers::StructVector{L
     permutedims(p, (1, 2, 4, 3))
 end
 
-# Resolve Delta_E argument: nothing→zeros, scalar→broadcast, vector→pass through
-function _resolve_delta_E(Delta_E::Nothing, E)
-    zeros(eltype(E), length(E))
-end
-function _resolve_delta_E(Delta_E::Real, E)
-    fill(Delta_E, length(E))
-end
-function _resolve_delta_E(Delta_E::AbstractVector, E)
-    Delta_E
-end
-
 # Fuse rest addition + permutedims + flavour transpose into one pass.
 # p_raw layout: [out, in, n_E, n_L] (from propagate, where out=detected, in=source)
 # result layout: [n_E, n_L, in, out] so that P[i, j, α, β] = P(να → νβ)

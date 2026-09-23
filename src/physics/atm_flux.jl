@@ -8,7 +8,7 @@ using LinearAlgebra
 using TypedTables
 using ..Newtrinos
 
-export AtmFluxConfig, HKKM, Barr
+export AtmFluxConfig, HKKM, Barr, BarrEnergyBands
 
 const datadir = @__DIR__ 
 
@@ -45,8 +45,8 @@ end
 Abstract type for atmospheric flux systematic uncertainty models.
 
 Each subtype defines a set of nuisance parameters and a function that modifies the
-nominal flux to account for systematic uncertainties. Currently the only implementation
-is [`Barr`](@ref).
+nominal flux to account for systematic uncertainties. Implementations are [`Barr`](@ref)
+and [`BarrEnergyBands`](@ref).
 """
 abstract type FluxSystematicsModel end
 
@@ -56,11 +56,35 @@ abstract type FluxSystematicsModel end
 Barr systematic uncertainty model for atmospheric neutrino fluxes.
 
 Parametrizes flux uncertainties as energy- and zenith-dependent modifications following
-Barr et al., "Uncertainties in Atmospheric Neutrino Fluxes." Each flux-ratio uncertainty
-is split into three independent energy-range parameters (`_lo` for sub-GeV, `_mid` for
-1–10 GeV, `_hi` for >10 GeV), and the coszen-dependent shape of the modulation within each
-range is set by the helper functions `fun_nuenuebar`, `fun_numunumubar`, and `fun_numunue`.
-The systematics cover:
+Barr et al., "Uncertainties in Atmospheric Neutrino Fluxes." The systematics cover:
+
+| Parameter                          | Description                               |
+|:---------------------------------- |:----------------------------------------- |
+| `atm_flux_nuenuebar_sigma`         | ``\\nu_e / \\bar\\nu_e`` ratio uncertainty  |
+| `atm_flux_numunumubar_sigma`       | ``\\nu_\\mu / \\bar\\nu_\\mu`` ratio uncertainty |
+| `atm_flux_nuenumu_sigma`           | ``\\nu_e / \\nu_\\mu`` ratio uncertainty    |
+| `atm_flux_delta_spectral_index`    | Spectral index tilt                       |
+| `atm_flux_uphorizonzal_sigma`      | Up/horizontal anisotropy                  |
+| `atm_flux_updown_sigma`            | Up/down asymmetry                         |
+
+All sigma parameters are centred at 0 with unit Gaussian priors (truncated at ±3).
+
+See [`BarrEnergyBands`](@ref) for a variant that splits each flux-ratio uncertainty into
+independent sub-GeV/1-10 GeV/\\>10 GeV energy-range parameters with additional
+coszen-dependent shaping.
+"""
+struct Barr <: FluxSystematicsModel end
+
+"""
+    BarrEnergyBands <: FluxSystematicsModel
+
+Barr systematic uncertainty model for atmospheric neutrino fluxes, with each flux-ratio
+uncertainty split into three independent energy-range parameters.
+
+Like [`Barr`](@ref), but each flux-ratio uncertainty is split into three independent
+energy-range parameters (`_lo` for sub-GeV, `_mid` for 1–10 GeV, `_hi` for >10 GeV), and
+the coszen-dependent shape of the modulation within each range is set by the helper
+functions `fun_nuenuebar`, `fun_numunumubar`, and `fun_numunue`. The systematics cover:
 
 | Parameter                                           | Description                               |
 |:---------------------------------------------------- |:----------------------------------------- |
@@ -73,7 +97,7 @@ The systematics cover:
 
 All sigma parameters are centred at 0 with unit Gaussian priors (truncated at ±3).
 """
-struct Barr <: FluxSystematicsModel end
+struct BarrEnergyBands <: FluxSystematicsModel end
 
 """
     AtmFluxConfig{F, S}
@@ -154,7 +178,26 @@ end
 Return the default systematic parameter values for the given flux systematics model.
 
 # Arguments
-- `cfg::FluxSystematicsModel`: a [`Barr`](@ref) instance.
+- `cfg::FluxSystematicsModel`: a [`Barr`](@ref) or [`BarrEnergyBands`](@ref) instance.
+
+# Returns
+A `NamedTuple` mapping parameter names to their nominal values (all default to `0.0`).
+"""
+function get_params(cfg::Barr)
+    params = (
+        atm_flux_nuenuebar_sigma = 0.,
+        atm_flux_numunumubar_sigma = 0.,
+        atm_flux_nuenumu_sigma = 0.,
+        atm_flux_delta_spectral_index = 0.,
+        atm_flux_uphorizonzal_sigma = 0.,
+        atm_flux_updown_sigma = 0.,
+        )
+end
+
+"""
+    get_params(cfg::BarrEnergyBands) -> NamedTuple
+
+Return the default systematic parameter values for the [`BarrEnergyBands`](@ref) model.
 
 # Returns
 A `NamedTuple` mapping parameter names to their nominal values (all default to `0.0`),
@@ -162,7 +205,7 @@ covering the `_lo`/`_mid`/`_hi` energy-range variants of the ``\\nu_e/\\bar\\nu_
 ``\\nu_\\mu/\\bar\\nu_\\mu``, and ``\\nu_e/\\nu_\\mu`` ratio uncertainties, plus the
 spectral index, up/horizontal, and up/down parameters.
 """
-function get_params(cfg::Barr)
+function get_params(cfg::BarrEnergyBands)
     params = (
         atm_flux_nuenuebar_sigma_lo = 0.,
         atm_flux_nuenuebar_sigma_mid = 0.,
@@ -184,17 +227,40 @@ end
 
 Return prior distributions for each flux systematic parameter.
 
-For [`Barr`](@ref), all sigma parameters (including the `_lo`/`_mid`/`_hi` energy-range
-variants) use `Truncated(Normal(0, 1), -3, 3)` and the spectral index uses
+All sigma parameters use `Truncated(Normal(0, 1), -3, 3)` and the spectral index uses
 `Truncated(Normal(0, 0.1), -0.3, 0.3)`.
 
 # Arguments
-- `cfg::FluxSystematicsModel`: a [`Barr`](@ref) instance.
+- `cfg::FluxSystematicsModel`: a [`Barr`](@ref) or [`BarrEnergyBands`](@ref) instance.
 
 # Returns
 A `NamedTuple` of `Symbol => Distribution` priors.
 """
 function get_priors(cfg::Barr)
+    priors = (
+        atm_flux_nuenuebar_sigma = Truncated(Normal(0., 1.), -3, 3),
+        atm_flux_numunumubar_sigma = Truncated(Normal(0., 1.), -3, 3),
+        atm_flux_nuenumu_sigma = Truncated(Normal(0., 1.), -3, 3),
+        atm_flux_delta_spectral_index = Truncated(Normal(0., 0.1), -0.3, 0.3),
+        atm_flux_uphorizonzal_sigma = Truncated(Normal(0., 1.), -3, 3),
+        atm_flux_updown_sigma = Truncated(Normal(0., 1.), -3, 3),
+        )
+end
+
+"""
+    get_priors(cfg::BarrEnergyBands) -> NamedTuple
+
+Return prior distributions for each flux systematic parameter of the
+[`BarrEnergyBands`](@ref) model.
+
+All sigma parameters (including the `_lo`/`_mid`/`_hi` energy-range variants) use
+`Truncated(Normal(0, 1), -3, 3)` and the spectral index uses
+`Truncated(Normal(0, 0.1), -0.3, 0.3)`.
+
+# Returns
+A `NamedTuple` of `Symbol => Distribution` priors.
+"""
+function get_priors(cfg::BarrEnergyBands)
     priors = (
         atm_flux_nuenuebar_sigma_lo = Truncated(Normal(0., 1.), -3, 3),
         atm_flux_nuenuebar_sigma_mid = Truncated(Normal(0., 1.), -3, 3),
@@ -371,13 +437,9 @@ the following energy- and zenith-dependent corrections to the nominal flux:
 
 1. **Spectral tilt**: ``(E / E_\\text{pivot})^{\\Delta\\gamma}`` with
    ``E_\\text{pivot} \\approx 24.1`` GeV.
-2. **``\\nu_e / \\bar\\nu_e`` ratio** scaling via [`scale_flux`](@ref), with the sigma
-   selected per energy range (sub-GeV/1–10 GeV/>10 GeV via `mask_lo`/`mask_mid`/`mask_hi`)
-   and its coszen dependence shaped by `fun_nuenuebar`.
-3. **``\\nu_\\mu / \\bar\\nu_\\mu`` ratio** scaling via [`scale_flux`](@ref), with the sigma
-   selected per energy range and its coszen dependence shaped by `fun_numunumubar`.
-4. **``\\nu_e / \\nu_\\mu`` ratio** scaling via [`scale_flux`](@ref), with the sigma
-   selected per energy range and its coszen dependence shaped by `fun_numunue`.
+2. **``\\nu_e / \\bar\\nu_e`` ratio** scaling via [`scale_flux`](@ref).
+3. **``\\nu_\\mu / \\bar\\nu_\\mu`` ratio** scaling via [`scale_flux`](@ref).
+4. **``\\nu_e / \\nu_\\mu`` ratio** scaling via [`scale_flux`](@ref).
 5. **Up/down asymmetry** via [`updown`](@ref).
 6. **Up/horizontal anisotropy** via [`uphorizontal`](@ref) (separate polynomial
    uncertainty fits for ``\\nu_e`` and ``\\nu_\\mu``).
@@ -391,7 +453,80 @@ modified flux arrays.
 """
 function get_sys_flux(cfg::Barr)
     function sys_flux(flux, params)
-    
+
+        e = flux.true_energy
+        log10e = flux.log10_true_energy
+        cz = flux.true_coszen
+
+        # spectral
+        f_spectral_shift = (e ./ 24.0900951261) .^ params.atm_flux_delta_spectral_index
+
+        # all coefficients below come from fits to the Figs. 7 & 9 in Uncertainties in Atmospheric Neutrino Fluxes by Barr & Robbins
+
+        # nue - nuebar
+        uncert = ((0.73 * e) .^(0.59) .+ 4.8) / 100.
+        flux_nue1, flux_nuebar1 = scale_flux(flux.nue, flux.nuebar, 1. .+ (params.atm_flux_nuenuebar_sigma .* uncert))
+
+        # numu - numubar
+        uncert = ((9.6 * e) .^(0.41) .-0.8) / 100.
+        flux_numu1, flux_numubar1 = scale_flux(flux.numu, flux.numubar, 1. .+ (params.atm_flux_numunumubar_sigma .* uncert))
+
+        # nue - numu
+        uncert = ((0.051 * e) .^(0.63) .+ 0.73) / 100.
+        flux_nue2, flux_numu2 = scale_flux(flux_nue1, flux_numu1, 1. .- (params.atm_flux_nuenumu_sigma .* uncert))
+        flux_nuebar2, flux_numubar2 = scale_flux(flux_nuebar1, flux_numubar1, 1. .- (params.atm_flux_nuenumu_sigma .* uncert))
+
+        #up/down
+        uncert = max.(0., 7 ./ (1 .+ (e./0.5) .^2)) / 100.
+        f_updown = updown(cz, 1 .+ uncert * params.atm_flux_updown_sigma)
+
+        # up/horizontal
+        # nue
+        uncert = (-0.43*log10e.^5 .+ 1.17*log10e.^4 .+ 0.89*log10e.^3 .- 0.36*log10e.^2 .- 1.59*log10e .+ 1.96) / 100.
+        f_uphorizontal = uphorizontal.(cz, 1 .+ uncert * params.atm_flux_uphorizonzal_sigma)
+        flux_nue3 = flux_nue2 .* f_spectral_shift .* f_uphorizontal .* f_updown
+        flux_nuebar3 = flux_nuebar2 .* f_spectral_shift .* f_uphorizontal .* f_updown
+
+        #numu
+        uncert = (-0.16*log10e.^5 .+ 0.45*log10e.^4 .+ 0.48*log10e.^3 .+ 0.17*log10e.^2 .- 1.88*log10e .+ 1.88) / 100.
+        f_uphorizontal = uphorizontal.(cz, 1 .+ uncert * params.atm_flux_uphorizonzal_sigma)
+        flux_numu3 = flux_numu2 .* f_spectral_shift .* f_uphorizontal .* f_updown
+        flux_numubar3 = flux_numubar2 .* f_spectral_shift .* f_uphorizontal .* f_updown
+
+        return (nue=flux_nue3, numu=flux_numu3, nuebar=flux_nuebar3, numubar=flux_numubar3)
+
+    end
+end
+
+"""
+    get_sys_flux(cfg::BarrEnergyBands) -> Function
+
+Construct the systematic flux modification closure for the [`BarrEnergyBands`](@ref)
+model.
+
+Returns a function `sys_flux(flux, params) -> NamedTuple` that applies the following
+energy- and zenith-dependent corrections to the nominal flux:
+
+1. **Spectral tilt**: ``(E / E_\\text{pivot})^{\\Delta\\gamma}`` with
+   ``E_\\text{pivot} \\approx 24.1`` GeV.
+2. **``\\nu_e / \\bar\\nu_e`` ratio** scaling via [`scale_flux`](@ref), with the sigma
+   selected per energy range (sub-GeV/1–10 GeV/>10 GeV via `mask_lo`/`mask_mid`/`mask_hi`)
+   and its coszen dependence shaped by `fun_nuenuebar`.
+3. **``\\nu_\\mu / \\bar\\nu_\\mu`` ratio** scaling via [`scale_flux`](@ref), with the sigma
+   selected per energy range and its coszen dependence shaped by `fun_numunumubar`.
+4. **``\\nu_e / \\nu_\\mu`` ratio** scaling via [`scale_flux`](@ref), with the sigma
+   selected per energy range and its coszen dependence shaped by `fun_numunue`.
+5. **Up/down asymmetry** via [`updown`](@ref).
+6. **Up/horizontal anisotropy** via [`uphorizontal`](@ref) (separate polynomial
+   uncertainty fits for ``\\nu_e`` and ``\\nu_\\mu``).
+
+# Returns
+A closure `sys_flux(flux, params) -> NamedTuple{(:nue, :numu, :nuebar, :numubar)}` of
+modified flux arrays.
+"""
+function get_sys_flux(cfg::BarrEnergyBands)
+    function sys_flux(flux, params)
+
         e = flux.true_energy
         log10e = flux.log10_true_energy
         cz = flux.true_coszen
@@ -430,12 +565,12 @@ function get_sys_flux(cfg::Barr)
 
         #up/down
         uncert = max.(0., 7 ./ (1 .+ (e./0.5) .^2)) / 100.
-        f_updown = updown(cz, 1 .+ uncert * params.atm_flux_updown_sigma)   
+        f_updown = updown(cz, 1 .+ uncert * params.atm_flux_updown_sigma)
 
         # up/horizontal
         # nue
         uncert = (-0.43*log10e.^5 .+ 1.17*log10e.^4 .+ 0.89*log10e.^3 .- 0.36*log10e.^2 .- 1.59*log10e .+ 1.96) / 100.
-        f_uphorizontal = uphorizontal.(cz, 1 .+ uncert * params.atm_flux_uphorizontal_sigma) 
+        f_uphorizontal = uphorizontal.(cz, 1 .+ uncert * params.atm_flux_uphorizontal_sigma)
         flux_nue3 = flux_nue2 .* f_spectral_shift .* f_uphorizontal .* f_updown
         flux_nuebar3 = flux_nuebar2 .* f_spectral_shift .* f_uphorizontal .* f_updown
 
@@ -446,7 +581,7 @@ function get_sys_flux(cfg::Barr)
         flux_numubar3 = flux_numubar2 .* f_spectral_shift .* f_uphorizontal .* f_updown
 
         return (nue=flux_nue3, numu=flux_numu3, nuebar=flux_nuebar3, numubar=flux_numubar3)
-    
+
     end
 end
 

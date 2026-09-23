@@ -119,7 +119,7 @@ using Test
 
     @testset "Systematic flux at nominal params" begin
         #Test with nominal params -> should return nominal flux unchanged:
-        af = Newtrinos.atm_flux.configure()
+        af = Newtrinos.atm_flux.configure(Newtrinos.atm_flux.AtmFluxConfig(systematics_model=Newtrinos.atm_flux.BarrEnergyBands()))
         energy = [0.1, 1.0, 10.0, 100.0]
         coszen = [-0.95, -0.5, 0.0, 0.5, 0.95]
         nominal = af.nominal_flux(energy, coszen)
@@ -144,6 +144,31 @@ using Test
 
         # numu/numubar ratio scaling (split into sub-GeV/1-10 GeV/>10 GeV energy ranges)
         params_numu = merge(af.params, (atm_flux_numunumubar_sigma_lo = 1.0, atm_flux_numunumubar_sigma_mid = 1.0, atm_flux_numunumubar_sigma_hi = 1.0))
+        sys_numu = af.sys_flux(nominal, params_numu)
+        @test sys_numu.numu .+ sys_numu.numubar ≈ nominal.numu .+ nominal.numubar atol=1e-6
+        @test !(sys_numu.numu ≈ nominal.numu)
+    end
+
+    @testset "Barr (flat) systematic flux at nominal params" begin
+        af = Newtrinos.atm_flux.configure(Newtrinos.atm_flux.AtmFluxConfig(systematics_model=Newtrinos.atm_flux.Barr()))
+        energy = [0.1, 1.0, 10.0, 100.0]
+        coszen = [-0.95, -0.5, 0.0, 0.5, 0.95]
+        nominal = af.nominal_flux(energy, coszen)
+        sys_result = af.sys_flux(nominal, af.params)
+
+        @test sys_result.nue ≈ nominal.nue atol=1e-6
+        @test sys_result.numu ≈ nominal.numu atol=1e-6
+        @test sys_result.nuebar ≈ nominal.nuebar atol=1e-6
+        @test sys_result.numubar ≈ nominal.numubar atol=1e-6
+
+        # nue/nuebar ratio scaling (single flat sigma across all energies)
+        params_nue = merge(af.params, (atm_flux_nuenuebar_sigma = 1.0,))
+        sys_nue = af.sys_flux(nominal, params_nue)
+        @test sys_nue.nue .+ sys_nue.nuebar ≈ nominal.nue .+ nominal.nuebar atol=1e-6
+        @test !(sys_nue.nue ≈ nominal.nue)
+
+        # numu/numubar ratio scaling (single flat sigma across all energies)
+        params_numu = merge(af.params, (atm_flux_numunumubar_sigma = 1.0,))
         sys_numu = af.sys_flux(nominal, params_numu)
         @test sys_numu.numu .+ sys_numu.numubar ≈ nominal.numu .+ nominal.numubar atol=1e-6
         @test !(sys_numu.numu ≈ nominal.numu)
