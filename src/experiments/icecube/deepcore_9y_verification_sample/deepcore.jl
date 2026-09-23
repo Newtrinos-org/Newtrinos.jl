@@ -245,7 +245,7 @@ function get_hypersurface_factor(hypersurface, idx, fraction, params)
         (interpolate_hypersurface(hypersurface.bulk_ice_scatter, idx, fraction) * (params.deepcore_ice_scattering - 1)) .+
         (interpolate_hypersurface(hypersurface.dom_eff, idx, fraction) .* (params.deepcore_opt_eff_overall - 1)) .+
         (interpolate_hypersurface(hypersurface.hole_ice_p0, idx, fraction) * (params.deepcore_rel_eff_p0 - 0.1)) .+
-        (interpolate_hypersurface(hypersurface.hole_ice_p0, idx, fraction) * (params.deepcore_rel_eff_p1 + 0.05))
+        (interpolate_hypersurface(hypersurface.hole_ice_p1, idx, fraction) * (params.deepcore_rel_eff_p1 + 0.05))
         )
     f
 end
