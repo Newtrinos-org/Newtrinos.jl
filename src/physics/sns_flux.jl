@@ -37,7 +37,7 @@ const alph = 1/137
 const ep = (mpi^2 - mmu^2) / (2*mpi)
 
 """
-    configure(; exposure, distance, ecut, E_bin_width, tcut, use_data, flux_folder, beam_power, proton_energy) -> SNSFlux
+    configure(; exposure, distance, ecut, E_bin_width, tcut, tbins, use_data, flux_folder, beam_power, proton_energy) -> SNSFlux
 
 Create a fully configured SNS flux physics module.
 
@@ -47,6 +47,8 @@ Create a fully configured SNS flux physics module.
 - `ecut::Real = mmu/2`: maximum neutrino energy [MeV] (default: ``m_\\mu / 2``).
 - `E_bin_width::Real = 0.5`: energy bin width [MeV] (analytic mode only).
 - `tcut::Real = 6000.0`: maximum time [ns] (data mode only).
+- `tbins = Nothing`: explicit time-bin edges (data mode only). When given, overrides the
+  default log-spaced time binning in [`get_assets`](@ref).
 - `use_data::Bool = true`: if `true`, load flux from CSV tables (default); if `false`, use analytic
   decay-at-rest spectra.
 - `flux_folder::String`: path to the directory containing the SNS flux CSV files.
@@ -58,12 +60,11 @@ An [`SNSFlux`](@ref) instance.
 """
 function configure(;
         exposure, distance,
-        ecut= mmu/2., E_bin_width=0.5, tcut=6000.0,
+        ecut= mmu/2., E_bin_width=0.5, tcut=6000.0, tbins=Nothing,
         use_data=true, flux_folder=joinpath(@__DIR__, "..", "experiments", "coherent", "coherent_2020", "csi", "snsFlux2D_CSV"),
         beam_power=1.4, proton_energy=1.0)
     # Call get_assets and assign the result to `assets`
-    assets = get_assets(; use_data, exposure, distance, beam_power, proton_energy, flux_folder, ecut, E_bin_width, tcut)
-
+    assets = get_assets(; use_data, exposure, distance, beam_power, proton_energy, flux_folder, ecut, E_bin_width, tcut, tbins)
     # Return the configured SNSFlux object
     return SNSFlux(
         params = get_params(use_data),
@@ -78,7 +79,7 @@ end
 
 Return default flux normalization parameters.
 
-- Data mode (`use_data=true`): returns `(flux_norm=1.0,)`.
+- Data mode (`use_data=true`): returns `(flux_norm=1.0, flux_onset=0.0)`.
 - Analytic mode (`use_data=false`): returns `(sns_nu_per_POT=0.09,)`.
 
 # Arguments
@@ -91,6 +92,7 @@ function get_params(use_data)
     if use_data
         (
             flux_norm = 1.0,
+            flux_onset = 0.0,
         )
     else
         (
@@ -104,7 +106,8 @@ end
 
 Return prior distributions for the flux normalization parameter.
 
-- Data mode: `Truncated(Normal(1.0, 0.1), 0.7, 1.3)` for `flux_norm`.
+- Data mode: `Truncated(Normal(1.0, 0.1), 0.7, 1.3)` for `flux_norm` and
+  `Uniform(-500.0, 500.0)` for `flux_onset`.
 - Analytic mode: `Truncated(Normal(0.09, 0.009), 0.05, 0.15)` for `sns_nu_per_POT`.
 
 # Arguments
@@ -117,6 +120,7 @@ function get_priors(use_data)
     if use_data
         (
             flux_norm = truncated(Normal(1.0, 0.1), 0.7, 1.3),
+            flux_onset = Uniform(-500.0, 500.0),
         )
     else
         (
@@ -126,13 +130,14 @@ function get_priors(use_data)
 end
 
 """
-    get_assets(; use_data, exposure, distance, beam_power, proton_energy, flux_folder, ecut, E_bin_width, tcut) -> NamedTuple
+    get_assets(; use_data, exposure, distance, beam_power, proton_energy, flux_folder, ecut, E_bin_width, tcut, tbins) -> NamedTuple
 
 Precompute energy grids, time bins, and raw (unnormalized) flux arrays.
 
-In data mode, reads 2D ``(E, t)`` flux CSV files, applies energy and time cuts, rebins
-time into logarithmically spaced bins, and scales by the geometric factor
-``\\eta = \\text{exposure} \\cdot s_{\\text{per GWh}} \\,/\\, (4\\pi d^2)``.
+In data mode, reads 2D ``(E, t)`` flux CSV files, applies energy and time cuts, and scales
+by the geometric factor ``\\eta = \\text{exposure} \\cdot s_{\\text{per GWh}} \\,/\\, (4\\pi
+d^2)``. Time is rebinned either into the explicit `tbins` edges, if given, or otherwise
+into a default set of logarithmically spaced bins.
 
 In analytic mode, evaluates decay-at-rest spectra via [`flux_nu_mu`](@ref),
 [`flux_nu_e`](@ref), and [`flux_nu_mu_bar`](@ref).
@@ -146,18 +151,20 @@ In analytic mode, evaluates decay-at-rest spectra via [`flux_nu_mu`](@ref),
 - `flux_folder`: path to CSV flux directory.
 - `ecut`: energy cutoff [MeV].
 - `E_bin_width`: energy bin width [MeV] (analytic mode).
-- `tcut`: time cutoff [ns] (data mode).
+- `tcut`: time cutoff [ns] (data mode, used only when `tbins` is not given).
+- `tbins`: explicit time-bin edges (data mode only); `Nothing` (sentinel type, not a
+  value) selects the default log-spaced binning.
 
 # Returns
 A `NamedTuple` with fields `E`, `T` (data mode only), and per-flavour flux arrays.
 """
 function get_assets(; use_data, exposure, distance,
                         beam_power, proton_energy,
-                        flux_folder, ecut, E_bin_width, tcut)
+                        flux_folder, ecut, E_bin_width, tcut, tbins)
     if use_data
         #@info "Loading SNS Flux data"
         # Function to read and rebin flux data from CSV files
-        function read_flux_data(file_path, ecut, tcut)
+        function read_flux_data(file_path)
             # Read CSV; first column = energy, remaining columns = flux values
             data = CSV.read(file_path, DataFrame; header=true, normalizenames=false)
 
@@ -188,6 +195,21 @@ function get_assets(; use_data, exposure, distance,
             # Scale weights by bin widths (area-normalized)
             weights .*= dE .* dt'
             
+            if tbins !== Nothing
+                # Use provided time bins
+                time_edges = tbins
+                n_time_bins = length(time_edges) - 1
+                # Rebin weights into provided time bins
+                rebinned_weights = zeros(size(weights, 1), n_time_bins)
+                for i in 1:n_time_bins
+                    # Find indices of original time bins whose centers fall within new bin edges
+                    idx = findall(c -> c >= time_edges[i] && c < time_edges[i+1], time_centers)
+                    if !isempty(idx)
+                        rebinned_weights[:, i] = sum(weights[:, idx], dims=2)[:, 1]
+                    end
+                end
+                return (energy_centers, time_edges, rebinned_weights)
+            end
             # Number of desired log-spaced time bins
             n_log_bins = 8
             t_start = 500.0
@@ -218,10 +240,10 @@ function get_assets(; use_data, exposure, distance,
         file_path_e_bar = joinpath(flux_folder, "convolved_energy_time_of_anti_nu_e.csv")
 
         # Load flux data for each component
-        E_mu, T_mu, flux_mu = read_flux_data(file_path_mu, ecut, tcut)
-        E_e, T_e, flux_e = read_flux_data(file_path_e, ecut, tcut)
-        E_mu_bar, T_mu_bar, flux_mu_bar = read_flux_data(file_path_mu_bar, ecut, tcut)
-        E_e_bar, T_e_bar, flux_e_bar = read_flux_data(file_path_e_bar, ecut, tcut)
+        E_mu, T_mu, flux_mu = read_flux_data(file_path_mu)
+        E_e, T_e, flux_e = read_flux_data(file_path_e)
+        E_mu_bar, T_mu_bar, flux_mu_bar = read_flux_data(file_path_mu_bar)
+        E_e_bar, T_e_bar, flux_e_bar = read_flux_data(file_path_e_bar)
 
         # Store the loaded data as assets
         assets = (;
@@ -351,12 +373,58 @@ function flux_nu_mu_bar(E, eta, Emax, bin_width)
 end
 
 """
+    shift_time_histogram(weights, time_edges, dt_shift) -> Matrix
+
+Shift a 2D `(energy, time)` histogram along the time axis by `dt_shift`, redistributing
+counts by the fractional overlap between shifted and original time bins.
+
+Used to apply the `flux_onset` nuisance parameter (an overall shift of the beam-spill
+timing) without re-binning: each output bin's density is the sum of the input bins'
+densities weighted by their overlap with the (shifted) output bin edges.
+
+# Arguments
+- `weights`: `(n_energy, n_time)` histogram of bin-integrated flux.
+- `time_edges`: time bin edges, length `n_time + 1`.
+- `dt_shift`: time shift [ns] applied to `time_edges` before redistributing `weights`.
+
+# Returns
+A `(n_energy, n_time)` matrix of shifted weights, on the original `time_edges` binning.
+"""
+function shift_time_histogram(weights, time_edges, dt_shift)
+    iszero(dt_shift) && return weights
+
+    n_energy, n_time = size(weights)
+    T = promote_type(eltype(weights), typeof(dt_shift), eltype(time_edges))
+    shifted = zeros(T, n_energy, n_time)
+    dt = diff(time_edges)
+    density = weights ./ reshape(dt, 1, :)
+
+    for out_bin in 1:n_time
+        out_lo = time_edges[out_bin] - dt_shift
+        out_hi = time_edges[out_bin + 1] - dt_shift
+
+        for in_bin in 1:n_time
+            in_lo = time_edges[in_bin]
+            in_hi = time_edges[in_bin + 1]
+            overlap = min(out_hi, in_hi) - max(out_lo, in_lo)
+            if overlap > zero(overlap)
+                shifted[:, out_bin] .+= density[:, in_bin] .* overlap
+            end
+        end
+    end
+
+    return shifted
+end
+
+"""
     get_flux(use_data, assets) -> Function
 
 Construct the flux evaluation closure from precomputed assets.
 
 The returned closure `flux(params) -> NamedTuple` applies the normalization parameter
-to the raw flux arrays and returns per-flavour fluxes and the total flux.
+to the raw flux arrays and returns per-flavour fluxes and the total flux. In data mode,
+it additionally shifts each flavour's time histogram by `params.flux_onset` via
+[`shift_time_histogram`](@ref) before summing.
 
 In data mode, the returned `NamedTuple` has fields: `E`, `T`, `total_flux`, `flux_e`,
 `flux_mu`, `flux_mu_bar`, `flux_e_bar`.
@@ -384,18 +452,24 @@ function get_flux(use_data, assets)
         return function (params)
             # Extract normalization parameters
             norm = params.flux_norm
+            time_shift = params.flux_onset
+
+            shifted_flux_mu = shift_time_histogram(flux_mu, T, time_shift)
+            shifted_flux_e = shift_time_histogram(flux_e, T, time_shift)
+            shifted_flux_mu_bar = shift_time_histogram(flux_mu_bar, T, time_shift)
+            shifted_flux_e_bar = shift_time_histogram(flux_e_bar, T, time_shift)
 
             # Compute total flux
-            total = flux_mu .+ flux_e .+ flux_mu_bar .+ flux_e_bar
+            total = shifted_flux_mu .+ shifted_flux_e .+ shifted_flux_mu_bar .+ shifted_flux_e_bar
 
             return (;
                 E,  # Energy grid
                 T,  # Time grid
                 total_flux = total .* norm,
-                flux_e,
-                flux_mu,
-                flux_mu_bar,
-                flux_e_bar,
+                flux_e = shifted_flux_e,
+                flux_mu = shifted_flux_mu,
+                flux_mu_bar = shifted_flux_mu_bar,
+                flux_e_bar = shifted_flux_e_bar,
             )
         end
     else

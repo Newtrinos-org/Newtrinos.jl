@@ -54,18 +54,25 @@ isotopes_test = [cs133, i127, ar40, ge76]
     end
 
     @testset "form factor function" begin
-        #calculate specific cases 
-        #edge cases where at least on input is 0
-        @test Newtrinos.cevns_xsec.ffsq(0, 0, 0) == 1.0 
-        @test Newtrinos.cevns_xsec.ffsq(0,1,1) == 1.0
-        @test Newtrinos.cevns_xsec.ffsq(1,0,1) == 1.0
-        @test Newtrinos.cevns_xsec.ffsq(1, 1, 0) ≈ 0.9999583961 atol=1e-6
+        # ffsq(er, mn, rn) converts the RMS radius rn to a diffraction radius via
+        # r0 = sqrt((5/3)*(rn^2 - 3*s_fm^2)) (s_fm=0.9 fm default), which is only
+        # real for rn ≳ 1.56 fm -- below that a physical nucleus can't have both that
+        # RMS radius and that skin thickness, so rn=2.0 fm (comfortably above the
+        # threshold) is used for the er/mn edge cases instead of the old model's rn=0/1.
+        #edge cases where at least one of er/mn is 0 (q=0 -> ffsq=1 regardless of rn)
+        @test Newtrinos.cevns_xsec.ffsq(0, 0, 2.0) == 1.0
+        @test Newtrinos.cevns_xsec.ffsq(0, 1, 2.0) == 1.0
+        @test Newtrinos.cevns_xsec.ffsq(1, 0, 2.0) == 1.0
 
         #typical cases with known values
-        @test Newtrinos.cevns_xsec.ffsq(1, 1, 1) ≈ 0.9999481150 atol=1e-6
-        @test Newtrinos.cevns_xsec.ffsq(10, 123.8, 4.83) ≈ 0.70133086 atol=1e-6 #Cs133: m=123.8 MeV, Rn=4.83 fm, E=10 MeV
-        @test Newtrinos.cevns_xsec.ffsq(1000, 37.211, 3.47) ≈ 0.00030909 atol=1e-6 #Ar40: m=37.211 MeV, Rn=3.47 fm, E=1000 MeV
-        @test Newtrinos.cevns_xsec.ffsq(0.001, 71.922, 4.0) ≈ 0.99998518 atol=1e-6 #Ge76: m=71.922 MeV, Rn=4.0 fm, E=0.001 MeV
+        @test Newtrinos.cevns_xsec.ffsq(1, 1, 2.0) ≈ 0.9999315172 atol=1e-6
+        @test Newtrinos.cevns_xsec.ffsq(10, 123.8, 4.83) ≈ 0.6007965822 atol=1e-6 #Cs133: m=123.8 MeV, Rn=4.83 fm, E=10 MeV
+        @test Newtrinos.cevns_xsec.ffsq(1000, 37.211, 3.47) ≈ 0.0014920564 atol=1e-6 #Ar40: m=37.211 MeV, Rn=3.47 fm, E=1000 MeV
+        @test Newtrinos.cevns_xsec.ffsq(0.001, 71.922, 4.0) ≈ 0.9999802978 atol=1e-6 #Ge76: m=71.922 MeV, Rn=4.0 fm, E=0.001 MeV
+
+        # rn below the domain threshold throws (unphysical: skin thicker than nucleus)
+        @test_throws DomainError Newtrinos.cevns_xsec.ffsq(1, 1, 1.0)
+        @test_throws DomainError Newtrinos.cevns_xsec.ffsq(1, 1, 0.0)
     end
 
     @testset "differential cross section calculation" begin

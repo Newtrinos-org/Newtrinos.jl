@@ -49,6 +49,14 @@ function parse_command_line()
     return parse_args(s)
 end
 
+# dynamically construct named tuple from experiment names
+function configure_experiments(experiment_list)
+    pairs = (Symbol(exp) => getproperty(getproperty(Newtrinos, Symbol(exp)), :configure)() for exp in experiment_list)
+    #pairs = (Symbol(exp) => getproperty(getproperty(Newtrinos, Symbol(exp)), :configure)(ff_model=:klein_nystrand) for exp in experiment_list)
+    #pairs = (Symbol(exp) => getproperty(getproperty(Newtrinos, Symbol(exp)), :configure)(ff_model=:sym_fermi) for exp in experiment_list)
+    return (; pairs...)
+end
+
 args = parse_command_line()
 
 name = args["name"]
@@ -120,6 +128,7 @@ priors = Newtrinos.get_priors(experiments)
 # Variables to condition on (=fix)
 conditional_vars = Dict(:θ₁₂=>p.θ₁₂, :δCP=>-1.89, :Δm²₂₁=>p.Δm²₂₁)
 
+
 # For profile / scan task only: choose scan grid
 vars_to_scan = OrderedDict()
 vars_to_scan[:θ₂₃] = 11
@@ -149,12 +158,13 @@ elseif lowercase(args["task"]) == "importancesampling"
 
     #seed_points = load("darkdim_seeds.jld2")["df"]
     #seed_points = seed_points[seed_points.ca3 .< 0, :]
-    #init_samples = make_init_samples(posterior, seed_points[1:10, :], 10_000)
-    init_samples = make_init_samples(posterior, 10, 1_000)
-
-    FileIO.save(name * "_init_samples.jld2", Dict(String(a)=>init_samples[a] for a in keys(init_samples)))
-    whack_samples = whack_many_moles(posterior, init_samples, target_samplesize=10_000, cache_dir=name)
-    FileIO.save(name * ".jld2", Dict(String(a)=>whack_samples[a] for a in keys(whack_samples)))
+    init_samples =  make_init_samples(posterior, 10, 1_000_000)
+    nsamples = 100_000
+    #init_samples =  make_init_samples(posterior, 10, 100_000)
+    #FileIO.save(name * "_init_samples.jld2", Dict(String(a)=>init_samples[a] for a in keys(init_samples)))
+    whack_samples = whack_many_moles(posterior, init_samples, target_samplesize=nsamples, cache_dir=nothing, maxiter=40)
+    resampled = bat_sample(whack_samples.samples_user, RandResampling(nsamples=nsamples)).result
+    FileIO.save(name * ".jld2", Dict("samples" => resampled))
 else
     if lowercase(args["task"]) == "profile"
         result = Newtrinos.profile(likelihood, priors, vars_to_scan, p; cache_dir=name, map_func=map_func)

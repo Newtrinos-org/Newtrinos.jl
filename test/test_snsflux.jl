@@ -149,9 +149,15 @@ using Newtrinos
         @test result.flux_e_bar ≈ sf.assets.flux_e_bar
 
         # flux_norm scaling: 2x norm → 2x total, components unchanged
-        result_2x = sf.flux((flux_norm = 2.0,))
+        result_2x = sf.flux((flux_norm = 2.0, flux_onset = 0.0))
         @test result_2x.total_flux ≈ 2.0 .* result.total_flux
         @test result_2x.flux_mu ≈ result.flux_mu
         @test result_2x.flux_e ≈ result.flux_e
+
+        # flux_onset shifts the time histogram (a nonzero shift changes the binning)
+        result_shifted = sf.flux((flux_norm = 1.0, flux_onset = 200.0))
+        @test !(result_shifted.flux_mu ≈ result.flux_mu)
+        @test all(result_shifted.flux_mu .>= 0)
+        @test size(result_shifted.flux_mu) == size(result.flux_mu)
     end
 end

@@ -12,8 +12,8 @@ const ALL_REFERENCE_VALUES = (
     deepcore     = -950.6250215221039,
     super_k      = -3433.7662672760994,
     orca         = -1164.3664813528792,
-    coherent_csi = -574.3416032522271,
-    coherent_lAr = -1754.9946939034153,
+    coherent_csi = -478.4346284831287,
+    coherent_lAr = -1755.0426661113386,
     katrin       = 0.4549394122046937,
     gerda        = -85.50961704258683,
 )

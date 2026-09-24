@@ -55,6 +55,10 @@ end
     cmap = :Blues
     rev::Bool = false
     alpha::Real = 1
+    filled::Bool = true
+    edge::Bool = false
+    edgecolor = :black
+    edgewidth::Real = 2
 end
 
 @kwdef struct hist1d <: plot_cfg_1d
@@ -339,13 +343,19 @@ function plot2d!(ax::Axis, cfg::quantile_kde2d, x::AbstractArray, y::AbstractArr
     sorted_Z = sort(Z_flat, rev=true)
     cum = cumsum(sorted_Z)
     cum ./= cum[end]  # Normalize to 1
-    
+
     # Target probability mass
     thresholds = [sorted_Z[searchsortedfirst(cum, level)] for level in cfg.levels]
     push!(thresholds, 0.)
-    cmap = cgrad(cfg.cmap, rev=cfg.rev, alpha=cfg.alpha)
+    levels_asc = thresholds[end:-1:1]
 
-    contourf!(ax, xgrid, ygrid, Z, levels=thresholds[end:-1:1], colormap=cmap)
+    if cfg.filled
+        cmap = cgrad(cfg.cmap, rev=cfg.rev, alpha=cfg.alpha)
+        contourf!(ax, xgrid, ygrid, Z, levels=levels_asc, colormap=cmap)
+    end
+    if cfg.edge
+        contour!(ax, xgrid, ygrid, Z, levels=levels_asc[2:end], color=cfg.edgecolor, linewidth=cfg.edgewidth)
+    end
 end
 
 
@@ -361,14 +371,40 @@ function plot1d!(ax::Axis, cfg::quantile_kde1d, x::AbstractArray, w::Union{Real,
     
     levels=copy(cfg.levels)
     push!(levels, 1.)
-    pal = cgrad(cfg.cmap, length(levels)+1, categorical=true, rev=!cfg.rev, alpha=cfg.alpha)
+    pal = cgrad(cfg.cmap, length(levels)-1, categorical=true, rev=!cfg.rev, alpha=cfg.alpha)
     thresholds = [sorted_y[searchsortedfirst(cum, level)] for level in levels]
     push!(thresholds, 0.)
-    for i in length(thresholds):-1:1
-        mask = p .>= thresholds[i]
-        x_fill = k.x[mask]
-        y_fill = k.density[mask]
-        poly!(ax, vcat(x_fill, reverse(x_fill)), vcat(zeros(length(x_fill)), reverse(y_fill)), color=pal[i])
+    for i in length(thresholds)-1:-1:2
+        if i == 2
+            mask = p .>= thresholds[i]
+        else
+            mask = (p .>= thresholds[i]) .& (p .< thresholds[i-1])
+        end
+
+        indices = findall(mask)
+        isempty(indices) && continue
+
+        runs = Vector{UnitRange{Int}}()
+        run_start = indices[1]
+        prev = indices[1]
+        for idx in indices[2:end]
+            if idx == prev + 1
+                prev = idx
+            else
+                push!(runs, run_start:prev)
+                run_start = idx
+                prev = idx
+            end
+        end
+        push!(runs, run_start:prev)
+
+        for run in runs
+            x_fill = k.x[run]
+            y_fill = k.density[run]
+            poly!(ax, vcat(x_fill, reverse(x_fill)),
+                  vcat(zeros(length(x_fill)), reverse(y_fill)),
+                  color=pal[i-1])
+        end
     end
 end
 
