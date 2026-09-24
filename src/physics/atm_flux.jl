@@ -473,8 +473,8 @@ function get_sys_flux(cfg::Barr)
 
         # nue - numu
         uncert = ((0.051 * e) .^(0.63) .+ 0.73) / 100.
-        flux_nue2, flux_numu2 = scale_flux(flux_nue1, flux_numu1, 1. .- (params.atm_flux_nuenumu_sigma .* uncert))
-        flux_nuebar2, flux_numubar2 = scale_flux(flux_nuebar1, flux_numubar1, 1. .- (params.atm_flux_nuenumu_sigma .* uncert))
+        flux_nue2, flux_numu2 = scale_flux(flux_nue1, flux_numu1, 1. .+ (params.atm_flux_nuenumu_sigma .* uncert))
+        flux_nuebar2, flux_numubar2 = scale_flux(flux_nuebar1, flux_numubar1, 1. .+ (params.atm_flux_nuenumu_sigma .* uncert))
 
         #up/down
         uncert = max.(0., 7 ./ (1 .+ (e./0.5) .^2)) / 100.
