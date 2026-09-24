@@ -260,6 +260,48 @@ DensityInterface.logdensityof(::ArgumentErrorDensity, x) = throw(ArgumentError("
         @test combined_likelihood == likelihood1 * likelihood2
     end
 
+    @testset "Wrapper alias translation in a joint (multi-experiment) forward_model/plot" begin
+        # get_fwd_model fans the full joint (combined-experiment) params NamedTuple
+        # out to every sub forward_model/plot, not a per-experiment subset. This
+        # checks that a Wrapper still translates its own aliased parameter back to
+        # the original name correctly when called with that full joint NamedTuple,
+        # even when another experiment in the mix has an untouched parameter of the
+        # same original name.
+        mock_exp1 = MockExperiment(
+            MockPhysics((mu=1.0,), (mu=Uniform(0.0, 5.0),)),
+            (scale=1.0,), (scale=Uniform(0.5, 2.0),),
+            (observed=[1.0, 2.0],),
+            p -> MvNormal([p.mu, p.mu * p.scale], I(2)),
+            (p, data=nothing) -> (p.mu, p.scale)
+        )
+        mock_exp2 = MockExperiment(
+            MockPhysics((mu=1.0,), (mu=Uniform(0.0, 5.0),)),
+            (scale=2.0,), (scale=Uniform(0.5, 4.0),),
+            (observed=[3.0, 4.0, 5.0],),
+            p -> MvNormal([p.mu, p.mu * p.scale, p.mu + p.scale], I(3)),
+            (p, data=nothing) -> (p.mu, p.scale)
+        )
+
+        wrapped_exp1 = Newtrinos.Wrapper(mock_exp1, Dict(:scale => :exp1_scale))
+        experiments = (exp1=wrapped_exp1, exp2=mock_exp2)
+
+        joint_params = Newtrinos.get_params(experiments)
+        @test haskey(joint_params, :exp1_scale)
+        @test haskey(joint_params, :scale)  # exp2's own untouched parameter
+        @test joint_params.exp1_scale == 1.0
+        @test joint_params.scale == 2.0
+
+        # forward_model, called with the FULL joint params: must not throw, and each
+        # sub-model must receive its own scale, not the other experiment's
+        fwd = Newtrinos.get_fwd_model(experiments)
+        dist = fwd(joint_params)
+        @test mean(dist).exp1 ≈ [joint_params.mu, joint_params.mu * joint_params.exp1_scale]
+        @test mean(dist).exp2 ≈ [joint_params.mu, joint_params.mu * joint_params.scale, joint_params.mu + joint_params.scale]
+
+        # plot must also work with the full joint params, correctly translated
+        @test wrapped_exp1.plot(joint_params) == (joint_params.mu, joint_params.exp1_scale)
+    end
+
     @testset "correlated_priors_vars" begin
         priors = (x = Normal(0, 1), y = Normal(0, 1), z = Exponential(1.0))
         
