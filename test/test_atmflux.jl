@@ -147,6 +147,13 @@ using Test
         sys_numu = af.sys_flux(nominal, params_numu)
         @test sys_numu.numu .+ sys_numu.numubar ≈ nominal.numu .+ nominal.numubar atol=1e-6
         @test !(sys_numu.numu ≈ nominal.numu)
+
+        # nue/numu ratio scaling (split into sub-GeV/1-10 GeV/>10 GeV energy ranges)
+        params_nuenumu = merge(af.params, (atm_flux_nuenumu_sigma_lo = 1.0, atm_flux_nuenumu_sigma_mid = 1.0, atm_flux_nuenumu_sigma_hi = 1.0))
+        sys_nuenumu = af.sys_flux(nominal, params_nuenumu)
+        @test sys_nuenumu.nue .+ sys_nuenumu.numu ≈ nominal.nue .+ nominal.numu atol=1e-6
+        @test sys_nuenumu.nuebar .+ sys_nuenumu.numubar ≈ nominal.nuebar .+ nominal.numubar atol=1e-6
+        @test !(sys_nuenumu.nue ≈ nominal.nue)
     end
 
     @testset "Barr (flat) systematic flux at nominal params" begin
@@ -172,6 +179,13 @@ using Test
         sys_numu = af.sys_flux(nominal, params_numu)
         @test sys_numu.numu .+ sys_numu.numubar ≈ nominal.numu .+ nominal.numubar atol=1e-6
         @test !(sys_numu.numu ≈ nominal.numu)
+
+        # nue/numu ratio scaling (single flat sigma across all energies)
+        params_nuenumu = merge(af.params, (atm_flux_nuenumu_sigma = 1.0,))
+        sys_nuenumu = af.sys_flux(nominal, params_nuenumu)
+        @test sys_nuenumu.nue .+ sys_nuenumu.numu ≈ nominal.nue .+ nominal.numu atol=1e-6
+        @test sys_nuenumu.nuebar .+ sys_nuenumu.numubar ≈ nominal.nuebar .+ nominal.numubar atol=1e-6
+        @test !(sys_nuenumu.nue ≈ nominal.nue)
     end
 
 end
