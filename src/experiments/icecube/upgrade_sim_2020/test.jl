@@ -1,11 +1,7 @@
-using LinearAlgebra
 using Distributions
 using DensityInterface
-using Base
-using ForwardDiff
 using BAT
 using DataStructures
-using ADTypes
 using Newtrinos
 using FileIO
 using Accessors
@@ -13,28 +9,16 @@ using CairoMakie
 using DataFrames
 using CSV
 
-osc_cfg = Newtrinos.osc.OscillationConfig(
-    flavour=Newtrinos.osc.ThreeFlavour(),
-    propagation=Newtrinos.osc.Basic(),
-    states=Newtrinos.osc.All(),
-    interaction=Newtrinos.osc.SI()
-    )
-osc = Newtrinos.osc.configure(osc_cfg)
-atm_flux = Newtrinos.atm_flux.configure()
-earth_layers = Newtrinos.earth_layers.configure()
-xsec = Newtrinos.xsec.configure()
-physics = (; osc, atm_flux, earth_layers, xsec);
-experiments = (ic_upgrade = Newtrinos.ic_upgrade.configure(physics),)
+experiments = (ic_upgrade = Newtrinos.ic_upgrade.configure(),)
 
 vars_to_scan = OrderedDict()
 vars_to_scan[:θ₂₃] = 11
 vars_to_scan[:Δm²₃₁] = 11
 
-
 p = Newtrinos.get_params(experiments)
 priors = Newtrinos.get_priors(experiments)
 
-# DC 3y PRL bestift
+# DC 3y PRL bestfit
 @reset p.Δm²₃₁ = 0.00231 + p.Δm²₂₁
 @reset p.θ₂₃ = asin(sqrt(0.51))
 
@@ -60,7 +44,6 @@ FileIO.save("test_output/test.jld2", Dict("result" => result))
 converted = Newtrinos.NewtrinosResult(axes = (sin2theta23 = sin.(result.axes.θ₂₃).^2, Δm²₃₂ = result.axes.Δm²₃₁ .- p.Δm²₂₁), values=result.values);
 
 official = CSV.read("wpd_datasets.csv", DataFrame, header=2)
-
 
 fig = Figure()
 ax = Axis(fig[1,1])

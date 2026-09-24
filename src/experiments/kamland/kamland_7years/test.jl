@@ -1,11 +1,7 @@
-using LinearAlgebra
 using Distributions
 using DensityInterface
-using Base
-using ForwardDiff
 using BAT
 using DataStructures
-using ADTypes
 using Newtrinos
 using FileIO
 using Accessors
@@ -13,12 +9,7 @@ using CairoMakie
 using DataFrames
 using DelimitedFiles
 
-
-
-
-osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig())
-physics = (; osc,)
-experiments = (kamland = Newtrinos.kamland.configure(physics),)
+experiments = (kamland = Newtrinos.kamland.configure(),)
 
 vars_to_scan = OrderedDict()
 vars_to_scan[:θ₁₂] = 21
@@ -69,7 +60,6 @@ axislegend(ax)
 save("test_output/contours.png", fig)
 
 bestfit = Newtrinos.bestfit(result)
-
 
 fig = experiments.kamland.plot(bestfit)
 save("test_output/datamc.png", fig)

@@ -1,11 +1,7 @@
-using LinearAlgebra
 using Distributions
 using DensityInterface
-using Base
-using ForwardDiff
 using BAT
 using DataStructures
-using ADTypes
 using Newtrinos
 using FileIO
 using Accessors
@@ -13,10 +9,7 @@ using CairoMakie
 using DataFrames
 using CSV
 
-osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig())
-xsec = Newtrinos.xsec.configure()
-physics = (; osc, xsec)
-experiments = (minos = Newtrinos.minos.configure(physics),)
+experiments = (minos = Newtrinos.minos.configure(),)
 
 vars_to_scan = OrderedDict()
 vars_to_scan[:θ₂₃] = 21
@@ -60,7 +53,6 @@ axislegend(ax)
 save("test_output/contours.png", fig)
 
 bestfit = Newtrinos.bestfit(result)
-
 
 fig = experiments.minos.plot(bestfit)
 save("test_output/datamc.png", fig)

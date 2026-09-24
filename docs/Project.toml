@@ -1,0 +1,6 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+Newtrinos = "5b289081-bab5-45e8-97fc-86872f1653a0"
+
+[compat]
+Documenter = "1"

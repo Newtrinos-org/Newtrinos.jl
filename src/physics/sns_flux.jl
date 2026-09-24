@@ -6,6 +6,22 @@ using CSV
 using DataFrames
 using ..Newtrinos
 
+"""
+    SNSFlux <: Newtrinos.Physics
+
+Configured Spallation Neutron Source (SNS) neutrino flux module.
+
+Supports two modes: **data-driven** (`use_data=true`), which loads 2D energy-time flux
+tables from CSV files, and **analytic** (`use_data=false`), which computes fluxes from
+pion-at-rest decay kinematics.
+
+# Fields
+- `params::NamedTuple`: flux normalization parameters (`flux_norm` or `sns_nu_per_POT` (sns neutrinos per Proton On Target)).
+- `priors::NamedTuple`: prior distributions for each parameter.
+- `assets::NamedTuple`: precomputed energy grids, time bins, and raw flux arrays.
+- `flux::Function`: closure `flux(params) -> NamedTuple` returning the scaled flux
+  components and total flux.
+"""
 @kwdef struct SNSFlux <: Newtrinos.Physics
     params::NamedTuple
     priors::NamedTuple
@@ -20,10 +36,32 @@ const mpi = 139.57
 const alph = 1/137
 const ep = (mpi^2 - mmu^2) / (2*mpi)
 
-function configure(; 
-        exposure, distance, 
+"""
+    configure(; exposure, distance, ecut, E_bin_width, tcut, tbins, use_data, flux_folder, beam_power, proton_energy) -> SNSFlux
+
+Create a fully configured SNS flux physics module.
+
+# Arguments
+- `exposure`: integrated exposure [GWh].
+- `distance`: source-to-detector distance [m].
+- `ecut::Real = mmu/2`: maximum neutrino energy [MeV] (default: ``m_\\mu / 2``).
+- `E_bin_width::Real = 0.5`: energy bin width [MeV] (analytic mode only).
+- `tcut::Real = 6000.0`: maximum time [ns] (data mode only).
+- `tbins = Nothing`: explicit time-bin edges (data mode only). When given, overrides the
+  default log-spaced time binning in [`get_assets`](@ref).
+- `use_data::Bool = true`: if `true`, load flux from CSV tables (default); if `false`, use analytic
+  decay-at-rest spectra.
+- `flux_folder::String`: path to the directory containing the SNS flux CSV files.
+- `beam_power::Real = 1.4`: beam power [MW] (for time normalization).
+- `proton_energy::Real = 1.0`: proton beam energy [GeV] (analytic mode only).
+
+# Returns
+An [`SNSFlux`](@ref) instance.
+"""
+function configure(;
+        exposure, distance,
         ecut= mmu/2., E_bin_width=0.5, tcut=6000.0, tbins=Nothing,
-        use_data=true, flux_folder=joinpath(@__DIR__, "..", "experiments", "coherent", "coherent_2020", "csi", "snsFlux2D_CSV"), 
+        use_data=true, flux_folder=joinpath(@__DIR__, "..", "experiments", "coherent", "coherent_2020", "csi", "snsFlux2D_CSV"),
         beam_power=1.4, proton_energy=1.0)
     # Call get_assets and assign the result to `assets`
     assets = get_assets(; use_data, exposure, distance, beam_power, proton_energy, flux_folder, ecut, E_bin_width, tcut, tbins)
@@ -36,6 +74,20 @@ function configure(;
     )
 end
 
+"""
+    get_params(use_data::Bool) -> NamedTuple
+
+Return default flux normalization parameters.
+
+- Data mode (`use_data=true`): returns `(flux_norm=1.0, flux_onset=0.0)`.
+- Analytic mode (`use_data=false`): returns `(sns_nu_per_POT=0.09,)`.
+
+# Arguments
+- `use_data::Bool`: flux mode (data/analytic) selector.
+
+# Returns
+A `NamedTuple` with a single normalization parameter.
+"""
 function get_params(use_data)
     if use_data
         (
@@ -49,6 +101,21 @@ function get_params(use_data)
     end
 end
 
+"""
+    get_priors(use_data::Bool) -> NamedTuple
+
+Return prior distributions for the flux normalization parameter.
+
+- Data mode: `Truncated(Normal(1.0, 0.1), 0.7, 1.3)` for `flux_norm` and
+  `Uniform(-500.0, 500.0)` for `flux_onset`.
+- Analytic mode: `Truncated(Normal(0.09, 0.009), 0.05, 0.15)` for `sns_nu_per_POT`.
+
+# Arguments
+- `use_data::Bool`: flux mode (data/analytic) selector.
+
+# Returns
+A `NamedTuple` of `Symbol => Distribution` priors.
+"""
 function get_priors(use_data)
     if use_data
         (
@@ -62,6 +129,35 @@ function get_priors(use_data)
     end
 end
 
+"""
+    get_assets(; use_data, exposure, distance, beam_power, proton_energy, flux_folder, ecut, E_bin_width, tcut, tbins) -> NamedTuple
+
+Precompute energy grids, time bins, and raw (unnormalized) flux arrays.
+
+In data mode, reads 2D ``(E, t)`` flux CSV files, applies energy and time cuts, and scales
+by the geometric factor ``\\eta = \\text{exposure} \\cdot s_{\\text{per GWh}} \\,/\\, (4\\pi
+d^2)``. Time is rebinned either into the explicit `tbins` edges, if given, or otherwise
+into a default set of logarithmically spaced bins.
+
+In analytic mode, evaluates decay-at-rest spectra via [`flux_nu_mu`](@ref),
+[`flux_nu_e`](@ref), and [`flux_nu_mu_bar`](@ref).
+
+# Arguments
+- `use_data::Bool`: flux mode selector.
+- `exposure`: integrated exposure [GWh].
+- `distance`: source-to-detector distance [m].
+- `beam_power`: beam power [MW].
+- `proton_energy`: proton beam energy [GeV].
+- `flux_folder`: path to CSV flux directory.
+- `ecut`: energy cutoff [MeV].
+- `E_bin_width`: energy bin width [MeV] (analytic mode).
+- `tcut`: time cutoff [ns] (data mode, used only when `tbins` is not given).
+- `tbins`: explicit time-bin edges (data mode only); `Nothing` (sentinel type, not a
+  value) selects the default log-spaced binning.
+
+# Returns
+A `NamedTuple` with fields `E`, `T` (data mode only), and per-flavour flux arrays.
+"""
 function get_assets(; use_data, exposure, distance,
                         beam_power, proton_energy,
                         flux_folder, ecut, E_bin_width, tcut, tbins)
@@ -180,7 +276,23 @@ function get_assets(; use_data, exposure, distance,
 end
 
 
-# Returns (E, flux) arrays for nu_mu
+"""
+    flux_nu_mu(E, E0, eta, bin_width) -> (E, flux)
+
+Compute the ``\\nu_\\mu`` flux from ``\\pi^+ \\to \\mu^+ \\nu_\\mu`` decay at rest.
+
+The ``\\nu_\\mu`` is monoenergetic at ``E_0 = (m_\\pi^2 - m_\\mu^2)/(2 m_\\pi)``,
+represented as a Gaussian-smeared delta function binned onto the energy grid.
+
+# Arguments
+- `E`: energy grid [MeV].
+- `E0`: pion decay-at-rest ``\\nu_\\mu`` energy [MeV].
+- `eta`: geometric normalization factor.
+- `bin_width`: energy bin width [MeV].
+
+# Returns
+A tuple `(E, flux)` where `flux` is the bin-integrated ``\\nu_\\mu`` flux array.
+"""
 function flux_nu_mu(E, E0, eta, bin_width)
     dE = diff(E)
     @assert all(isapprox.(dE, dE[1]; atol=1e-8))
@@ -206,6 +318,24 @@ function flux_nu_mu(E, E0, eta, bin_width)
     return (E, flux)
 end
 
+"""
+    flux_nu_e(E, eta, Emax, bin_width) -> (E, flux)
+
+Compute the ``\\nu_e`` flux from ``\\mu^+ \\to e^+ \\nu_e \\bar\\nu_\\mu`` decay at rest.
+
+The spectrum follows the Michel distribution:
+``\\frac{d\\Phi}{dE} \\propto 192\\, \\frac{E^2}{m_\\mu^3} \\left(\\frac{1}{2} - \\frac{E}{m_\\mu}\\right)``
+for ``0 \\le E \\le E_\\text{max}``.
+
+# Arguments
+- `E`: energy grid [MeV].
+- `eta`: geometric normalization factor.
+- `Emax`: maximum neutrino energy [MeV] (``\\approx m_\\mu / 2``).
+- `bin_width`: energy bin width [MeV].
+
+# Returns
+A tuple `(E, flux)` where `flux` is the bin-integrated ``\\nu_e`` flux array.
+"""
 function flux_nu_e(E, eta, Emax, bin_width)
     # Element type that can hold eta (possibly Dual)
     T = promote_type(eltype(E), typeof(eta))
@@ -215,6 +345,24 @@ function flux_nu_e(E, eta, Emax, bin_width)
     return (E, flux .* T(bin_width))
 end
 
+"""
+    flux_nu_mu_bar(E, eta, Emax, bin_width) -> (E, flux)
+
+Compute the ``\\bar\\nu_\\mu`` flux from ``\\mu^+ \\to e^+ \\nu_e \\bar\\nu_\\mu`` decay at rest.
+
+The spectrum follows:
+``\\frac{d\\Phi}{dE} \\propto 64\\, \\frac{E^2}{m_\\mu^3} \\left(\\frac{3}{4} - \\frac{E}{m_\\mu}\\right)``
+for ``0 \\le E \\le E_\\text{max}``.
+
+# Arguments
+- `E`: energy grid [MeV].
+- `eta`: geometric normalization factor.
+- `Emax`: maximum neutrino energy [MeV] (``\\approx m_\\mu / 2``).
+- `bin_width`: energy bin width [MeV].
+
+# Returns
+A tuple `(E, flux)` where `flux` is the bin-integrated ``\\bar\\nu_\\mu`` flux array.
+"""
 function flux_nu_mu_bar(E, eta, Emax, bin_width)
     # Element type that can hold eta (possibly Dual)
     T = promote_type(eltype(E), typeof(eta))
@@ -224,6 +372,24 @@ function flux_nu_mu_bar(E, eta, Emax, bin_width)
     return (E, flux .* T(bin_width))
 end
 
+"""
+    shift_time_histogram(weights, time_edges, dt_shift) -> Matrix
+
+Shift a 2D `(energy, time)` histogram along the time axis by `dt_shift`, redistributing
+counts by the fractional overlap between shifted and original time bins.
+
+Used to apply the `flux_onset` nuisance parameter (an overall shift of the beam-spill
+timing) without re-binning: each output bin's density is the sum of the input bins'
+densities weighted by their overlap with the (shifted) output bin edges.
+
+# Arguments
+- `weights`: `(n_energy, n_time)` histogram of bin-integrated flux.
+- `time_edges`: time bin edges, length `n_time + 1`.
+- `dt_shift`: time shift [ns] applied to `time_edges` before redistributing `weights`.
+
+# Returns
+A `(n_energy, n_time)` matrix of shifted weights, on the original `time_edges` binning.
+"""
 function shift_time_histogram(weights, time_edges, dt_shift)
     iszero(dt_shift) && return weights
 
@@ -250,6 +416,28 @@ function shift_time_histogram(weights, time_edges, dt_shift)
     return shifted
 end
 
+"""
+    get_flux(use_data, assets) -> Function
+
+Construct the flux evaluation closure from precomputed assets.
+
+The returned closure `flux(params) -> NamedTuple` applies the normalization parameter
+to the raw flux arrays and returns per-flavour fluxes and the total flux. In data mode,
+it additionally shifts each flavour's time histogram by `params.flux_onset` via
+[`shift_time_histogram`](@ref) before summing.
+
+In data mode, the returned `NamedTuple` has fields: `E`, `T`, `total_flux`, `flux_e`,
+`flux_mu`, `flux_mu_bar`, `flux_e_bar`.
+
+In analytic mode: `E`, `total_flux`, `flux_e`, `flux_mu`, `flux_mu_bar`.
+
+# Arguments
+- `use_data::Bool`: flux mode (data/analytic) selector.
+- `assets::NamedTuple`: precomputed energy grids and flux arrays from [`get_assets`](@ref).
+
+# Returns
+A closure `flux(params) -> NamedTuple`.
+"""
 function get_flux(use_data, assets)
     if use_data
         # Extract fluxes and energy/time centers from assets

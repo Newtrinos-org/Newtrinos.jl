@@ -21,7 +21,12 @@ import ..Newtrinos
     plot::Function
 end
 
-function configure(physics; livetime_years = 6.0)
+function default_physics()
+    osc = Newtrinos.osc.configure()
+    (; osc,)
+end
+
+function configure(physics=default_physics(); livetime_years = 6.0)
     physics = (;physics.osc)
     assets = get_assets(physics, livetime_years)
     return TAO(
@@ -167,14 +172,15 @@ function get_assets(physics, livetime_years; datadir = @__DIR__)
 end
 
 function smear(E_arr_smear_local, smear_arr_in, sigma_arr; width=10, E_scale=1.0, E_bias=0.0)
-    
+
     l = length(smear_arr_in)
-    out = zeros(eltype(smear_arr_in), l)
+    T_acc = promote_type(eltype(E_arr_smear_local), eltype(sigma_arr), eltype(smear_arr_in), typeof(E_scale))
+    out = zeros(T_acc, l)
 
     for i in 1:l
-        e_center = E_arr_smear_local[i] * E_scale + E_bias 
-        norm_val = 0.0
-        sum_val = 0.0
+        e_center = E_arr_smear_local[i] * E_scale + E_bias
+        norm_val = zero(T_acc)
+        sum_val = zero(T_acc)
         j_min_loop = max(1, i - width)
         j_max_loop = min(l, i + width)
 
@@ -185,10 +191,8 @@ function smear(E_arr_smear_local, smear_arr_in, sigma_arr; width=10, E_scale=1.0
                 sum_val += coeff * smear_arr_in[j]
             end
         end
-        if norm_val > 1e-10 
+        if norm_val > 1e-10
             out[i] = sum_val / norm_val
-        else
-            out[i] = 0.0 
         end
     end
     return out

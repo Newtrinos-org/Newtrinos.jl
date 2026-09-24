@@ -1,11 +1,7 @@
-using LinearAlgebra
 using Distributions
 using DensityInterface
-using Base
-using ForwardDiff
 using BAT
 using DataStructures
-using ADTypes
 using Newtrinos
 using FileIO
 using Accessors
@@ -13,18 +9,7 @@ using CairoMakie
 using DataFrames
 using CSV
 
-osc_cfg = Newtrinos.osc.OscillationConfig(
-    flavour=Newtrinos.osc.ThreeFlavour(),
-    propagation=Newtrinos.osc.Basic(),
-    states=Newtrinos.osc.All(),
-    interaction=Newtrinos.osc.SI()
-    )
-osc = Newtrinos.osc.configure(osc_cfg)
-atm_flux = Newtrinos.atm_flux.configure()
-earth_layers = Newtrinos.earth_layers.configure()
-xsec = Newtrinos.xsec.configure()
-physics = (; osc, atm_flux, earth_layers, xsec);
-experiments = (orca = Newtrinos.orca.configure(physics),)
+experiments = (orca = Newtrinos.orca.configure(),)
 
 vars_to_scan = OrderedDict()
 vars_to_scan[:θ₂₃] = 21
@@ -69,7 +54,6 @@ axislegend(ax)
 save("test_output/contours.png", fig)
 
 bestfit = Newtrinos.bestfit(result)
-
 
 fig = experiments.orca.plot(bestfit)
 save("test_output/datamc.png", fig)

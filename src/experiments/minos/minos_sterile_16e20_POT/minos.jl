@@ -19,7 +19,13 @@ import ..Newtrinos
     plot::Function
 end
 
-function configure(physics)
+function default_physics()
+    osc = Newtrinos.osc.configure()
+    xsec = Newtrinos.xsec.configure()
+    (; osc, xsec)
+end
+
+function configure(physics=default_physics())
     physics = (;physics.osc, physics.xsec)
     assets = get_assets(physics)
     return Minos(

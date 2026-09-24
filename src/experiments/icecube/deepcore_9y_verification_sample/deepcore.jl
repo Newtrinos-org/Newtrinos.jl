@@ -35,7 +35,15 @@ using ..Newtrinos
     plot::Function
 end
 
-function configure(physics)
+function default_physics()
+    osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction=Newtrinos.osc.SI()))
+    atm_flux = Newtrinos.atm_flux.configure(Newtrinos.atm_flux.AtmFluxConfig(nominal_model=Newtrinos.atm_flux.HKKM("spl-nu-20-01-000.d")))
+    earth_layers = Newtrinos.earth_layers.configure()
+    xsec = Newtrinos.xsec.configure()
+    (; osc, atm_flux, earth_layers, xsec)
+end
+
+function configure(physics=default_physics())
     physics = (;physics.osc, physics.atm_flux, physics.earth_layers, physics.xsec)
     assets = get_assets(physics)
     return DeepCore(
@@ -172,9 +180,7 @@ end
 
 function make_hist(e_idx, c_idx, p_idx, w, size=(10,10,2))
     hist = similar(w, size)
-    for i in 1:prod(size)
-        hist[i] = 0.
-    end
+    fill!(hist, zero(eltype(hist)))
     for i in 1:length(w)
         hist[e_idx[i], c_idx[i], p_idx[i]] += w[i]
     end
@@ -239,7 +245,7 @@ function get_hypersurface_factor(hypersurface, idx, fraction, params)
         (interpolate_hypersurface(hypersurface.bulk_ice_scatter, idx, fraction) * (params.deepcore_ice_scattering - 1)) .+
         (interpolate_hypersurface(hypersurface.dom_eff, idx, fraction) .* (params.deepcore_opt_eff_overall - 1)) .+
         (interpolate_hypersurface(hypersurface.hole_ice_p0, idx, fraction) * (params.deepcore_rel_eff_p0 - 0.1)) .+
-        (interpolate_hypersurface(hypersurface.hole_ice_p0, idx, fraction) * (params.deepcore_rel_eff_p1 + 0.05))
+        (interpolate_hypersurface(hypersurface.hole_ice_p1, idx, fraction) * (params.deepcore_rel_eff_p1 + 0.05))
         )
     f
 end

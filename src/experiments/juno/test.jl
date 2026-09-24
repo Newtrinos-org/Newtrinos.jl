@@ -1,11 +1,7 @@
-using LinearAlgebra
 using Distributions
 using DensityInterface
-using Base
-using ForwardDiff
 using BAT
 using DataStructures
-using ADTypes
 using Newtrinos
 using FileIO
 using Accessors
@@ -13,11 +9,7 @@ using CairoMakie
 using DataFrames
 using CSV
 
-
-osc = Newtrinos.osc.configure()
-
-physics = (; osc,);
-experiments = (juno = Newtrinos.juno.configure(physics),)
+experiments = (juno = Newtrinos.juno.configure(),)
 
 p = Newtrinos.get_params(experiments)
 
@@ -27,10 +19,8 @@ p = Newtrinos.get_params(experiments)
 @reset p.δCP = 0
 @reset p.θ₁₃ = asin(sqrt( 0.0218))
 
-
 asimov = Newtrinos.generate_asimov_data(experiments, p)
 likelihood = Newtrinos.generate_likelihood(experiments, asimov);
-
 
 priors = Newtrinos.get_priors(experiments)
 @reset priors.θ₂₃ = p.θ₂₃
@@ -39,10 +29,6 @@ priors = Newtrinos.get_priors(experiments)
 @reset priors.Δm²₂₁ = Uniform(0.000072, 0.000078)
 @reset priors.θ₁₂ = Uniform(asin(sqrt(0.28)), asin(sqrt(0.335)))
 @reset priors.θ₁₃ = Uniform(asin(sqrt(0.016)), asin(sqrt(0.027)))
-
-vars_to_scan = OrderedDict()
-vars_to_scan[:Δm²₃₁] = 31
-
 
 if !isdir("test_output")
     mkdir("test_output")

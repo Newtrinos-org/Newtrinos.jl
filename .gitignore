@@ -2,3 +2,5 @@
 /devenv/
 /coherent_postPred/
 /CEvNS_Paper/
+.DS_Store
+texput.log

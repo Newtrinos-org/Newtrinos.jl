@@ -22,7 +22,15 @@ using ..Newtrinos
     plot::Function
 end
 
-function configure(physics)
+function default_physics()
+    osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction=Newtrinos.osc.SI()))
+    atm_flux = Newtrinos.atm_flux.configure(Newtrinos.atm_flux.AtmFluxConfig(nominal_model=Newtrinos.atm_flux.HKKM("spl-nu-20-01-000.d")))
+    earth_layers = Newtrinos.earth_layers.configure()
+    xsec = Newtrinos.xsec.configure()
+    (; osc, atm_flux, earth_layers, xsec)
+end
+
+function configure(physics=default_physics())
     physics = (;physics.osc, physics.atm_flux, physics.earth_layers, physics.xsec)
     assets = get_assets(physics)
     return ICUpgrade(
@@ -123,9 +131,7 @@ end
 
 function make_hist(e_idx, c_idx, p_idx, t_idx, w, size=(15,15,2,2))
     hist = similar(w, size)
-    for i in 1:prod(size)
-        hist[i] = 0.
-    end
+    fill!(hist, zero(eltype(hist)))
     for i in 1:length(w)
         if (e_idx[i] < 1) | (e_idx[i] > 15)
             continue

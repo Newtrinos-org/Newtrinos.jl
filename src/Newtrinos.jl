@@ -1,7 +1,24 @@
+"""
+    Newtrinos
+
+A Julia package for global analysis of neutrino data. Provides modular physics models,
+experimental likelihoods, and inference tools (profile likelihood, Bayesian sampling).
+"""
 module Newtrinos
 
+"""
+    Physics
 
+Abstract type for physics modules. Subtypes must have `params::NamedTuple` and `priors::NamedTuple` fields.
+"""
 abstract type Physics end
+
+"""
+    Experiment
+
+Abstract type for experiment modules. Subtypes must have `physics`, `params`, `priors`, `assets`,
+`forward_model`, and `plot` fields.
+"""
 abstract type Experiment end
 
 export Physics, Experiment
@@ -11,6 +28,7 @@ export make_init_samples, make_prior_samples, whack_a_moles, whack_many_moles
 
 include("physics/osc.jl")
 using .osc
+include("physics/barger_eigen.jl")
 include("physics/earth_layers.jl")
 include("physics/atm_flux.jl")
 include("physics/xsec.jl")
@@ -37,4 +55,6 @@ include("experiments/coherent/coherent_2020/coherent_lAr.jl")
 
 include("experiments/juno/juno.jl")
 include("experiments/juno/tao.jl")
+include("experiments/gerda/gerda.jl")
+include("experiments/katrin/katrin.jl")
 end

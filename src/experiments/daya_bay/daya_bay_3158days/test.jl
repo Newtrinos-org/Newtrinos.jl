@@ -1,23 +1,14 @@
-using LinearAlgebra
 using Distributions
 using DensityInterface
-using Base
-using ForwardDiff
 using BAT
 using DataStructures
-using ADTypes
 using Newtrinos
 using FileIO
 using Accessors
 using CairoMakie
 using CSV, DataFrames
 
-
-
-
-osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig())
-physics = (; osc,)
-experiments = (dayabay = Newtrinos.dayabay.configure(physics),)
+experiments = (dayabay = Newtrinos.dayabay.configure(),)
 
 vars_to_scan = OrderedDict()
 vars_to_scan[:θ₁₃] = 31
@@ -61,7 +52,6 @@ axislegend(ax)
 save("test_output/contours.png", fig)
 
 bestfit = Newtrinos.bestfit(result)
-
 
 fig = experiments.dayabay.plot(bestfit)
 save("test_output/datamc.png", fig)

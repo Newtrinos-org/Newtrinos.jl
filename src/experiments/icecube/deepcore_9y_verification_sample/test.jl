@@ -1,11 +1,7 @@
-using LinearAlgebra
 using Distributions
 using DensityInterface
-using Base
-using ForwardDiff
 using BAT
 using DataStructures
-using ADTypes
 using Newtrinos
 using FileIO
 using Accessors
@@ -13,18 +9,7 @@ using CairoMakie
 using DataFrames
 using CSV
 
-osc_cfg = Newtrinos.osc.OscillationConfig(
-    flavour=Newtrinos.osc.ThreeFlavour(),
-    propagation=Newtrinos.osc.Basic(),
-    states=Newtrinos.osc.All(),
-    interaction=Newtrinos.osc.SI()
-    )
-osc = Newtrinos.osc.configure(osc_cfg)
-atm_flux = Newtrinos.atm_flux.configure()
-earth_layers = Newtrinos.earth_layers.configure()
-xsec = Newtrinos.xsec.configure()
-physics = (; osc, atm_flux, earth_layers, xsec);
-experiments = (deepcore = Newtrinos.deepcore.configure(physics),)
+experiments = (deepcore = Newtrinos.deepcore.configure(),)
 
 vars_to_scan = OrderedDict()
 vars_to_scan[:θ₂₃] = 11
@@ -62,14 +47,12 @@ plot!(ax, converted, levels=[0.9,], label="ours")
 
 lines!(ax, official.Column1, official.Column2, color=:red, label="official")
 
-
 ax.xlabel = "sin²θ₂₃"
 ax.ylabel = "Δm²₃₂ (eV²)"
 axislegend(ax)
 save("test_output/contours.png", fig)
 
 bestfit = Newtrinos.bestfit(result)
-
 
 fig = experiments.deepcore.plot(bestfit)
 save("test_output/datamc.png", fig)
@@ -79,7 +62,7 @@ open("README.md", "w") do io
     write(io, """
 data source: https://icecube.wisc.edu/data-releases/2025/07/measurement-of-atmospheric-neutrino-mixing-with-improved-icecube-deepcore-calibration-and-data-processing/
 IceCube Collaboration, 2025, "Replication Data for: Measurement of atmospheric neutrino mixing with improved IceCube DeepCore calibration and data processing", https://doi.org/10.7910/DVN/B4RITM, Harvard Dataverse, V1, UNF:6:EqPPIAlmbhWU7MUgQgQVCw== [fileUNF]
-        
+
 """)
     write(io, "\n## Test output plots\n")
     write(io, "![Comparison](test_output/contours.png)\n")
