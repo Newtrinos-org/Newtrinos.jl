@@ -167,16 +167,18 @@ function Base.getproperty(wrapper::Wrapper, name::Symbol)
     end
     if name == :forward_model
         function forward_model(params)
-            orig_param_names = Tuple([get(wrapper.reverse_lookup, k, k) for k in keys(params)])
-            orig_params = NamedTuple{orig_param_names}(values(params))
+            own_params = NamedTuple{Tuple(wrapper.translated_keys)}(params)
+            orig_param_names = Tuple([get(wrapper.reverse_lookup, k, k) for k in keys(own_params)])
+            orig_params = NamedTuple{orig_param_names}(values(own_params))
             return wrapper.x.forward_model(orig_params)
         end
         return forward_model
     end
     if name == :plot
         function plot(params, data=wrapper.x.assets.observed)
-            orig_param_names = Tuple([get(wrapper.reverse_lookup, k, k) for k in keys(params)])
-            orig_params = NamedTuple{orig_param_names}(values(params))
+            own_params = NamedTuple{Tuple(wrapper.translated_keys)}(params)
+            orig_param_names = Tuple([get(wrapper.reverse_lookup, k, k) for k in keys(own_params)])
+            orig_params = NamedTuple{orig_param_names}(values(own_params))
             return wrapper.x.plot(orig_params, data)
         end
         return plot
