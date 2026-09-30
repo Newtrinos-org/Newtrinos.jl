@@ -266,6 +266,14 @@ subtype of [`EigenMethod`](@ref) and a corresponding `decompose` dispatch.
 An `Eigen` factorization with fields `vectors` and `values`.
 """
 decompose(H::Hermitian, ::DefaultEigen) = eigen(H)
+decompose(H::Hermitian{T, <:SMatrix{N,N,T}}, ::DefaultEigen) where {T, N} = concrete_eigen(eigen(H), T, Val(N))
+
+# Rebuild a static `Eigen` with concrete field types. For `ForwardDiff.Dual` elements the
+# static `eigen` (and 2×2 sub-solves in `fast_eigen`) are not inferable, which would make
+# every downstream use in the per-(E, layer, path) loops dynamically dispatched.
+# A no-op when the input is already concretely typed.
+concrete_eigen(E::Eigen, ::Type{T}, ::Val{N}) where {T, N} =
+    Eigen(SVector{N, real(T)}(E.values)::SVector{N, real(T)}, SMatrix{N, N, T}(E.vectors)::SMatrix{N, N, T, N*N})
 export DefaultEigen
 
 """
@@ -1116,12 +1124,15 @@ function _spray_column(SV, ρ)
     SVector(ntuple(β -> real(dot(SV[β, :], M[β, :])), size(SV, 1)))
 end
 
+# Flavour count as a compile-time Val (a runtime `Val(size(H, 1))` defeats inference)
+_val_nflav(::StaticMatrix{N,N}) where N = Val(N)
+_val_nflav(H::AbstractMatrix) = Val(size(H, 1))
+
 function matter_osc_per_e(H_eff, e, layers, paths, anti, propagation::Spray, interaction::SI,
                            eigen_method::EigenMethod=DefaultEigen();
                            Delta_E=zero(e), Delta_h=zero(e), dldh_all=nothing)
-    matter_matrices = compute_matter_matrices.(Ref(H_eff), e, layers, anti, Ref(interaction), Ref(eigen_method))
-    n_flav = size(H_eff, 1)
-    spray_data = map(layer -> compute_dVdE(layer, anti, interaction, Val(n_flav)), layers)
+    matter_matrices = [compute_matter_matrices(H_eff, e, layer, anti, interaction, eigen_method) for layer in layers]
+    spray_data = [compute_dVdE(layer, anti, interaction, _val_nflav(H_eff)) for layer in layers]
 
     n_paths = length(paths)
     p = stack(map(1:n_paths) do idx
@@ -1204,13 +1215,13 @@ density-matrix evolution (for [`Decoherent`](@ref)).
 An `Array` of shape `(n_flav, n_flav, n_paths)` with ``P_{\\beta\\alpha}`` for each path.
 """
 function matter_osc_per_e(H_eff, e, layers, paths, anti, propagation::Union{Basic, Damping}, interaction, eigen_method::EigenMethod=DefaultEigen())
-    matter_matrices = compute_matter_matrices.(Ref(H_eff), e, layers, anti, Ref(interaction), Ref(eigen_method))
+    matter_matrices = [compute_matter_matrices(H_eff, e, layer, anti, interaction, eigen_method) for layer in layers]
     p = stack(map(path -> osc_reduce(matter_matrices, path, e, propagation), paths))
 end
 
 
 function matter_osc_per_e(H_eff, e, layers, paths, anti, propagation::Decoherent, interaction, eigen_method::EigenMethod=DefaultEigen())
-    matter_matrices = compute_matter_matrices.(Ref(H_eff), e, layers, anti, Ref(interaction), Ref(eigen_method))
+    matter_matrices = [compute_matter_matrices(H_eff, e, layer, anti, interaction, eigen_method) for layer in layers]
     n = size(H_eff, 1)
     RT = real(eltype(H_eff))
     CT = eltype(H_eff)
@@ -1442,6 +1453,12 @@ function _add_rest_and_permute(p_raw, rest)
     result
 end
 
+# Callable struct rather than a local closure: a closure with two methods gets captured in a
+# `Core.Box`, which makes every `osc_prob` call dynamically dispatched and return `Any`.
+struct OscProb{C<:OscillationConfig} <: Function
+    cfg::C
+end
+
 """
     get_osc_prob(cfg::OscillationConfig) -> Function
 
@@ -1474,45 +1491,44 @@ osc_prob(E::AbstractVector, paths::VectorOfVectors{Path}, layers::StructVector{L
 ``P(\\nu_\\alpha \\to \\nu_\\beta)`` at energy `E[i]` and baseline/path index `j`
 (3rd index = input/source flavour, 4th index = output/detected flavour).
 """
-function get_osc_prob(cfg::OscillationConfig)
+get_osc_prob(cfg::OscillationConfig) = OscProb(cfg)
 
-    # Returns P[i, j, α, β] = P(να → νβ), i.e.:
-    #   3rd index = input (source) flavour
-    #   4th index = output (detected) flavour
-    #   Flavour indices: 1=νe, 2=νμ, 3=ντ
-    #
-    # Example: P[:, :, 2, 1] = P(νμ → νe) — probability of detecting νe given initial νμ
-    # Probability conservation: sum(P[i, j, α, :]) ≈ 1 for any input flavour α.
+# Returns P[i, j, α, β] = P(να → νβ), i.e.:
+#   3rd index = input (source) flavour
+#   4th index = output (detected) flavour
+#   Flavour indices: 1=νe, 2=νμ, 3=ντ
+#
+# Example: P[:, :, 2, 1] = P(νμ → νe) — probability of detecting νe given initial νμ
+# Probability conservation: sum(P[i, j, α, :]) ≈ 1 for any input flavour α.
 
-    function osc_prob(E::AbstractVector{<:Real}, L::AbstractVector{<:Real}, params::NamedTuple; anti=false)
-        U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
-        h = h_raw .- minimum(h_raw)
-        Uc = anti ? conj.(U) : U
+function (f::OscProb)(E::AbstractVector{<:Real}, L::AbstractVector{<:Real}, params::NamedTuple; anti=false)
+    cfg = f.cfg
+    U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
+    h = h_raw .- minimum(h_raw)
+    Uc = anti ? conj.(U) : U
 
-        U, h, rest = select(Uc, h, cfg.states)
+    U, h, rest = select(Uc, h, cfg.states)
 
-        # propagate returns p_raw[out, in, n_E, n_L]
-        p_raw = propagate(U, h, E, L, cfg.propagation)
+    # propagate returns p_raw[out, in, n_E, n_L]
+    p_raw = propagate(U, h, E, L, cfg.propagation)
 
-        # fuse rest addition + permutedims into P[n_E, n_L, in, out]
-        return _add_rest_and_permute(p_raw, rest)
-    end
+    # fuse rest addition + permutedims into P[n_E, n_L, in, out]
+    return _add_rest_and_permute(p_raw, rest)
+end
 
-    function osc_prob(E::AbstractVector{<:Real}, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, params::NamedTuple; anti=false)
-        U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
-        h = h_raw .- minimum(h_raw)
-        Uc = anti ? conj.(U) : U
+function (f::OscProb)(E::AbstractVector{<:Real}, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, params::NamedTuple; anti=false)
+    cfg = f.cfg
+    U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
+    h = h_raw .- minimum(h_raw)
+    Uc = anti ? conj.(U) : U
 
-        U, h, rest = select(Uc, h, cfg.states)
+    U, h, rest = select(Uc, h, cfg.states)
 
-        # propagate returns p_raw[out, in, n_E, n_cz]
-        p_raw = propagate(U, h, E, paths, layers, cfg.propagation, cfg.interaction, anti, cfg.eigen_method)
+    # propagate returns p_raw[out, in, n_E, n_cz]
+    p_raw = propagate(U, h, E, paths, layers, cfg.propagation, cfg.interaction, anti, cfg.eigen_method)
 
-        # fuse rest addition + permutedims into P[n_E, n_cz, in, out]
-        return _add_rest_and_permute(p_raw, rest)
-    end
-
-    return osc_prob
+    # fuse rest addition + permutedims into P[n_E, n_cz, in, out]
+    return _add_rest_and_permute(p_raw, rest)
 end
 
 

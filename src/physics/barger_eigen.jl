@@ -17,7 +17,7 @@ Falls back to Julia's `eigen` for non-3×3 matrices.
 struct BargerEigen <: Newtrinos.osc.EigenMethod end
 
 function Newtrinos.osc.decompose(H::Hermitian{T, <:SMatrix{3,3,T}}, ::BargerEigen) where T
-    fast_eigen(H)
+    Newtrinos.osc.concrete_eigen(fast_eigen(H), T, Val(3))
 end
 
 # Fallback for non-3×3 (e.g. sterile, ADD models)
