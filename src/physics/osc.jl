@@ -7,6 +7,8 @@ using DataStructures
 using Distributions
 using Interpolations
 using ForwardDiff
+import KernelAbstractions as KA
+using KernelAbstractions: @kernel, @index, @Const
 using ..Newtrinos
 
 export ftype
@@ -18,6 +20,7 @@ export Vacuum, SI, NSI
 export ThreeFlavour, ThreeFlavourXYCP, Sterile, ADD
 export OscillationConfig
 export EigenMethod, DefaultEigen, decompose
+export ComputeBackend, SerialCPU, KernelBackend
 export configure
 
 """
@@ -434,7 +437,57 @@ end
 end
 
 """
-    OscillationConfig{F, I, P, S, E}
+    ComputeBackend
+
+Abstract type selecting where matter oscillation probabilities are computed.
+- [`SerialCPU`](@ref): the standard single-threaded CPU code path (default).
+- [`KernelBackend`](@ref): KernelAbstractions.jl kernels on any KA backend (CPU threads, CUDA, ...).
+"""
+abstract type ComputeBackend end
+
+"""
+    SerialCPU <: ComputeBackend
+
+Compute oscillation probabilities with the standard single-threaded CPU code. This is the default.
+"""
+struct SerialCPU <: ComputeBackend end
+
+"""
+    KernelBackend(backend=KernelAbstractions.CPU(); workgroupsize=64) <: ComputeBackend
+
+Compute matter oscillation probabilities (the `paths`/`layers` method of `osc_prob`) with
+KernelAbstractions.jl kernels: one kernel over (energy, layer) for the matter eigensystems, one
+over (energy, path) for the propagation along each path. The kernels call the same building blocks
+as the CPU code ([`compute_matter_matrices`](@ref), [`osc_reduce`](@ref), `spray_average`), so the
+physics is shared; results match [`SerialCPU`](@ref) to floating-point rounding.
+
+`backend` is any KernelAbstractions backend, e.g. `KernelAbstractions.CPU()` (Julia threads) or
+`CUDA.CUDABackend()` (requires `using CUDA`). Inputs are copied to the device on each call and the
+result is returned as a host `Array`, so experiments need no changes.
+
+Supported: 3-flavour models, [`SI`](@ref) interactions, [`Basic`](@ref) and [`Spray`](@ref)
+propagation, [`All`](@ref) states, with [`Newtrinos.BargerEigen`](@ref) (any backend) or
+[`DefaultEigen`](@ref) (`KernelAbstractions.CPU()` only). Other configurations raise an error when
+the oscillation module is configured. Vacuum oscillations (the baseline method) always run on the CPU.
+
+ForwardDiff works through the kernels (Dual numbers are computed on the device). Reverse-mode AD
+(Mooncake) cannot differentiate through a kernel launch.
+
+# Example
+```julia
+using CUDA
+cfg = OscillationConfig(interaction=SI(), eigen_method=Newtrinos.BargerEigen(),
+                        backend=KernelBackend(CUDABackend()))
+```
+"""
+struct KernelBackend{B} <: ComputeBackend
+    backend::B
+    workgroupsize::Int
+end
+KernelBackend(backend=KA.CPU(); workgroupsize::Integer=64) = KernelBackend(backend, Int(workgroupsize))
+
+"""
+    OscillationConfig{F, I, P, S, E, B}
 
 Master configuration for the neutrino oscillation probability engine.
 
@@ -448,6 +501,7 @@ ready-to-use [`Osc`](@ref) physics module.
 - `propagation::P = Basic()`: propagation mechanism ([`PropagationModel`](@ref)).
 - `states::S = All()`: eigenstate selection strategy ([`StateSelector`](@ref)).
 - `eigen_method::E = DefaultEigen()`: eigendecomposition algorithm ([`EigenMethod`](@ref)).
+- `backend::B = SerialCPU()`: where matter oscillations are computed ([`ComputeBackend`](@ref)).
 
 # Examples
 ```julia
@@ -466,12 +520,13 @@ cfg = OscillationConfig(
 )
 ```
 """
-@kwdef struct OscillationConfig{F<:FlavourModel, I<:InteractionModel, P<:PropagationModel, S<:StateSelector, E<:EigenMethod}
+@kwdef struct OscillationConfig{F<:FlavourModel, I<:InteractionModel, P<:PropagationModel, S<:StateSelector, E<:EigenMethod, B<:ComputeBackend}
     flavour::F = ThreeFlavour()
     interaction::I = Vacuum()
     propagation::P = Basic()
     states::S = All()
     eigen_method::E = DefaultEigen()
+    backend::B = SerialCPU()
 end
 
 """
@@ -951,7 +1006,7 @@ function compute_matter_matrices(H_eff::SMatrix{3,3}, e, layer, anti, interactio
         dn = ve * (-layer.n_density)
     end
     z = zero(d1)
-    H_mat = @SMatrix [d1 z z; z dn z; z z dn]
+    H_mat = SMatrix{3,3,typeof(d1),9}(d1, z, z, z, dn, z, z, z, dn)  # typed: no eltype promotion (GPU-safe for Duals)
     H = Hermitian(H_eff + H_mat)
     tmp = decompose(H, eigen_method)
     tmp.vectors, tmp.values
@@ -1042,7 +1097,11 @@ end
 
 # Multi-layer composition for Spray (Eq. 2.9): S_total = S_N · ... · S_1 (physical order)
 # Both K_E and K_Θ follow the same composition rule: K_combined = S_acc†·K_new·S_acc + K_acc
-function osc_reduce(matter_matrices, spray_data, path, e, propagation::Spray, dldcz_path)
+osc_reduce(matter_matrices, spray_data, path, e, propagation::Spray, dldcz_path) =
+    _spray_reduce(matter_matrices, spray_data, path, e, dldcz_path)
+
+# Body of the Spray `osc_reduce`, without the (non-isbits) `Spray` argument so kernels can call it
+function _spray_reduce(matter_matrices, spray_data, path, e, dldcz_path)
     sec = first(path)
     U1, h1 = matter_matrices[sec.layer_idx]
     S_acc, KE_acc, KT_acc = compute_spray_layer(U1, h1, spray_data[sec.layer_idx], e, sec.length, dldcz_path[1])
@@ -1060,11 +1119,18 @@ function osc_reduce(matter_matrices, spray_data, path, e, propagation::Spray, dl
 end
 
 # Compute damping factor for given x and averaging type
-_spray_damping(x, averaging) = averaging === :gaussian ? exp(-x^2 / 2) : _sinc_unnorm(x / 2)
+_spray_damping(x, ::Val{:gaussian}) = exp(-x^2 / 2)
+_spray_damping(x, ::Val) = _sinc_unnorm(x / 2)
 
 # Diagonalize K_E (and optionally K_Θ) and compute bin-averaged oscillation probabilities.
 # When Delta_CZ > 0: joint E+Θ averaging via density-matrix formalism (handles non-commuting K).
-function spray_average(S, K_E, K_Theta, Delta_E, Delta_CZ, averaging::Symbol, eigen_method::EigenMethod=DefaultEigen())
+# `averaging` is a Symbol in `Spray`; branch on it here so the core below is fully typed (and
+# kernel-callable with a `Val`). Any value other than :gaussian selects the uniform (sinc) kernel.
+spray_average(S, K_E, K_Theta, Delta_E, Delta_CZ, averaging::Symbol, eigen_method::EigenMethod=DefaultEigen()) =
+    averaging === :gaussian ? spray_average(S, K_E, K_Theta, Delta_E, Delta_CZ, Val(:gaussian), eigen_method) :
+                              spray_average(S, K_E, K_Theta, Delta_E, Delta_CZ, Val(:uniform), eigen_method)
+
+function spray_average(S, K_E, K_Theta, Delta_E, Delta_CZ, averaging::Val, eigen_method::EigenMethod=DefaultEigen())
     n = size(S, 1)
 
     # Diagonalize K_E
@@ -1418,16 +1484,12 @@ function propagate(U, h, E, paths::VectorOfVectors{Path}, layers::StructVector{L
     permutedims(p, (1, 2, 4, 3))
 end
 
-function propagate(U, h, E, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, propagation::Spray, interaction::Union{SI, NSI}, anti::Bool, eigen_method::EigenMethod=DefaultEigen())
-    H_eff = U * Diagonal(h) * adjoint(U)
-    # Production height: only first (atmosphere) section varies.
-    # dL/dh = 1/cos(α) where α is the angle between the path and the radial
-    # direction at the production point. From the cosine rule (triangle with
-    # sides R_atm, R_det, L_atm):
-    #   cos(α) = (R_atm² + L_atm² - R_det²) / (2·R_atm·L_atm)
+# Per-section dL/dh for Spray: only the first (atmosphere) section of each path depends on the
+# production height; see the comment in the Spray `propagate`.
+function _spray_dldh(paths, layers)
     R_atm = layers.radius[1]  # atmosphere outer radius
     R_det = layers.radius[2]  # next layer below atmosphere
-    dldh = map(paths) do p
+    map(paths) do p
         L_atm = p[1].length
         if L_atm > 1e-3
             cos_alpha = (R_atm^2 + L_atm^2 - R_det^2) / (2 * R_atm * L_atm)
@@ -1437,6 +1499,16 @@ function propagate(U, h, E, paths::VectorOfVectors{Path}, layers::StructVector{L
         end
         vcat([dldh_val], zeros(length(p) - 1))
     end
+end
+
+function propagate(U, h, E, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, propagation::Spray, interaction::Union{SI, NSI}, anti::Bool, eigen_method::EigenMethod=DefaultEigen())
+    H_eff = U * Diagonal(h) * adjoint(U)
+    # Production height: only first (atmosphere) section varies.
+    # dL/dh = 1/cos(α) where α is the angle between the path and the radial
+    # direction at the production point. From the cosine rule (triangle with
+    # sides R_atm, R_det, L_atm):
+    #   cos(α) = (R_atm² + L_atm² - R_det²) / (2·R_atm·L_atm)
+    dldh = _spray_dldh(paths, layers)
     p = stack(map((e, de) -> matter_osc_per_e(H_eff, e, layers, paths, anti, propagation, interaction, eigen_method; Delta_E=de, Delta_h=propagation.σ_h, dldh_all=dldh), E, propagation.σ_E .* E))
     permutedims(p, (1, 2, 4, 3))
 end
@@ -1493,7 +1565,7 @@ osc_prob(E::AbstractVector, paths::VectorOfVectors{Path}, layers::StructVector{L
 ``P(\\nu_\\alpha \\to \\nu_\\beta)`` at energy `E[i]` and baseline/path index `j`
 (3rd index = input/source flavour, 4th index = output/detected flavour).
 """
-get_osc_prob(cfg::OscillationConfig) = OscProb(cfg)
+get_osc_prob(cfg::OscillationConfig) = (check_backend(cfg); OscProb(cfg))
 
 # Returns P[i, j, α, β] = P(να → νβ), i.e.:
 #   3rd index = input (source) flavour
@@ -2345,5 +2417,6 @@ function get_matrices(cfg::NNM, eigen_method::EigenMethod=DefaultEigen())
 
 end
 
+include("osc_kernels.jl")
 
 end

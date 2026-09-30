@@ -28,7 +28,7 @@ Newtrinos.jl is a neutrino physics global analysis framework with three orthogon
 ### Physics (`src/physics/`)
 Theory predictions with no experiment knowledge. Each module returns a struct `<: Newtrinos.Physics` with `params`, `priors`, and callable functions.
 
-- **`osc.jl`** — Core oscillation probability engine. Configurable via `OscillationConfig` with flavour models (`ThreeFlavour`, `Sterile`, `ADD`, `Darkdim_*`), interaction models (`Vacuum`, `SI`, `NSI`), and propagation models (`Basic`, `Decoherent`, `Damping`). Performance-critical: uses `SMatrix`/`SVector` for 3-flavour, `eigen` for matter effects.
+- **`osc.jl`** — Core oscillation probability engine. Configurable via `OscillationConfig` with flavour models (`ThreeFlavour`, `Sterile`, `ADD`, `Darkdim_*`), interaction models (`Vacuum`, `SI`, `NSI`), and propagation models (`Basic`, `Decoherent`, `Damping`). Performance-critical: uses `SMatrix`/`SVector` for 3-flavour, `eigen` for matter effects. `backend=KernelBackend(...)` (`osc_kernels.jl`) runs matter oscillations (3-flavour, SI, Basic/Spray) as KernelAbstractions kernels on CPU threads or GPU (`KernelBackend(CUDABackend())`); the kernels call the same building blocks as the CPU code, so physics changes there must stay GPU-compatible (no allocation, no LAPACK, no untyped literals mixed into `SMatrix`).
 - **`earth_layers.jl`** — PREM Earth density model. `compute_layers()` → `compute_paths(coszen, layers)`.
 - **`atm_flux.jl`** — HKKM atmospheric neutrino fluxes with Barr systematics. Site-specific flux files in `src/physics/*.d`.
 - **`xsec.jl`** — Cross-section models: `SimpleScaling` or `Differential_H2O` (for Super-K).
