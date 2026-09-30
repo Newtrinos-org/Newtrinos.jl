@@ -31,7 +31,7 @@ function default_physics()
     dlogE = 4.0 / 200.0  # logE grid step
     sigma_E = 10.0^dlogE - 1.0  # ~ 0.047, fractional energy smearing
     propagation = Newtrinos.osc.Spray(averaging=:gaussian, σ_E=sigma_E, σ_h=10.0)
-    osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction=Newtrinos.osc.SI(), propagation=propagation))
+    osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction=Newtrinos.osc.SI(), propagation=propagation, eigen_method=Newtrinos.BargerEigen()))
     atm_flux = Newtrinos.atm_flux.configure(Newtrinos.atm_flux.AtmFluxConfig(
         nominal_model=Newtrinos.atm_flux.HKKM("kam-ally-20-01-mtn-solmin.d"),
         systematics_model=Newtrinos.atm_flux.BarrEnergyBands()))

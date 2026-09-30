@@ -294,10 +294,11 @@ An `OrderedDict` with keys `:numu`, `:numubar`, `:nue`, `:nuebar`, each mapping 
 """
 function get_hkkm_flux(filename)    
 
+    table = readdlm(filename)
     flux_chunks = Matrix{Float32}[]
     for i in 19:-1:0
         idx = i*103 + 3: (i+1)*103
-        push!(flux_chunks, Float32.(readdlm(filename)[idx, 2:5]))
+        push!(flux_chunks, Float32.(table[idx, 2:5]))
     end
     
     log10_energy_flux_values = LinRange(-1, 4, 101)
@@ -336,14 +337,15 @@ values. The returned `Table` contains columns `true_energy`, `log10_true_energy`
 A closure `nominal_flux(energy, coszen) -> Table`.
 """
 function get_nominal_flux(cfg::HKKM)
+    # load the table and build splines once, not on every call
+    flux_splines = get_hkkm_flux(joinpath(datadir, cfg.fname))
     function nominal_flux(energy, coszen)
         # make fine grid
         e_fine_meshgrid = vec(energy .* ones(length(coszen))')
         log10e_fine_meshgrid = log10.(e_fine_meshgrid)
         cz_fine_meshgrid = vec(ones(length(energy)) .* coszen')
-    
-        flux_splines = get_hkkm_flux(joinpath(datadir, cfg.fname))
-        
+
+
         flux = FlexTable(true_energy=e_fine_meshgrid, log10_true_energy=log10e_fine_meshgrid, true_coszen=cz_fine_meshgrid)
         for key in keys(flux_splines)
             setproperty!(flux, key, flux_splines[key].(flux.log10_true_energy, flux.true_coszen))
