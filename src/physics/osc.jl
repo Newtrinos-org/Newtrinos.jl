@@ -1075,18 +1075,8 @@ function spray_average(S, K_E, K_Theta, Delta_E, Delta_CZ, averaging::Symbol, ei
     )
 
     if iszero(Delta_CZ)
-        # E-only averaging (fast path)
-        P = SMatrix{n,n}(
-            ntuple(n*n) do idx
-                β, α = (idx - 1) % n + 1, (idx - 1) ÷ n + 1
-                s = zero(eltype(G_E))
-                for j in 1:n, i in 1:n
-                    s += real(SV[β,i] * conj(V_E[α,i]) * V_E[α,j] * conj(SV[β,j]) * G_E[i,j])
-                end
-                s
-            end
-        )
-        return P
+        # E-only averaging (fast path): P[β,α] = [(SV) ρ_E (SV)†]_ββ
+        return hcat(ntuple(α -> _spray_column(SV, _spray_rho_E(V_E, G_E, α)), n)...)
     end
 
     # Joint E+Θ averaging: transform K_Θ into K_E eigenbasis, diagonalize there
@@ -1104,40 +1094,26 @@ function spray_average(S, K_E, K_Theta, Delta_E, Delta_CZ, averaging::Symbol, ei
     )
 
     # Density-matrix formalism: for each input flavour α,
-    # apply E damping in V_E basis, then Θ damping in W basis
-    CT = complex(eltype(G_E))
-    P = MMatrix{n,n,eltype(G_E)}(undef)
-    for α in 1:n
-        # Compute A = W† ρ_E W  (3×3 matrix operations)
-        A = MMatrix{n,n,CT}(undef)
-        for s in 1:n, r in 1:n
-            a = zero(CT)
-            for q in 1:n, p in 1:n
-                a += conj(W[p, r]) * W[q, s] * G_E[p, q] * conj(V_E[α, p]) * V_E[α, q]
-            end
-            A[r, s] = a
-        end
+    # apply E damping in V_E basis, then Θ damping in W basis.
+    # Written as n×n static matrix products (O(n³)) rather than explicit index sums (O(n⁴)).
+    Wd = W'
+    return hcat(ntuple(n) do α
+        A = Wd * _spray_rho_E(V_E, G_E, α) * W      # A = W† ρ_E W
+        ρ = W * (G_Θ .* A) * Wd                     # ρ_EΘ = W (G_Θ ⊙ A) W†  (back to V_E basis)
+        _spray_column(SV, ρ)
+    end...)
+end
 
-        # ρ_EΘ = W (G_Θ ⊙ A) W†  (back to V_E basis)
-        ρ = MMatrix{n,n,CT}(undef)
-        for q in 1:n, p in 1:n
-            v = zero(CT)
-            for s in 1:n, r in 1:n
-                v += W[p, r] * conj(W[q, s]) * G_Θ[r, s] * A[r, s]
-            end
-            ρ[p, q] = v
-        end
+# ρ_E[p,q] = G_E[p,q] · conj(V_E[α,p]) · V_E[α,q]: energy-damped density matrix of flavour α in the V_E basis
+function _spray_rho_E(V_E, G_E, α)
+    v = conj(V_E[α, :])
+    G_E .* (v * v')
+end
 
-        # P[β,α] = [(SV) ρ_EΘ (SV)†]_ββ
-        for β in 1:n
-            s = zero(eltype(G_E))
-            for q in 1:n, p in 1:n
-                s += real(SV[β, p] * ρ[p, q] * conj(SV[β, q]))
-            end
-            P[β, α] = s
-        end
-    end
-    return SMatrix(P)
+# P[β,α] = [(SV) ρ (SV)†]_ββ for all β
+function _spray_column(SV, ρ)
+    M = SV * ρ
+    SVector(ntuple(β -> real(dot(SV[β, :], M[β, :])), size(SV, 1)))
 end
 
 function matter_osc_per_e(H_eff, e, layers, paths, anti, propagation::Spray, interaction::SI,
