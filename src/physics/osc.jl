@@ -1455,9 +1455,11 @@ end
 
 # Callable struct rather than a local closure: a closure with two methods gets captured in a
 # `Core.Box`, which makes every `osc_prob` call dynamically dispatched and return `Any`.
-struct OscProb{C<:OscillationConfig} <: Function
+# `K` are the oscillation parameter names; only these are read from `params`.
+struct OscProb{C<:OscillationConfig, K} <: Function
     cfg::C
 end
+OscProb(cfg::C) where {C<:OscillationConfig} = OscProb{C, keys(get_params(cfg))}(cfg)
 
 """
     get_osc_prob(cfg::OscillationConfig) -> Function
@@ -1501,8 +1503,44 @@ get_osc_prob(cfg::OscillationConfig) = OscProb(cfg)
 # Example: P[:, :, 2, 1] = P(νμ → νe) — probability of detecting νe given initial νμ
 # Probability conservation: sum(P[i, j, α, :]) ≈ 1 for any input flavour α.
 
-function (f::OscProb)(E::AbstractVector{<:Real}, L::AbstractVector{<:Real}, params::NamedTuple; anti=false)
-    cfg = f.cfg
+function (f::OscProb{C,K})(E::AbstractVector{<:Real}, L::AbstractVector{<:Real}, params::NamedTuple; anti=false) where {C,K}
+    p = NamedTuple{K}(params)
+    T = _osc_numtype(E, L, p)
+    if T <: ForwardDiff.Dual && _no_partials(E, L, p)
+        return T.(_osc_prob(f.cfg, _strip.(E), _strip.(L), map(_strip, p), anti))
+    end
+    _osc_prob(f.cfg, E, L, p, anti)
+end
+
+function (f::OscProb{C,K})(E::AbstractVector{<:Real}, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, params::NamedTuple; anti=false) where {C,K}
+    p = NamedTuple{K}(params)
+    T = _osc_numtype(E, layers.p_density, layers.n_density, p)
+    if T <: ForwardDiff.Dual && _no_partials(E, layers.p_density, layers.n_density, p)
+        layers64 = StructArray{Layer}((layers.radius, _strip.(layers.p_density), _strip.(layers.n_density)))
+        return T.(_osc_prob(f.cfg, _strip.(E), paths, layers64, map(_strip, p), anti))
+    end
+    _osc_prob(f.cfg, E, paths, layers, p, anti)
+end
+
+# Zero-partials shortcut: within a ForwardDiff gradient, chunks that seed none of the
+# oscillation inputs (parameters, energies, baselines, densities) would otherwise redo the full
+# Dual-number oscillation calculation only to produce all-zero partials. In that case compute
+# in the value type and lift the result back to the Dual type with zero partials.
+_strip(x::ForwardDiff.Dual) = ForwardDiff.value(x)
+_strip(x) = x
+_has_partials(x::ForwardDiff.Dual) = !iszero(ForwardDiff.partials(x))
+_has_partials(x::AbstractArray) = any(_has_partials, x)
+_has_partials(x::NamedTuple) = any(_has_partials, values(x))
+_has_partials(x) = false
+_no_partials(xs...) = !any(_has_partials, xs)
+_numtype(x::AbstractArray) = _numtype(eltype(x))
+_numtype(x::NamedTuple) = promote_type(map(_numtype, values(x))...)
+_numtype(x::Real) = typeof(x)
+_numtype(::Type{T}) where {T<:Real} = T
+_numtype(x) = Bool   # non-numeric entries don't affect the result type
+_osc_numtype(xs...) = promote_type(map(_numtype, xs)...)
+
+function _osc_prob(cfg, E::AbstractVector{<:Real}, L::AbstractVector{<:Real}, params::NamedTuple, anti)
     U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
     h = h_raw .- minimum(h_raw)
     Uc = anti ? conj.(U) : U
@@ -1516,8 +1554,7 @@ function (f::OscProb)(E::AbstractVector{<:Real}, L::AbstractVector{<:Real}, para
     return _add_rest_and_permute(p_raw, rest)
 end
 
-function (f::OscProb)(E::AbstractVector{<:Real}, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, params::NamedTuple; anti=false)
-    cfg = f.cfg
+function _osc_prob(cfg, E::AbstractVector{<:Real}, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, params::NamedTuple, anti)
     U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
     h = h_raw .- minimum(h_raw)
     Uc = anti ? conj.(U) : U
