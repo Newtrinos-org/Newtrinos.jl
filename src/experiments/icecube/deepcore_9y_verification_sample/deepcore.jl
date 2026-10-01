@@ -194,7 +194,7 @@ end
 
 
 # Oscillated fluxes on the fine true grid: `nu`/`nubar` indexed [E, cosθ, detected flavour], and the
-# unoscillated flux summed over flavours for NC (`nc`)
+# unoscillated flux summed over flavours for NC (`nc` for ν, `nc_bar` for ν̄)
 function reweight(params, physics, assets)
     sys_flux = physics.atm_flux.sys_flux(assets.flux, params)
 
@@ -206,10 +206,11 @@ function reweight(params, physics, assets)
     p = physics.osc.osc_prob(assets.binning.e_fine, assets.paths, assets.layers, params, anti=true)
     nubar = @views reshape(sys_flux.nuebar, s) .* p[:, :, 1, :] .+ reshape(sys_flux.numubar, s) .* p[:, :, 2, :]
 
-    # NOTE: both nu_nc and nubar_nc use the neutrino flux (nue + numu), as before
+    # NC: flavour-summed (unoscillated) flux, separately for ν and ν̄
     nc = reshape(sys_flux.nue .+ sys_flux.numu, s)
+    nc_bar = reshape(sys_flux.nuebar .+ sys_flux.numubar, s)
 
-    (; nu, nubar, nc)
+    (; nu, nubar, nc, nc_bar)
 end
 
 function interpolate_hypersurface(h, idx, fraction)
@@ -262,7 +263,7 @@ function get_expected(params, physics, assets)
     f = osc_flux
     H(ch, flux_at) = make_hist_per_channel(assets.mc[ch], flux_at, lifetime_seconds)
     hists = (nu_nc       = H(:nu_nc,       (e, c) -> f.nc[e, c] / 3),
-             nubar_nc    = H(:nubar_nc,    (e, c) -> f.nc[e, c] / 3),
+             nubar_nc    = H(:nubar_nc,    (e, c) -> f.nc_bar[e, c] / 3),
              nue_cc      = H(:nue_cc,      (e, c) -> f.nu[e, c, 1]),
              nuebar_cc   = H(:nuebar_cc,   (e, c) -> f.nubar[e, c, 1]),
              numu_cc     = H(:numu_cc,     (e, c) -> f.nu[e, c, 2]),
