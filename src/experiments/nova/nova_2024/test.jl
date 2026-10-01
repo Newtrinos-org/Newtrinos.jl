@@ -40,73 +40,99 @@ if !isdir("test_output")
     mkdir("test_output")
 end
 
-# official NO credible regions (Bayesian, marginalised) from the release, as (x, y, linestyle) per graph
-function official(pair)
+# official conditional credible regions (Bayesian, marginalised) from the release, per mass ordering
+function official(pair, mo)
     out = []
     h5open(Newtrinos.nova.datafile) do f
         g = f["contours/RCDB1D_cond"]
         for (lvl, ls) in (("068", :dash), ("090", :solid)), k in keys(g)
-            occursin("$(pair)_NO_cred_int_$(lvl)_", k) && push!(out, (read(g[k]["x"]), read(g[k]["y"]), ls, lvl == "090" && endswith(k, "_0")))
+            occursin("$(pair)_$(mo)_cred_int_$(lvl)_", k) && push!(out, (read(g[k]["x"]), read(g[k]["y"]), ls, lvl == "090" && endswith(k, "_0")))
         end
     end
     out
 end
-function overlay!(ax, pair)
-    for (x, y, ls, lab) in official(pair)
+function overlay!(ax, pair, mo)
+    for (x, y, ls, lab) in official(pair, mo)
         lines!(ax, x, y, color = :red, linestyle = ls, label = lab ? "official (Bayesian)" : nothing)
     end
 end
 
-# --- 1) νμ disappearance: sin²θ₂₃ – Δm²₃₂ ---
-vars_to_scan = OrderedDict(:θ₂₃ => 21, :Δm²₃₁ => 21)
-result = Newtrinos.profile(likelihood, priors, vars_to_scan, p, cache_dir = "test_cache_$(calibration)_th23dm31")
-FileIO.save("test_output/test.jld2", Dict("result" => result))
+# conditional fits per mass ordering: Δm²₃₂ range, start point (NOvA frequentist best fits, Suppl. Tab. S4)
+# and NOvA's frequentist 1σ δCP intervals (Feldman-Cousins corrected, Tab. S4) in units of π
+orderings = (
+    NO = (Δm²₃₂ = (2.25e-3, 2.65e-3), start = (Δm²₃₂ = 2.441e-3, δCP = 0.87π), dcp_1σ = ((0.0, 0.16), (0.58, 1.17), (1.97, 2.0)), color = :blue),
+    IO = (Δm²₃₂ = (-2.65e-3, -2.25e-3), start = (Δm²₃₂ = -2.481e-3, δCP = 1.53π), dcp_1σ = ((1.26, 1.76),), color = :darkorange),
+)
+setup(o) = (@set(priors.Δm²₃₁ = Uniform((o.Δm²₃₂ .+ p.Δm²₂₁)...)),
+            merge(p, (Δm²₃₁ = o.start.Δm²₃₂ + p.Δm²₂₁, δCP = o.start.δCP)))
 
-converted = Newtrinos.NewtrinosResult(axes = (sin2theta23 = sin.(result.axes.θ₂₃) .^ 2, Δm²₃₂ = (result.axes.Δm²₃₁ .- p.Δm²₂₁) .* 1e3), values = result.values);
-fig = Figure()
-ax = Axis(fig[1, 1], title = "NOvA 2024 NO 68%, 90% C.L. contours", xlabel = "sin²θ₂₃", ylabel = "Δm²₃₂ (10⁻³ eV²)")
-overlay!(ax, "ssth23dm32")
-plot!(ax, converted, levels = [0.68, 0.9], label = "ours")
-axislegend(ax)
+# the θ₂₃ octants are separate local minima: profile each octant separately, keep the better one per point
+function profile_octants(pr, p0, vars_to_scan, cache_dir)
+    oct = map((lower = (θ₂₃_range[1], π / 4), upper = (π / 4, θ₂₃_range[2]))) do r
+        Newtrinos.profile(likelihood, @set(pr.θ₂₃ = Uniform(r...)), vars_to_scan, @set(p0.θ₂₃ = sum(r) / 2), cache_dir = cache_dir)
+    end
+    better = oct.lower.values.log_posterior .>= oct.upper.values.log_posterior
+    Newtrinos.NewtrinosResult(axes = oct.lower.axes, values = map((l, u) -> ifelse.(better, l, u), oct.lower.values, oct.upper.values), meta = oct.lower.meta)
+end
+
+results = map(keys(orderings), values(orderings)) do mo, o
+    pr, p0 = setup(o)
+    cache(name) = "test_cache_$(calibration)_$(mo)_$(name)"
+    th23dm = Newtrinos.profile(likelihood, pr, OrderedDict(:θ₂₃ => 21, :Δm²₃₁ => 21), p0, cache_dir = cache("th23dm31"))
+    dcpth23 = Newtrinos.profile(likelihood, pr, OrderedDict(:δCP => 25, :θ₂₃ => 21), p0, cache_dir = cache("dcpth23"))
+    dcp = profile_octants(pr, p0, OrderedDict(:δCP => 41), cache("dcp"))
+    FileIO.save("test_output/test_$(mo).jld2", Dict("th23dm31" => th23dm, "dcpth23" => dcpth23, "dcp" => dcp))
+    mo => (; th23dm, dcpth23, dcp)
+end |> NamedTuple
+result = results.NO.th23dm
+
+global_max = maximum(r -> maximum(r.dcp.values.log_posterior), results)
+for mo in keys(results)
+    Δ = 2 * (global_max - maximum(results[mo].dcp.values.log_posterior))
+    println("$(mo): best -2ΔlogL relative to the global best fit = $(round(Δ, digits = 3))")
+end
+
+# --- 1) νμ disappearance: sin²θ₂₃ – Δm²₃₂ (conditional on each ordering) ---
+fig = Figure(size = (1100, 450))
+for (i, mo) in enumerate(keys(orderings))
+    r = results[mo].th23dm
+    converted = Newtrinos.NewtrinosResult(axes = (sin2theta23 = sin.(r.axes.θ₂₃) .^ 2, Δm²₃₂ = (r.axes.Δm²₃₁ .- p.Δm²₂₁) .* 1e3), values = r.values)
+    ax = Axis(fig[1, i], title = "NOvA 2024 $(mo) 68%, 90% C.L. contours", xlabel = "sin²θ₂₃", ylabel = "Δm²₃₂ (10⁻³ eV²)")
+    overlay!(ax, "ssth23dm32", mo)
+    plot!(ax, converted, levels = [0.68, 0.9], label = "ours", color = orderings[mo].color)
+    axislegend(ax, position = mo == :NO ? :rt : :rb)
+end
 save("test_output/contours.png", fig)
 
-bestfit = Newtrinos.bestfit(result)
+bestfit = Newtrinos.bestfit(results.NO.th23dm)
 fig = experiments.nova.plot(bestfit)
 save("test_output/datamc.png", fig)
 
-# --- 2) νe appearance: δCP – sin²θ₂₃ and δCP alone ---
-vars_to_scan = OrderedDict(:δCP => 25, :θ₂₃ => 21)
-result_dcp2d = Newtrinos.profile(likelihood, priors, vars_to_scan, p, cache_dir = "test_cache_$(calibration)_dcpth23")
-FileIO.save("test_output/test_dcp_th23.jld2", Dict("result" => result_dcp2d))
-
-# 1D δCP profile: the θ₂₃ octants are separate local minima, so profile each octant separately
-# and keep the better one per δCP point
-vars_to_scan = OrderedDict(:δCP => 41)
-octants = map((lower = (θ₂₃_range[1], π / 4), upper = (π / 4, θ₂₃_range[2]))) do r
-    pr = @set priors.θ₂₃ = Uniform(r...)
-    p0 = @set p.θ₂₃ = sum(r) / 2
-    Newtrinos.profile(likelihood, pr, vars_to_scan, p0, cache_dir = "test_cache_$(calibration)_dcp")
+# --- 2) νe appearance: δCP – sin²θ₂₃ per ordering, and δCP for both orderings ---
+fig = Figure(size = (1100, 900))
+for (i, mo) in enumerate(keys(orderings))
+    r = results[mo].dcpth23
+    converted = Newtrinos.NewtrinosResult(axes = (δCP = r.axes.δCP ./ π, sin2theta23 = sin.(r.axes.θ₂₃) .^ 2), values = r.values)
+    ax = Axis(fig[1, i], title = "NOvA 2024 $(mo) 68%, 90% C.L. contours", xlabel = "δCP / π", ylabel = "sin²θ₂₃")
+    overlay!(ax, "dcpssth23", mo)
+    plot!(ax, converted, levels = [0.68, 0.9], label = "ours", color = orderings[mo].color)
+    xlims!(ax, 0, 2); ylims!(ax, 0.40, 0.64)
+    axislegend(ax, position = :lb)
 end
-better = octants.lower.values.log_posterior .>= octants.upper.values.log_posterior
-result_dcp = Newtrinos.NewtrinosResult(axes = octants.lower.axes,
-    values = map((l, u) -> ifelse.(better, l, u), octants.lower.values, octants.upper.values), meta = octants.lower.meta)
-FileIO.save("test_output/test_dcp.jld2", Dict("result" => result_dcp))
 
-converted = Newtrinos.NewtrinosResult(axes = (δCP = result_dcp2d.axes.δCP ./ π, sin2theta23 = sin.(result_dcp2d.axes.θ₂₃) .^ 2), values = result_dcp2d.values);
-fig = Figure(size = (1100, 450))
-ax = Axis(fig[1, 1], title = "NOvA 2024 NO 68%, 90% C.L. contours", xlabel = "δCP / π", ylabel = "sin²θ₂₃")
-overlay!(ax, "dcpssth23")
-plot!(ax, converted, levels = [0.68, 0.9], label = "ours")
-axislegend(ax, position = :lb)
-
-ax = Axis(fig[1, 2], title = "NOvA 2024 NO, profiled over all other parameters", xlabel = "δCP / π", ylabel = "-2 Δ log L")
-# NOvA frequentist 1σ intervals (Feldman-Cousins corrected), 1D Daya Bay constraint, NO (Suppl. Tab. S4)
-for (lo, hi) in ((0.0, 0.16), (0.58, 1.17), (1.97, 2.0))
-    vspan!(ax, lo, hi, color = (:red, 0.15))
+ax = Axis(fig[2, 1:2], title = "NOvA 2024, profiled over all other parameters (relative to the global best fit)",
+          xlabel = "δCP / π", ylabel = "-2 Δ log L")
+for mo in keys(orderings)
+    o = orderings[mo]
+    for (lo, hi) in o.dcp_1σ
+        vspan!(ax, lo, hi, color = (o.color, 0.12))
+    end
+    lines!(ax, [NaN], [NaN], color = (o.color, 0.3), linewidth = 8, label = "official $(mo) 1σ (frequentist, FC)")
+    r = results[mo].dcp
+    plot!(ax, Newtrinos.NewtrinosResult(axes = (δCP = r.axes.δCP ./ π,), values = r.values), max_llh = global_max,
+          levels = [0.68, 0.9], label = "ours, $(mo)", color = o.color)
 end
-lines!(ax, [NaN], [NaN], color = (:red, 0.3), linewidth = 8, label = "official 1σ (frequentist, FC)")
-plot!(ax, Newtrinos.NewtrinosResult(axes = (δCP = result_dcp.axes.δCP ./ π,), values = result_dcp.values), levels = [0.68, 0.9], label = "ours")
-ylims!(ax, 0, 6)
+xlims!(ax, 0, 2); ylims!(ax, 0, 8)
 axislegend(ax, position = :lt)
 save("test_output/dcp.png", fig)
 
