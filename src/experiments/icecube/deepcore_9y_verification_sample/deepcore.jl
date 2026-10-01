@@ -231,10 +231,12 @@ end
 
 function apply_hypersurfaces(hists, params, physics, assets)
 
-    x = params.Δm²₃₁
+    # Linear interpolation of the hypersurfaces in |Δm²₃₁| on the grid X: segment X[idx]..X[idx+1]
+    # (clamped to the grid, so values outside are linearly extrapolated from the end segments)
+    x = abs(params.Δm²₃₁)
     X = assets.binning.hs_dm31
     Δx = X[2] - X[1]
-    idx = floor(Int, (x - X[1]) / Δx)
+    idx = clamp(floor(Int, (x - X[1]) / Δx) + 1, 1, length(X) - 1)
     fraction = (x - X[idx]) / Δx
 
     f_nu_nc_nue_cc = get_hypersurface_factor(assets.hypersurfaces.nu_nc_nue_cc, idx, fraction, params)
