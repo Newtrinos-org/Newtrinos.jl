@@ -721,12 +721,11 @@ function get_assets(physics; datadir = @__DIR__)
         sk_1ring_pi0 = occursin.("_1ring_ncpi0", bininfo.Sample),
         sk_2ring_pi0 = occursin.("_2ring_ncpi0", bininfo.Sample),
         # Ring separation sub-GeV vs multi-GeV
-        # NOTE: the 2023 release has no sub-GeV multi-ring sample (the only sub-GeV 2-ring sample is
-        # sk1-5_fc_2ring_ncpi0, ~5 bins, which cannot serve as the migration partner of the large
-        # sub-GeV 1-ring samples). sk_subgev_multiring is therefore empty and sk_subgev_ring_counting
-        # has no effect.
-        sk_subgev_1ring = occursin.(r"_fc_subgev_1ring_", bininfo.Sample),
-        sk_subgev_multiring = occursin.(r"_fc_subgev.*(2ring|multiring)", bininfo.Sample),
+        # Sub-GeV ring counting is disabled: the 2023 release has no sub-GeV multi-ring sample (the
+        # only sub-GeV 2-ring sample is sk1-5_fc_2ring_ncpi0, ~5 bins, too small to be the migration
+        # partner of the sub-GeV 1-ring samples), so sk_subgev_ring_counting had no effect.
+        # sk_subgev_1ring = occursin.(r"_fc_subgev_1ring_", bininfo.Sample),
+        # sk_subgev_multiring = occursin.(r"_fc_subgev.*(2ring|multiring)", bininfo.Sample),
         sk_multigev_1ring = occursin.(r"_fc_multigev_1ring_", bininfo.Sample),
         sk_multigev_multiring = occursin.(r"_fc_multigev.*(2ring|multiring)", bininfo.Sample),
     )
@@ -867,7 +866,7 @@ function get_params()
         # pi0 selection
         sk_pi0_norm = 1.0,
         # Split ring counting: sub-GeV and multi-GeV
-        sk_subgev_ring_counting = 1.0,
+        # sk_subgev_ring_counting = 1.0,   # disabled: no sub-GeV multi-ring sample (see masks in get_assets)
         sk_multigev_ring_counting = 1.0,
         # Energy-dependent flux normalization (bathtub shape, split at 1 GeV)
         sk_flux_norm_low = 0.0,
@@ -924,7 +923,7 @@ function get_priors()
         # pi0 selection uncertainty
         sk_pi0_norm = Normal(1, 0.1),
         # Split ring counting
-        sk_subgev_ring_counting = Normal(1, 0.03),
+        # sk_subgev_ring_counting = Normal(1, 0.03),   # disabled: no sub-GeV multi-ring sample
         sk_multigev_ring_counting = Normal(1, 0.05),
         # Energy-dependent flux normalization (bathtub shape)
         # Low-E: 25% at 0.1 GeV, linear in logE to 7% at 1 GeV
@@ -1057,7 +1056,7 @@ function get_migration_factors(params, assets, channel, total)
         (G(assets.masks.sk_iv_v_multigev_1ring_elike, assets.masks.sk_iv_v_multigev_1ring_mulike, params.sk_iv_v_multigev_pid) .- 1) .+
         # Ring counting migration: overall + split by energy
         (G(assets.masks.sk_1ring, assets.masks.sk_multiring, params.sk_ring_counting) .- 1) .+
-        (G(assets.masks.sk_subgev_1ring, assets.masks.sk_subgev_multiring, params.sk_subgev_ring_counting) .- 1) .+
+        # (G(assets.masks.sk_subgev_1ring, assets.masks.sk_subgev_multiring, params.sk_subgev_ring_counting) .- 1) .+   # disabled, see get_assets
         (G(assets.masks.sk_multigev_1ring, assets.masks.sk_multigev_multiring, params.sk_multigev_ring_counting) .- 1) .+
         # FC/PC separation: FC multi-GeV mu-like ↔ PC
         (G(assets.masks.fc_multigev_mulike, assets.masks.pc, params.sk_fc_pc_separation) .- 1) .+
