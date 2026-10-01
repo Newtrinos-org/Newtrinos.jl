@@ -678,7 +678,7 @@ function get_assets(physics; datadir = @__DIR__)
         upmu_thru = occursin.("_upmu_thru", bininfo.Sample),
         upmu_shower = occursin.(r"_upmu_.*_showering",  bininfo.Sample),
         upmu_nonshower = occursin.(r"_upmu_.*_nonshowering", bininfo.Sample),
-        mu_indices = occursin.("_numu", bininfo.Sample),
+        mu_indices = occursin.(r"(mulike|numubarlike)", bininfo.Sample),   # mu-like samples of all phases ("mulike" also matches "numulike")
         sk_i_iii_elike_0decay_e = occursin.(r"sk1-3_.*elike_0decaye", bininfo.Sample),
         sk_i_iii_elike_1decay_e = occursin.(r"sk1-3_.*elike_1decaye", bininfo.Sample),
         sk_i_iii_mulike_0decay_e = occursin.(r"sk1-3_.*mulike_0decaye", bininfo.Sample),
@@ -716,11 +716,15 @@ function get_assets(physics; datadir = @__DIR__)
         # PC + Up-mu mask (for relative normalization)
         pc_upmu = occursin.("_pc_", bininfo.Sample) .| occursin.("_upmu_", bininfo.Sample),
         # FC multi-GeV mu-like single-ring (for FC/PC separation)
-        fc_multigev_mulike = occursin.(r"_fc_multigev_1ring_mu", bininfo.Sample),
+        fc_multigev_mulike = occursin.(r"_fc_multigev_1ring_(mulike|numulike|numubarlike)", bininfo.Sample),
         # pi0 samples
         sk_1ring_pi0 = occursin.("_1ring_ncpi0", bininfo.Sample),
         sk_2ring_pi0 = occursin.("_2ring_ncpi0", bininfo.Sample),
         # Ring separation sub-GeV vs multi-GeV
+        # NOTE: the 2023 release has no sub-GeV multi-ring sample (the only sub-GeV 2-ring sample is
+        # sk1-5_fc_2ring_ncpi0, ~5 bins, which cannot serve as the migration partner of the large
+        # sub-GeV 1-ring samples). sk_subgev_multiring is therefore empty and sk_subgev_ring_counting
+        # has no effect.
         sk_subgev_1ring = occursin.(r"_fc_subgev_1ring_", bininfo.Sample),
         sk_subgev_multiring = occursin.(r"_fc_subgev.*(2ring|multiring)", bininfo.Sample),
         sk_multigev_1ring = occursin.(r"_fc_multigev_1ring_", bininfo.Sample),
