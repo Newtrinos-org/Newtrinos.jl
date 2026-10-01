@@ -108,16 +108,19 @@ end
 
 # Histogram one MC channel straight from the oscillated flux on the true (E, cosθ) grid: each MC
 # row adds lifetime · W · flux[true bin] (× orca_norm_he for high-energy rows) to its reco bin.
+# CC rows use the flux oscillated into the channel's flavour j; NC rows (provided only for Pdg ±14,
+# standing for NC of all flavours) use the flavour-blind total active flux `p_flux_nc`.
 # Gathering and filling in one loop avoids per-event temporary arrays (~600k MC rows, 104 bytes per
 # element for Dual{12}), which otherwise dominate allocations and GC time under ForwardDiff.
-function make_hist_per_channel(mc, p_flux, j, lifetime_seconds, params, assets)
+function make_hist_per_channel(mc, p_flux, p_flux_nc, j, lifetime_seconds, params, assets)
     he_factor = params.orca_norm_he - 1.
     T = typeof(lifetime_seconds * first(mc.W) * first(p_flux) * (first(mc.he_mask) * he_factor + 1.0))
     hist = zeros(T, assets.reco_shape)
     W, ef, cf, he = mc.W, mc.E_true_bin, mc.Ct_true_bin, mc.he_mask
     er, cr, cls, cc = mc.E_reco_bin, mc.Ct_reco_bin, mc.AnaClass, mc.IsCC
     @inbounds for i in eachindex(W)
-        hist[er[i], cr[i], cls[i], cc[i] + 1] += lifetime_seconds * W[i] * p_flux[ef[i], cf[i], j] * (he[i] * he_factor + 1.0)
+        f = cc[i] == 1 ? p_flux[ef[i], cf[i], j] : p_flux_nc[ef[i], cf[i]]
+        hist[er[i], cr[i], cls[i], cc[i] + 1] += lifetime_seconds * W[i] * f * (he[i] * he_factor + 1.0)
     end
     hist
 end
@@ -147,10 +150,13 @@ function get_expected(params, physics, assets)
 
     lifetime_seconds = 1.
 
-    H(ch, f, j) = make_hist_per_channel(assets.mc[ch], f, j, lifetime_seconds, params, assets)
-    hists = (nue = H(:nue, osc_flux.nu, 1), nuebar = H(:nuebar, osc_flux.nubar, 1),
-             numu = H(:numu, osc_flux.nu, 2), numubar = H(:numubar, osc_flux.nubar, 2),
-             nutau = H(:nutau, osc_flux.nu, 3), nutaubar = H(:nutaubar, osc_flux.nubar, 3))
+    # NC is flavour-blind: total active flux after oscillation, Σ_β Φ_osc(β)
+    nc_nu = dropdims(sum(osc_flux.nu, dims=3), dims=3)
+    nc_nubar = dropdims(sum(osc_flux.nubar, dims=3), dims=3)
+    H(ch, f, f_nc, j) = make_hist_per_channel(assets.mc[ch], f, f_nc, j, lifetime_seconds, params, assets)
+    hists = (nue = H(:nue, osc_flux.nu, nc_nu, 1), nuebar = H(:nuebar, osc_flux.nubar, nc_nubar, 1),
+             numu = H(:numu, osc_flux.nu, nc_nu, 2), numubar = H(:numubar, osc_flux.nubar, nc_nubar, 2),
+             nutau = H(:nutau, osc_flux.nu, nc_nu, 3), nutaubar = H(:nutaubar, osc_flux.nubar, nc_nubar, 3))
 
     hists_nc = sum(h[:, :, :, 1] for h in hists) * physics.xsec.scale(:any, :NC, params)
 
