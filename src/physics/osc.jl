@@ -266,6 +266,14 @@ subtype of [`EigenMethod`](@ref) and a corresponding `decompose` dispatch.
 An `Eigen` factorization with fields `vectors` and `values`.
 """
 decompose(H::Hermitian, ::DefaultEigen) = eigen(H)
+decompose(H::Hermitian{T, <:SMatrix{N,N,T}}, ::DefaultEigen) where {T, N} = concrete_eigen(eigen(H), T, Val(N))
+
+# Rebuild a static `Eigen` with concrete field types. For `ForwardDiff.Dual` elements the
+# static `eigen` (and 2×2 sub-solves in `fast_eigen`) are not inferable, which would make
+# every downstream use in the per-(E, layer, path) loops dynamically dispatched.
+# A no-op when the input is already concretely typed.
+concrete_eigen(E::Eigen, ::Type{T}, ::Val{N}) where {T, N} =
+    Eigen(SVector{N, real(T)}(E.values)::SVector{N, real(T)}, SMatrix{N, N, T}(E.vectors)::SMatrix{N, N, T, N*N})
 export DefaultEigen
 
 """
@@ -1075,18 +1083,8 @@ function spray_average(S, K_E, K_Theta, Delta_E, Delta_CZ, averaging::Symbol, ei
     )
 
     if iszero(Delta_CZ)
-        # E-only averaging (fast path)
-        P = SMatrix{n,n}(
-            ntuple(n*n) do idx
-                β, α = (idx - 1) % n + 1, (idx - 1) ÷ n + 1
-                s = zero(eltype(G_E))
-                for j in 1:n, i in 1:n
-                    s += real(SV[β,i] * conj(V_E[α,i]) * V_E[α,j] * conj(SV[β,j]) * G_E[i,j])
-                end
-                s
-            end
-        )
-        return P
+        # E-only averaging (fast path): P[β,α] = [(SV) ρ_E (SV)†]_ββ
+        return hcat(ntuple(α -> _spray_column(SV, _spray_rho_E(V_E, G_E, α)), n)...)
     end
 
     # Joint E+Θ averaging: transform K_Θ into K_E eigenbasis, diagonalize there
@@ -1104,48 +1102,37 @@ function spray_average(S, K_E, K_Theta, Delta_E, Delta_CZ, averaging::Symbol, ei
     )
 
     # Density-matrix formalism: for each input flavour α,
-    # apply E damping in V_E basis, then Θ damping in W basis
-    CT = complex(eltype(G_E))
-    P = MMatrix{n,n,eltype(G_E)}(undef)
-    for α in 1:n
-        # Compute A = W† ρ_E W  (3×3 matrix operations)
-        A = MMatrix{n,n,CT}(undef)
-        for s in 1:n, r in 1:n
-            a = zero(CT)
-            for q in 1:n, p in 1:n
-                a += conj(W[p, r]) * W[q, s] * G_E[p, q] * conj(V_E[α, p]) * V_E[α, q]
-            end
-            A[r, s] = a
-        end
-
-        # ρ_EΘ = W (G_Θ ⊙ A) W†  (back to V_E basis)
-        ρ = MMatrix{n,n,CT}(undef)
-        for q in 1:n, p in 1:n
-            v = zero(CT)
-            for s in 1:n, r in 1:n
-                v += W[p, r] * conj(W[q, s]) * G_Θ[r, s] * A[r, s]
-            end
-            ρ[p, q] = v
-        end
-
-        # P[β,α] = [(SV) ρ_EΘ (SV)†]_ββ
-        for β in 1:n
-            s = zero(eltype(G_E))
-            for q in 1:n, p in 1:n
-                s += real(SV[β, p] * ρ[p, q] * conj(SV[β, q]))
-            end
-            P[β, α] = s
-        end
-    end
-    return SMatrix(P)
+    # apply E damping in V_E basis, then Θ damping in W basis.
+    # Written as n×n static matrix products (O(n³)) rather than explicit index sums (O(n⁴)).
+    Wd = W'
+    return hcat(ntuple(n) do α
+        A = Wd * _spray_rho_E(V_E, G_E, α) * W      # A = W† ρ_E W
+        ρ = W * (G_Θ .* A) * Wd                     # ρ_EΘ = W (G_Θ ⊙ A) W†  (back to V_E basis)
+        _spray_column(SV, ρ)
+    end...)
 end
+
+# ρ_E[p,q] = G_E[p,q] · conj(V_E[α,p]) · V_E[α,q]: energy-damped density matrix of flavour α in the V_E basis
+function _spray_rho_E(V_E, G_E, α)
+    v = conj(V_E[α, :])
+    G_E .* (v * v')
+end
+
+# P[β,α] = [(SV) ρ (SV)†]_ββ for all β
+function _spray_column(SV, ρ)
+    M = SV * ρ
+    SVector(ntuple(β -> real(dot(SV[β, :], M[β, :])), size(SV, 1)))
+end
+
+# Flavour count as a compile-time Val (a runtime `Val(size(H, 1))` defeats inference)
+_val_nflav(::StaticMatrix{N,N}) where N = Val(N)
+_val_nflav(H::AbstractMatrix) = Val(size(H, 1))
 
 function matter_osc_per_e(H_eff, e, layers, paths, anti, propagation::Spray, interaction::SI,
                            eigen_method::EigenMethod=DefaultEigen();
                            Delta_E=zero(e), Delta_h=zero(e), dldh_all=nothing)
-    matter_matrices = compute_matter_matrices.(Ref(H_eff), e, layers, anti, Ref(interaction), Ref(eigen_method))
-    n_flav = size(H_eff, 1)
-    spray_data = map(layer -> compute_dVdE(layer, anti, interaction, Val(n_flav)), layers)
+    matter_matrices = [compute_matter_matrices(H_eff, e, layer, anti, interaction, eigen_method) for layer in layers]
+    spray_data = [compute_dVdE(layer, anti, interaction, _val_nflav(H_eff)) for layer in layers]
 
     n_paths = length(paths)
     p = stack(map(1:n_paths) do idx
@@ -1228,13 +1215,13 @@ density-matrix evolution (for [`Decoherent`](@ref)).
 An `Array` of shape `(n_flav, n_flav, n_paths)` with ``P_{\\beta\\alpha}`` for each path.
 """
 function matter_osc_per_e(H_eff, e, layers, paths, anti, propagation::Union{Basic, Damping}, interaction, eigen_method::EigenMethod=DefaultEigen())
-    matter_matrices = compute_matter_matrices.(Ref(H_eff), e, layers, anti, Ref(interaction), Ref(eigen_method))
+    matter_matrices = [compute_matter_matrices(H_eff, e, layer, anti, interaction, eigen_method) for layer in layers]
     p = stack(map(path -> osc_reduce(matter_matrices, path, e, propagation), paths))
 end
 
 
 function matter_osc_per_e(H_eff, e, layers, paths, anti, propagation::Decoherent, interaction, eigen_method::EigenMethod=DefaultEigen())
-    matter_matrices = compute_matter_matrices.(Ref(H_eff), e, layers, anti, Ref(interaction), Ref(eigen_method))
+    matter_matrices = [compute_matter_matrices(H_eff, e, layer, anti, interaction, eigen_method) for layer in layers]
     n = size(H_eff, 1)
     RT = real(eltype(H_eff))
     CT = eltype(H_eff)
@@ -1466,6 +1453,14 @@ function _add_rest_and_permute(p_raw, rest)
     result
 end
 
+# Callable struct rather than a local closure: a closure with two methods gets captured in a
+# `Core.Box`, which makes every `osc_prob` call dynamically dispatched and return `Any`.
+# `K` are the oscillation parameter names; only these are read from `params`.
+struct OscProb{C<:OscillationConfig, K} <: Function
+    cfg::C
+end
+OscProb(cfg::C) where {C<:OscillationConfig} = OscProb{C, keys(get_params(cfg))}(cfg)
+
 """
     get_osc_prob(cfg::OscillationConfig) -> Function
 
@@ -1498,45 +1493,79 @@ osc_prob(E::AbstractVector, paths::VectorOfVectors{Path}, layers::StructVector{L
 ``P(\\nu_\\alpha \\to \\nu_\\beta)`` at energy `E[i]` and baseline/path index `j`
 (3rd index = input/source flavour, 4th index = output/detected flavour).
 """
-function get_osc_prob(cfg::OscillationConfig)
+get_osc_prob(cfg::OscillationConfig) = OscProb(cfg)
 
-    # Returns P[i, j, α, β] = P(να → νβ), i.e.:
-    #   3rd index = input (source) flavour
-    #   4th index = output (detected) flavour
-    #   Flavour indices: 1=νe, 2=νμ, 3=ντ
-    #
-    # Example: P[:, :, 2, 1] = P(νμ → νe) — probability of detecting νe given initial νμ
-    # Probability conservation: sum(P[i, j, α, :]) ≈ 1 for any input flavour α.
+# Returns P[i, j, α, β] = P(να → νβ), i.e.:
+#   3rd index = input (source) flavour
+#   4th index = output (detected) flavour
+#   Flavour indices: 1=νe, 2=νμ, 3=ντ
+#
+# Example: P[:, :, 2, 1] = P(νμ → νe) — probability of detecting νe given initial νμ
+# Probability conservation: sum(P[i, j, α, :]) ≈ 1 for any input flavour α.
 
-    function osc_prob(E::AbstractVector{<:Real}, L::AbstractVector{<:Real}, params::NamedTuple; anti=false)
-        U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
-        h = h_raw .- minimum(h_raw)
-        Uc = anti ? conj.(U) : U
-
-        U, h, rest = select(Uc, h, cfg.states)
-
-        # propagate returns p_raw[out, in, n_E, n_L]
-        p_raw = propagate(U, h, E, L, cfg.propagation)
-
-        # fuse rest addition + permutedims into P[n_E, n_L, in, out]
-        return _add_rest_and_permute(p_raw, rest)
+function (f::OscProb{C,K})(E::AbstractVector{<:Real}, L::AbstractVector{<:Real}, params::NamedTuple; anti=false) where {C,K}
+    p = NamedTuple{K}(params)
+    T = _osc_numtype(E, L, p)
+    if T <: ForwardDiff.Dual && _no_partials(E, L, p)
+        return T.(_osc_prob(f.cfg, _strip.(E), _strip.(L), map(_strip, p), anti))
     end
+    _osc_prob(f.cfg, E, L, p, anti)
+end
 
-    function osc_prob(E::AbstractVector{<:Real}, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, params::NamedTuple; anti=false)
-        U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
-        h = h_raw .- minimum(h_raw)
-        Uc = anti ? conj.(U) : U
-
-        U, h, rest = select(Uc, h, cfg.states)
-
-        # propagate returns p_raw[out, in, n_E, n_cz]
-        p_raw = propagate(U, h, E, paths, layers, cfg.propagation, cfg.interaction, anti, cfg.eigen_method)
-
-        # fuse rest addition + permutedims into P[n_E, n_cz, in, out]
-        return _add_rest_and_permute(p_raw, rest)
+function (f::OscProb{C,K})(E::AbstractVector{<:Real}, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, params::NamedTuple; anti=false) where {C,K}
+    p = NamedTuple{K}(params)
+    T = _osc_numtype(E, layers.p_density, layers.n_density, p)
+    if T <: ForwardDiff.Dual && _no_partials(E, layers.p_density, layers.n_density, p)
+        layers64 = StructArray{Layer}((layers.radius, _strip.(layers.p_density), _strip.(layers.n_density)))
+        return T.(_osc_prob(f.cfg, _strip.(E), paths, layers64, map(_strip, p), anti))
     end
+    _osc_prob(f.cfg, E, paths, layers, p, anti)
+end
 
-    return osc_prob
+# Zero-partials shortcut: within a ForwardDiff gradient, chunks that seed none of the
+# oscillation inputs (parameters, energies, baselines, densities) would otherwise redo the full
+# Dual-number oscillation calculation only to produce all-zero partials. In that case compute
+# in the value type and lift the result back to the Dual type with zero partials.
+_strip(x::ForwardDiff.Dual) = ForwardDiff.value(x)
+_strip(x) = x
+_has_partials(x::ForwardDiff.Dual) = !iszero(ForwardDiff.partials(x))
+_has_partials(x::AbstractArray) = any(_has_partials, x)
+_has_partials(x::NamedTuple) = any(_has_partials, values(x))
+_has_partials(x) = false
+_no_partials(xs...) = !any(_has_partials, xs)
+_numtype(x::AbstractArray) = _numtype(eltype(x))
+_numtype(x::NamedTuple) = promote_type(map(_numtype, values(x))...)
+_numtype(x::Real) = typeof(x)
+_numtype(::Type{T}) where {T<:Real} = T
+_numtype(x) = Bool   # non-numeric entries don't affect the result type
+_osc_numtype(xs...) = promote_type(map(_numtype, xs)...)
+
+function _osc_prob(cfg, E::AbstractVector{<:Real}, L::AbstractVector{<:Real}, params::NamedTuple, anti)
+    U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
+    h = h_raw .- minimum(h_raw)
+    Uc = anti ? conj.(U) : U
+
+    U, h, rest = select(Uc, h, cfg.states)
+
+    # propagate returns p_raw[out, in, n_E, n_L]
+    p_raw = propagate(U, h, E, L, cfg.propagation)
+
+    # fuse rest addition + permutedims into P[n_E, n_L, in, out]
+    return _add_rest_and_permute(p_raw, rest)
+end
+
+function _osc_prob(cfg, E::AbstractVector{<:Real}, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, params::NamedTuple, anti)
+    U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
+    h = h_raw .- minimum(h_raw)
+    Uc = anti ? conj.(U) : U
+
+    U, h, rest = select(Uc, h, cfg.states)
+
+    # propagate returns p_raw[out, in, n_E, n_cz]
+    p_raw = propagate(U, h, E, paths, layers, cfg.propagation, cfg.interaction, anti, cfg.eigen_method)
+
+    # fuse rest addition + permutedims into P[n_E, n_cz, in, out]
+    return _add_rest_and_permute(p_raw, rest)
 end
 
 
