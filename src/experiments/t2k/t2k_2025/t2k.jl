@@ -1,6 +1,10 @@
 """
     t2k
 
+!!! note
+    This module is 100% vibe coded: written entirely by an AI coding assistant (Claude) with human
+    steering, and validated only against the published results shown in its `test.jl`.
+
 T2K three-flavour oscillation analysis with 19.7 (16.3) × 10²⁰ POT in ν (ν̄) mode
 (arXiv:2506.05889), built from public material only (`T2K_2025.h5`, see `extraction/`):
 

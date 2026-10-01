@@ -1,6 +1,10 @@
 """
     nova
 
+!!! note
+    This module is 100% vibe coded: written entirely by an AI coding assistant (Claude) with human
+    steering, and validated only against the published results shown in its `test.jl`.
+
 NOvA 2024 three-flavour oscillation analysis (26.61e20 ν + 12.5e20 ν̄ POT, PRL 136, 011802 (2026)),
 built from the official data release (doi:10.5281/zenodo.17822358), converted once from ROOT to
 `NOvA_2024_data_release.h5` by `convert_nova_2024_to_hdf5.py`.

@@ -8,6 +8,7 @@ using Accessors
 using CairoMakie
 using HDF5
 
+# NOTE: 100% vibe coded — written entirely by an AI coding assistant (Claude) with human steering.
 # Validation of the T2K implementation against the official frequentist results of arXiv:2506.05889
 # (reactor constraint on θ₁₃): Δχ²(δCP) per mass ordering, and the sin²θ₂₃–Δm² regions (digitised).
 # The official Δm² contours are smeared for simulated-data studies and the δCP intervals in the paper

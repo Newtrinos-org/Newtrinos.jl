@@ -8,6 +8,7 @@ using Accessors
 using CairoMakie
 using HDF5
 
+# NOTE: 100% vibe coded — written entirely by an AI coding assistant (Claude) with human steering.
 # Validation of the NOvA 2024 implementation against the official credible regions shipped with the
 # data release (contours_RCDB1D_cond: Daya Bay 1D constraint on sin²2θ₁₃, normal ordering).
 # Note: the official regions are Bayesian (marginalised), ours are profile-likelihood regions.

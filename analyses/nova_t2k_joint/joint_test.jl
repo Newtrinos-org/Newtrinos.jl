@@ -1,3 +1,4 @@
+# NOTE: 100% vibe coded — written entirely by an AI coding assistant (Claude) with human steering.
 using Distributions
 using DensityInterface
 using BAT
