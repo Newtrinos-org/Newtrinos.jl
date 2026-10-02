@@ -994,12 +994,12 @@ function compute_dVdE(layer, anti, interaction::SI, ::Val{N}) where N
     dVdE = zeros(typeof(ve), N, N)
     if anti
         dVdE[1,1] = ve * (-2 * layer.p_density + layer.n_density)
-        for i in 2:N
+        for i in 2:min(N, 3)   # NC potential on active flavours only (no sterile/KK states)
             dVdE[i,i] = ve * layer.n_density
         end
     else
         dVdE[1,1] = ve * (2 * layer.p_density - layer.n_density)
-        for i in 2:N
+        for i in 2:min(N, 3)   # NC potential on active flavours only (no sterile/KK states)
             dVdE[i,i] = ve * (-layer.n_density)
         end
     end

@@ -408,17 +408,18 @@ end
 Compute the up/down flux asymmetry correction factor.
 
 Uses a smooth ``\\tanh(3\\,\\cos\\theta_z)`` transition to interpolate between
-`1/up_down_ratio` (downgoing) and `up_down_ratio` (upgoing).
+`1/up_down_ratio` (upgoing, ``\\cos\\theta_z = -1``) and `up_down_ratio` (downgoing,
+``\\cos\\theta_z = +1``).
 
 # Arguments
 - `coszen`: cosine of the zenith angle (scalar or array).
-- `up_down_ratio`: ratio of upgoing to downgoing flux modification.
+- `up_down_ratio`: flux modification factor for downgoing neutrinos (its inverse applies to upgoing ones).
 
 # Returns
 A multiplicative correction factor array.
 """
 function updown(coszen, up_down_ratio)
-    # Smooth transition function: ranges from -1 (down) to +1 (up)
+    # Smooth transition function: ranges from -1 (upgoing, coszen = -1) to +1 (downgoing, coszen = +1)
     transition = tanh.(3 * coszen)
     # Interpolate between 1/up_down_ratio and up_down_ratio
     scale = (1 ./ up_down_ratio).^(0.5 * (1 .- transition)) .* (up_down_ratio).^(0.5 * (1 .+ transition))
