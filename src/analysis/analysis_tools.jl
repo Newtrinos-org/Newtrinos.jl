@@ -585,7 +585,7 @@ the cached result is returned. Otherwise the result is computed and saved.
 # Returns
 A 3-tuple `(llh, log_posterior, result)` — see [`find_mle`](@ref).
 """
-function find_mle_cached(likelihood, prior, params, cache_dir)
+function find_mle_cached(likelihood, prior, params, cache_dir; adsel = AutoPolyesterForwardDiff())
     opt_result = nothing
 
     h = ContentHashes.hash([prior, params])
@@ -600,7 +600,7 @@ function find_mle_cached(likelihood, prior, params, cache_dir)
     end
 
     if isnothing(opt_result)
-        opt_result = find_mle(likelihood, prior, params)
+        opt_result = find_mle(likelihood, prior, params; adsel = adsel)
     end
 
     if !isnothing(cache_dir)
@@ -748,8 +748,14 @@ to override the parallelism strategy.
 # Returns
 A NamedTuple of result arrays as produced by [`assemble_profile_results`](@ref).
 """
-function _profile(likelihood, scanpoints, params, cache_dir; map_func=nothing)
-    do_work(i) = find_mle_cached(likelihood, scanpoints[i], deepcopy(params), cache_dir)
+# AD backend for the per-point fits of a profile scan. With the default threaded loop the threads
+# are already busy with scan points, so a threaded AD backend (Polyester) inside each fit only adds
+# contention; use plain ForwardDiff there. Otherwise (one thread, or a custom map_func such as pmap
+# whose workers have their own threads) keep the find_mle default.
+_profile_adsel(map_func) = isnothing(map_func) && Threads.nthreads() > 1 ? AutoForwardDiff() : AutoPolyesterForwardDiff()
+
+function _profile(likelihood, scanpoints, params, cache_dir; map_func=nothing, adsel=_profile_adsel(map_func))
+    do_work(i) = find_mle_cached(likelihood, scanpoints[i], deepcopy(params), cache_dir; adsel = adsel)
 
     if isnothing(map_func)
         # Default: threaded execution
@@ -768,7 +774,7 @@ end
 
 """
     profile(likelihood, priors, vars_to_scan, params;
-            cache_dir=nothing, map_func=nothing) -> NewtrinosResult
+            cache_dir=nothing, map_func=nothing, adsel=...) -> NewtrinosResult
 
 Run a profile likelihood scan over a parameter grid.
 
@@ -786,12 +792,15 @@ Also collects meta data of the profile process and attaches it the returned obje
   (created if absent). Pass `nothing` to disable (this is the default).
 - `map_func`: custom mapping function for parallelism (e.g. `pmap` for
   distributed workers). Defaults to `Threads.@threads`.
+- `adsel`: AD backend for the per-point fits. Defaults to `AutoForwardDiff()` for the threaded
+  loop (the threads are busy with scan points, so a threaded AD backend would only contend), and
+  to `AutoPolyesterForwardDiff()` otherwise.
 
 # Returns
 A [`NewtrinosResult`](@ref) NewtrinosResult(axes, values, meta) 
 with the scan grid axes, per-point profiling results, and meta data.
 """
-function profile(likelihood, priors, vars_to_scan, params; cache_dir=nothing, map_func=nothing)
+function profile(likelihood, priors, vars_to_scan, params; cache_dir=nothing, map_func=nothing, adsel=_profile_adsel(map_func))
     t1 = time()
     # check if there is actually any variable to be profiled over, or if they are all just Numbers
     if all([isa(priors[var], Number) for var in setdiff(keys(priors), keys(vars_to_scan))])
@@ -806,7 +815,7 @@ function profile(likelihood, priors, vars_to_scan, params; cache_dir=nothing, ma
             mkdir(cache_dir)
         end
     end
-    res = _profile(likelihood, scanpoints, params, cache_dir; map_func=map_func)
+    res = _profile(likelihood, scanpoints, params, cache_dir; map_func=map_func, adsel=adsel)
     t2 = time()
     meta = Dict("task"=> "profile", "priors"=>priors, "vars_to_scan"=>vars_to_scan, "params"=>params, "exec_time"=>t2-t1, "cache_dir"=>cache_dir)
     add_meta!(meta)
