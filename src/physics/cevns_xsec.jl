@@ -11,12 +11,16 @@ using ..Newtrinos
 Configured Coherent Elastic neutrino-Nucleus Scattering (CEvNS) cross-section module.
 
 Computes the differential cross section ``d\\sigma/dE_r`` for neutrino scattering off
-atomic nuclei, including optional beyond-Standard-Model deformations parameterized by
-`cevns_xsec_a` through `cevns_xsec_d`.
+atomic nuclei. Two cross-section models are available (`xsec_model` in [`configure`](@ref)):
+- `:bsm` (default): beyond-Standard-Model deformations parameterized by `cevns_xsec_a`
+  through `cevns_xsec_d`;
+- `:sm_scale`: the Standard-Model cross section (the `:bsm` model at its SM point) times an
+  overall normalisation `cevns_xsec_scale`, e.g. to measure the CEvNS rate or cross section.
 
 # Fields
 - `params::NamedTuple`: nominal values for ``\\sin^2\\theta_W``, the nuclear radii
-  `Rn_*` (one per isotope), and the four BSM deformation parameters.
+  `Rn_*` (one per isotope), and the four BSM deformation parameters (`:bsm`) or the
+  normalisation `cevns_xsec_scale` (`:sm_scale`).
 - `priors::NamedTuple`: prior distributions for each parameter.
 - `diff_xsec::Function`: closure returning the differential cross section. See
   [`get_diff_xsec`](@ref) for the call signature.
@@ -36,8 +40,12 @@ const alph = 1/137
 const ep= (mpi^2-mmu^2)/(2*mpi)
 const hcut_c = 197.326963 # MeV*fm
 
+"Values of the deformation parameters `cevns_xsec_a`–`d` at which [`ds`](@ref) is the SM cross section"
+const SM_DEFORMATION = (cevns_xsec_a = 1.0, cevns_xsec_b = -0.5, cevns_xsec_c = -1.0, cevns_xsec_d = 1.0)
+const XSEC_MODELS = (:bsm, :sm_scale)
+
 """
-    configure(isotopes, er_centers, enu_centers; ff_model=:helm, ff_kwargs=(;)) -> CevnsXsec
+    configure(isotopes, er_centers, enu_centers; ff_model=:helm, ff_kwargs=(;), xsec_model=:bsm) -> CevnsXsec
 
 Create a [`CevnsXsec`](@ref) module from a list of isotope descriptors and energy grids.
 
@@ -58,14 +66,18 @@ Builds cross-section assets and assembles per-isotope parameters and priors via
   `:sym_fermi` (default `:helm`). See [`ffsq`](@ref).
 - `ff_kwargs::NamedTuple`: extra keyword arguments forwarded to the chosen form-factor
   model (e.g. `(s_fm=0.9,)`).
+- `xsec_model::Symbol`: `:bsm` (default, deformation parameters `cevns_xsec_a`–`d`) or
+  `:sm_scale` (SM cross section times `cevns_xsec_scale`).
 
 # Returns
 A [`CevnsXsec`](@ref) instance.
 """
-function configure(isotopes, er_centers, enu_centers; ff_model::Symbol = :helm, ff_kwargs::NamedTuple = (;))
-    # Build assets from isotopes (and store FF choice in assets)
-    assets = get_assets(isotopes, er_centers, enu_centers; ff_model = ff_model, ff_kwargs = ff_kwargs)
-    params, priors = build_params_and_priors(isotopes)
+function configure(isotopes, er_centers, enu_centers; ff_model::Symbol = :helm, ff_kwargs::NamedTuple = (;),
+                   xsec_model::Symbol = :bsm)
+    xsec_model in XSEC_MODELS || throw(ArgumentError("unknown CEvNS xsec_model $xsec_model, choose one of $XSEC_MODELS"))
+    # Build assets from isotopes (and store FF and cross-section model choice in assets)
+    assets = get_assets(isotopes, er_centers, enu_centers; ff_model = ff_model, ff_kwargs = ff_kwargs, xsec_model = xsec_model)
+    params, priors = build_params_and_priors(isotopes; xsec_model = xsec_model)
     CevnsXsec(
         params = params,
         priors = priors,
@@ -99,12 +111,14 @@ function configure(params::NamedTuple, priors::NamedTuple)
 end
 
 """
-    build_params_and_priors(isotopes) -> (NamedTuple, NamedTuple)
+    build_params_and_priors(isotopes; xsec_model=:bsm) -> (NamedTuple, NamedTuple)
 
 Assemble default parameter values and prior distributions for a given set of isotopes.
 
-Includes the weak mixing angle ``\\sin^2\\theta_W`` and four BSM deformation parameters
-`cevns_xsec_a` through `cevns_xsec_d` that modify the SM differential cross section.
+Includes the weak mixing angle ``\\sin^2\\theta_W`` and, for `xsec_model = :bsm`, four BSM
+deformation parameters `cevns_xsec_a` through `cevns_xsec_d` that modify the SM differential
+cross section, or, for `xsec_model = :sm_scale`, the overall normalisation `cevns_xsec_scale`
+of the SM cross section (nominal 1, prior `Uniform(0, 3)`).
 
 Per-isotope nuclear radius parameters `Rn_*` are appended automatically using the
 `Rn_key` field of each isotope descriptor.
@@ -116,23 +130,25 @@ Per-isotope nuclear radius parameters `Rn_*` are appended automatically using th
 # Returns
 A 2-tuple `(params::NamedTuple, priors::NamedTuple)`.
 """
-function build_params_and_priors(isotopes)
+function build_params_and_priors(isotopes; xsec_model::Symbol = :bsm)
     # Dynamic parameter/prior builder for isotope-specific Rn keys, using isotope list
-    param_dict = Dict(
-        :cevns_xsec_a => 1.0,
-        :cevns_xsec_b => -0.5,
-        :cevns_xsec_c => -1.0,
-        :cevns_xsec_d => 1.0,
-        :sin2thetaW => 0.231,
-    )
+    param_dict = Dict{Symbol, Float64}(:sin2thetaW => 0.231)
     prior_dict = Dict{Symbol, Distributions.Distribution}(
-        :cevns_xsec_a => Uniform(0, 2),
-        :cevns_xsec_b => Uniform(-2.0, 1.0),
-        :cevns_xsec_c => Uniform(-3000, 3000),
-        :cevns_xsec_d => Uniform(-1e6, 1e6),
         #:sin2thetaW => truncated(Normal(0.2382, 0.0011), 0.2, 0.26),
         :sin2thetaW => Uniform(0.2, 0.26),
     )
+    if xsec_model == :bsm
+        merge!(param_dict, Dict(pairs(SM_DEFORMATION)))
+        merge!(prior_dict, Dict(
+            :cevns_xsec_a => Uniform(0, 2),
+            :cevns_xsec_b => Uniform(-2.0, 1.0),
+            :cevns_xsec_c => Uniform(-3000, 3000),
+            :cevns_xsec_d => Uniform(-1e6, 1e6),
+        ))
+    else # :sm_scale
+        param_dict[:cevns_xsec_scale] = 1.0
+        prior_dict[:cevns_xsec_scale] = Uniform(0, 3)
+    end
     for iso in isotopes
         param_dict[iso.Rn_key] = iso.Rn_nom
         prior_dict[iso.Rn_key] = truncated(Normal(iso.Rn_nom, iso.Rn_nom*0.05), 0.8*iso.Rn_nom, 1.2*iso.Rn_nom)
@@ -142,7 +158,7 @@ function build_params_and_priors(isotopes)
 end
 
 """
-    get_assets(isotopes, er_centers, enu_centers; ff_model=:helm, ff_kwargs=(;)) -> NamedTuple
+    get_assets(isotopes, er_centers, enu_centers; ff_model=:helm, ff_kwargs=(;), xsec_model=:bsm) -> NamedTuple
 
 Package isotope data, energy grids, and the chosen form-factor model into an assets
 NamedTuple for use by [`get_diff_xsec`](@ref).
@@ -153,6 +169,7 @@ NamedTuple for use by [`get_diff_xsec`](@ref).
 - `enu_centers`: neutrino energy grid [MeV].
 - `ff_model::Symbol`: nuclear form-factor model (default `:helm`). See [`ffsq`](@ref).
 - `ff_kwargs::NamedTuple`: extra keyword arguments forwarded to the form-factor model.
+- `xsec_model::Symbol`: cross-section model, `:bsm` or `:sm_scale` (see [`configure`](@ref)).
 
 # Returns
 A `NamedTuple` with fields:
@@ -160,8 +177,10 @@ A `NamedTuple` with fields:
 - `er_centers`: the recoil energy grid.
 - `enu_centers`: the neutrino energy grid.
 - `ff_model`, `ff_kwargs`: the form-factor model choice and its extra keyword arguments.
+- `xsec_model`: the cross-section model.
 """
-function get_assets(isotopes, er_centers, enu_centers; ff_model::Symbol = :helm, ff_kwargs::NamedTuple = (;))
+function get_assets(isotopes, er_centers, enu_centers; ff_model::Symbol = :helm, ff_kwargs::NamedTuple = (;),
+                    xsec_model::Symbol = :bsm)
     # Extract isotope data into a structured format
     @info "Configuring CEvNS cross-section assets"
     isotope_data = Dict(iso.Rn_key => (
@@ -178,6 +197,7 @@ function get_assets(isotopes, er_centers, enu_centers; ff_model::Symbol = :helm,
         enu_centers = enu_centers,
         ff_model = ff_model,
         ff_kwargs = ff_kwargs,
+        xsec_model = xsec_model,
     )
 end
 
@@ -386,7 +406,9 @@ The returned function has signature:
 diff_xsec(params::NamedTuple) -> Dict{Symbol, Matrix}
 ```
 It iterates over all isotopes, calling [`ds`](@ref) for each, and returns a `Dict`
-mapping each `Rn_key` to its ``(n_{E_r} \\times n_{E_\\nu})`` cross-section matrix.
+mapping each `Rn_key` to its ``(n_{E_r} \\times n_{E_\\nu})`` cross-section matrix. For the
+`:sm_scale` model, [`ds`](@ref) is evaluated at the SM deformation values
+([`SM_DEFORMATION`](@ref)) and multiplied by `params.cevns_xsec_scale`.
 
 # Arguments
 - `assets`: NamedTuple produced by [`get_assets`](@ref).
@@ -402,16 +424,21 @@ function get_diff_xsec(assets)
     # Configure the form-factor function from assets (model+kwargs live here)
     ffsq_fn = ffsq(assets)
 
+    sm_scale = assets.xsec_model == :sm_scale
+
     return function (params)
-        #param_type = eltype(params[:cevns_xsec_a])
-        param_type = promote_type(typeof(params.cevns_xsec_a), typeof(params.sin2thetaW))
+        # SM-scaled model: the BSM formula at its SM point, times an overall normalisation
+        p = sm_scale ? merge(params, SM_DEFORMATION) : params
+        scale = sm_scale ? params.cevns_xsec_scale : one(params.sin2thetaW)
+        param_type = promote_type(typeof(p.cevns_xsec_a), typeof(p.sin2thetaW), typeof(scale))
         xsec_dict = Dict{Symbol, Matrix{param_type}}()
 
         for (Rn_key, iso) in isotopes
             mass = iso.mass
             Z = iso.Z
             N = iso.N
-            xsec_dict[Rn_key] = ds(er_centers, enu_centers, params, (mass, Z, N), Rn_key; ffsq_fn = ffsq_fn)
+            xs = ds(er_centers, enu_centers, p, (mass, Z, N), Rn_key; ffsq_fn = ffsq_fn)
+            xsec_dict[Rn_key] = sm_scale ? scale .* xs : xs
         end
 
         return xsec_dict

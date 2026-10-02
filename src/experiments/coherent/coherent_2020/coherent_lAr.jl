@@ -23,7 +23,7 @@ import ..Newtrinos
     plot::Function
 end
 
-function configure(; datadir = @__DIR__, use_flux_data::Bool = false, ff_model::Symbol = :helm, ff_kwargs::NamedTuple = (;))
+function configure(; datadir = @__DIR__, use_flux_data::Bool = false, ff_model::Symbol = :helm, ff_kwargs::NamedTuple = (;), xsec_model::Symbol = :bsm)
     # Load assets for the experiment
     assets = get_assets(datadir, use_flux_data)
     if use_flux_data
@@ -47,6 +47,7 @@ function configure(; datadir = @__DIR__, use_flux_data::Bool = false, ff_model::
         sns_flux.assets.E;          # Pass the energy grid from the SNS flux assets
         ff_model = ff_model,
         ff_kwargs = ff_kwargs,
+        xsec_model = xsec_model,
     )
 
     # Combine SNS flux and CEvNS cross-section into the physics NamedTuple
