@@ -429,19 +429,12 @@ function get_diff_xsec(assets)
     return function (params)
         # SM-scaled model: the BSM formula at its SM point, times an overall normalisation
         p = sm_scale ? merge(params, SM_DEFORMATION) : params
-        scale = sm_scale ? params.cevns_xsec_scale : one(params.sin2thetaW)
-        param_type = promote_type(typeof(p.cevns_xsec_a), typeof(p.sin2thetaW), typeof(scale))
-        xsec_dict = Dict{Symbol, Matrix{param_type}}()
-
-        for (Rn_key, iso) in isotopes
-            mass = iso.mass
-            Z = iso.Z
-            N = iso.N
-            xs = ds(er_centers, enu_centers, p, (mass, Z, N), Rn_key; ffsq_fn = ffsq_fn)
-            xsec_dict[Rn_key] = sm_scale ? scale .* xs : xs
-        end
-
-        return xsec_dict
+        xs = Dict(Rn_key => ds(er_centers, enu_centers, p, (iso.mass, iso.Z, iso.N), Rn_key; ffsq_fn = ffsq_fn)
+                  for (Rn_key, iso) in isotopes)
+        # element type from the computed matrices (any parameter, e.g. a fitted nuclear radius, may carry
+        # ForwardDiff duals while others are fixed Float64s), and the overall normalisation if any
+        T = promote_type(map(eltype, values(xs))..., sm_scale ? typeof(params.cevns_xsec_scale) : Float64)
+        return Dict{Symbol, Matrix{T}}(k => (sm_scale ? params.cevns_xsec_scale .* v : v) for (k, v) in xs)
     end
 end
 end # module cevns_xsec
