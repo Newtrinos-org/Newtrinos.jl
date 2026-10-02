@@ -1,2 +1,0 @@
-NO: best fit |Δm²₃₂| = 2.458 (official 2.43), sin²θ₂₃ = 0.557 (0.561), δCP = -1.00π (-0.87π); -2ΔlogL vs global = 0.00; 1σ δCP grid points in [-1.00π, 0.95π]
-IO: best fit |Δm²₃₂| = 2.496 (official 2.48), sin²θ₂₃ = 0.557 (0.563), δCP = -0.45π (-0.47π); -2ΔlogL vs global = 0.46; 1σ δCP grid points in [-0.60π, -0.35π]
