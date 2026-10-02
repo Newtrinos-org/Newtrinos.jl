@@ -178,60 +178,39 @@ end
 # ------------- Define Model --------
 
 
-function make_hist(e_idx, c_idx, p_idx, w, size=(10,10,2))
-    hist = similar(w, size)
-    fill!(hist, zero(eltype(hist)))
-    for i in 1:length(w)
-        hist[e_idx[i], c_idx[i], p_idx[i]] += w[i]
+# Histogram one MC channel straight from the (oscillated) flux on the fine true (E, cosθ) grid:
+# each MC event adds lifetime · weight · flux[true bin] to its reco bin. Gathering and filling in
+# one loop avoids per-event temporary arrays, which under ForwardDiff (Dual elements) dominate
+# allocations and GC time.
+function make_hist_per_channel(mc, flux_at, lifetime_seconds, size=(10,10,2))
+    w1 = lifetime_seconds * first(mc.weight)
+    hist = zeros(typeof(w1 * flux_at(first(mc.ef_idx), first(mc.cf_idx))), size)
+    weight, ef, cf, e, c, pid = mc.weight, mc.ef_idx, mc.cf_idx, mc.e_idx, mc.c_idx, mc.p_idx
+    @inbounds for i in eachindex(weight)
+        hist[e[i], c[i], pid[i]] += lifetime_seconds * weight[i] * flux_at(ef[i], cf[i])
     end
     hist
 end
 
-function make_hist_per_channel(mc, osc_flux, lifetime_seconds)
-    w = lifetime_seconds * mc.weight .* osc_flux
-    make_hist(mc.e_idx, mc.c_idx, mc.p_idx, w)
-end
 
-
-# Function that should NOT allocate
-function gather_flux(p_flux, ef, cf, j)
-    result = Vector{eltype(p_flux)}(undef, length(ef))
-    @inbounds for i in eachindex(ef)
-        result[i] = p_flux[ef[i], cf[i], j]
-    end
-    result
-end
-
-# Function that should NOT allocate
-function gather_flux_nc(s_flux, ef, cf)
-    result = Vector{eltype(s_flux)}(undef, length(ef))
-    @inbounds for i in eachindex(ef)
-        result[i] = s_flux[ef[i], cf[i]] / 3
-    end
-    result
-end
-
-
+# Oscillated fluxes on the fine true grid: `nu`/`nubar` indexed [E, cosθ, detected flavour], and the
+# unoscillated flux summed over flavours for NC (`nc` for ν, `nc_bar` for ν̄)
 function reweight(params, physics, assets)
     sys_flux = physics.atm_flux.sys_flux(assets.flux, params)
 
     s = (size(assets.binning.e_fine)[1], size(assets.binning.cz_fine)[1])
 
     p = physics.osc.osc_prob(assets.binning.e_fine, assets.paths, assets.layers, params)
-    p_flux = reshape(sys_flux.nue, s) .* p[:, :, 1, :] .+ reshape(sys_flux.numu, s) .* p[:, :, 2, :]
-    
-    nus = NamedTuple(ch=>gather_flux(p_flux, assets.mc[ch].ef_idx, assets.mc[ch].cf_idx, i) for (i, ch) in enumerate([:nue_cc, :numu_cc, :nutau_cc]))
+    nu = @views reshape(sys_flux.nue, s) .* p[:, :, 1, :] .+ reshape(sys_flux.numu, s) .* p[:, :, 2, :]
 
-    nu_ncs = (nu_nc = gather_flux_nc(reshape(sys_flux.nue .+ sys_flux.numu, s),  assets.mc[:nu_nc].ef_idx, assets.mc[:nu_nc].cf_idx),)
-    
     p = physics.osc.osc_prob(assets.binning.e_fine, assets.paths, assets.layers, params, anti=true)
-    p_flux = reshape(sys_flux.nuebar, s) .* p[:, :, 1, :] .+ reshape(sys_flux.numubar, s) .* p[:, :, 2, :]
+    nubar = @views reshape(sys_flux.nuebar, s) .* p[:, :, 1, :] .+ reshape(sys_flux.numubar, s) .* p[:, :, 2, :]
 
-    nubars = NamedTuple(ch=>gather_flux(p_flux, assets.mc[ch].ef_idx, assets.mc[ch].cf_idx, i) for (i, ch) in enumerate([:nuebar_cc, :numubar_cc, :nutaubar_cc]))
+    # NC: flavour-summed (unoscillated) flux, separately for ν and ν̄
+    nc = reshape(sys_flux.nue .+ sys_flux.numu, s)
+    nc_bar = reshape(sys_flux.nuebar .+ sys_flux.numubar, s)
 
-    nubar_ncs = (nubar_nc = gather_flux_nc(reshape(sys_flux.nue .+ sys_flux.numu, s),  assets.mc[:nubar_nc].ef_idx, assets.mc[:nubar_nc].cf_idx),)
-    
-    merge(nu_ncs, nus, nubar_ncs, nubars)
+    (; nu, nubar, nc, nc_bar)
 end
 
 function interpolate_hypersurface(h, idx, fraction)
@@ -252,10 +231,12 @@ end
 
 function apply_hypersurfaces(hists, params, physics, assets)
 
-    x = params.Δm²₃₁
+    # Linear interpolation of the hypersurfaces in |Δm²₃₁| on the grid X: segment X[idx]..X[idx+1]
+    # (clamped to the grid, so values outside are linearly extrapolated from the end segments)
+    x = abs(params.Δm²₃₁)
     X = assets.binning.hs_dm31
     Δx = X[2] - X[1]
-    idx = floor(Int, (x - X[1]) / Δx)
+    idx = clamp(floor(Int, (x - X[1]) / Δx) + 1, 1, length(X) - 1)
     fraction = (x - X[idx]) / Δx
 
     f_nu_nc_nue_cc = get_hypersurface_factor(assets.hypersurfaces.nu_nc_nue_cc, idx, fraction, params)
@@ -281,7 +262,16 @@ function get_expected(params, physics, assets)
 
     lifetime_seconds = params.deepcore_aeff_scale * 365. * 24. * 3600. * 7.5 * 1e-4 #(cm2 -> m2)
 
-    hists = NamedTuple(ch=>make_hist_per_channel(assets.mc[ch], osc_flux[ch], lifetime_seconds) for ch in keys(assets.mc))
+    f = osc_flux
+    H(ch, flux_at) = make_hist_per_channel(assets.mc[ch], flux_at, lifetime_seconds)
+    hists = (nu_nc       = H(:nu_nc,       (e, c) -> f.nc[e, c] / 3),
+             nubar_nc    = H(:nubar_nc,    (e, c) -> f.nc_bar[e, c] / 3),
+             nue_cc      = H(:nue_cc,      (e, c) -> f.nu[e, c, 1]),
+             nuebar_cc   = H(:nuebar_cc,   (e, c) -> f.nubar[e, c, 1]),
+             numu_cc     = H(:numu_cc,     (e, c) -> f.nu[e, c, 2]),
+             numubar_cc  = H(:numubar_cc,  (e, c) -> f.nubar[e, c, 2]),
+             nutau_cc    = H(:nutau_cc,    (e, c) -> f.nu[e, c, 3]),
+             nutaubar_cc = H(:nutaubar_cc, (e, c) -> f.nubar[e, c, 3]))
     
     expected_nu = apply_hypersurfaces(hists, params, physics, assets)
 

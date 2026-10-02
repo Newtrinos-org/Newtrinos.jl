@@ -408,17 +408,18 @@ end
 Compute the up/down flux asymmetry correction factor.
 
 Uses a smooth ``\\tanh(3\\,\\cos\\theta_z)`` transition to interpolate between
-`1/up_down_ratio` (downgoing) and `up_down_ratio` (upgoing).
+`1/up_down_ratio` (upgoing, ``\\cos\\theta_z = -1``) and `up_down_ratio` (downgoing,
+``\\cos\\theta_z = +1``).
 
 # Arguments
 - `coszen`: cosine of the zenith angle (scalar or array).
-- `up_down_ratio`: ratio of upgoing to downgoing flux modification.
+- `up_down_ratio`: flux modification factor for downgoing neutrinos (its inverse applies to upgoing ones).
 
 # Returns
 A multiplicative correction factor array.
 """
 function updown(coszen, up_down_ratio)
-    # Smooth transition function: ranges from -1 (down) to +1 (up)
+    # Smooth transition function: ranges from -1 (upgoing, coszen = -1) to +1 (downgoing, coszen = +1)
     transition = tanh.(3 * coszen)
     # Interpolate between 1/up_down_ratio and up_down_ratio
     scale = (1 ./ up_down_ratio).^(0.5 * (1 .- transition)) .* (up_down_ratio).^(0.5 * (1 .+ transition))
@@ -455,49 +456,67 @@ modified flux arrays.
 """
 function get_sys_flux(cfg::Barr)
     function sys_flux(flux, params)
-
-        e = flux.true_energy
-        log10e = flux.log10_true_energy
-        cz = flux.true_coszen
-
-        # spectral
-        f_spectral_shift = (e ./ 24.0900951261) .^ params.atm_flux_delta_spectral_index
-
-        # all coefficients below come from fits to the Figs. 7 & 9 in Uncertainties in Atmospheric Neutrino Fluxes by Barr & Robbins
-
-        # nue - nuebar
-        uncert = ((0.73 * e) .^(0.59) .+ 4.8) / 100.
-        flux_nue1, flux_nuebar1 = scale_flux(flux.nue, flux.nuebar, 1. .+ (params.atm_flux_nuenuebar_sigma .* uncert))
-
-        # numu - numubar
-        uncert = ((9.6 * e) .^(0.41) .-0.8) / 100.
-        flux_numu1, flux_numubar1 = scale_flux(flux.numu, flux.numubar, 1. .+ (params.atm_flux_numunumubar_sigma .* uncert))
-
-        # nue - numu
-        uncert = ((0.051 * e) .^(0.63) .+ 0.73) / 100.
-        flux_nue2, flux_numu2 = scale_flux(flux_nue1, flux_numu1, 1. .+ (params.atm_flux_nuenumu_sigma .* uncert))
-        flux_nuebar2, flux_numubar2 = scale_flux(flux_nuebar1, flux_numubar1, 1. .+ (params.atm_flux_nuenumu_sigma .* uncert))
-
-        #up/down
-        uncert = max.(0., 7 ./ (1 .+ (e./0.5) .^2)) / 100.
-        f_updown = updown(cz, 1 .+ uncert * params.atm_flux_updown_sigma)
-
-        # up/horizontal
-        # nue
-        uncert = (-0.43*log10e.^5 .+ 1.17*log10e.^4 .+ 0.89*log10e.^3 .- 0.36*log10e.^2 .- 1.59*log10e .+ 1.96) / 100.
-        f_uphorizontal = uphorizontal.(cz, 1 .+ uncert * params.atm_flux_uphorizonzal_sigma)
-        flux_nue3 = flux_nue2 .* f_spectral_shift .* f_uphorizontal .* f_updown
-        flux_nuebar3 = flux_nuebar2 .* f_spectral_shift .* f_uphorizontal .* f_updown
-
-        #numu
-        uncert = (-0.16*log10e.^5 .+ 0.45*log10e.^4 .+ 0.48*log10e.^3 .+ 0.17*log10e.^2 .- 1.88*log10e .+ 1.88) / 100.
-        f_uphorizontal = uphorizontal.(cz, 1 .+ uncert * params.atm_flux_uphorizonzal_sigma)
-        flux_numu3 = flux_numu2 .* f_spectral_shift .* f_uphorizontal .* f_updown
-        flux_numubar3 = flux_numubar2 .* f_spectral_shift .* f_uphorizontal .* f_updown
-
-        return (nue=flux_nue3, numu=flux_numu3, nuebar=flux_nuebar3, numubar=flux_numubar3)
-
+        # One fused pass over the grid (see `_barr_point`) instead of ~40 full-size temporaries
+        r = _barr_point.(flux.true_energy, flux.log10_true_energy, flux.true_coszen,
+                         flux.nue, flux.numu, flux.nuebar, flux.numubar, Ref(params))
+        return (nue=getindex.(r, 1), numu=getindex.(r, 2), nuebar=getindex.(r, 3), numubar=getindex.(r, 4))
     end
+end
+
+# scale_flux for a single grid point: modify the A/B ratio by `scale` keeping A + B fixed
+@inline function _scale_flux1(A, B, scale)
+    r = A / B
+    total = A + B
+    mod_B = total / (1 + r * scale)
+    mod_A = r * scale * mod_B
+    return mod_A, mod_B
+end
+
+# updown for a single grid point
+@inline function _updown1(coszen, up_down_ratio)
+    transition = tanh(3 * coszen)
+    (1 / up_down_ratio)^(0.5 * (1 - transition)) * (up_down_ratio)^(0.5 * (1 + transition))
+end
+
+# Barr systematics at one (E, cosθ) grid point; same operations, in the same order, as the
+# array formulation (spectral tilt, ν/ν̄ and νe/νμ ratios, up/down, up/horizontal).
+@inline function _barr_point(e, log10e, cz, nue, numu, nuebar, numubar, params)
+    # spectral
+    f_spectral_shift = (e / 24.0900951261) ^ params.atm_flux_delta_spectral_index
+
+    # all coefficients below come from fits to the Figs. 7 & 9 in Uncertainties in Atmospheric Neutrino Fluxes by Barr & Robbins
+
+    # nue - nuebar
+    uncert = ((0.73 * e)^(0.59) + 4.8) / 100.
+    flux_nue1, flux_nuebar1 = _scale_flux1(nue, nuebar, 1. + (params.atm_flux_nuenuebar_sigma * uncert))
+
+    # numu - numubar
+    uncert = ((9.6 * e)^(0.41) - 0.8) / 100.
+    flux_numu1, flux_numubar1 = _scale_flux1(numu, numubar, 1. + (params.atm_flux_numunumubar_sigma * uncert))
+
+    # nue - numu
+    uncert = ((0.051 * e)^(0.63) + 0.73) / 100.
+    flux_nue2, flux_numu2 = _scale_flux1(flux_nue1, flux_numu1, 1. + (params.atm_flux_nuenumu_sigma * uncert))
+    flux_nuebar2, flux_numubar2 = _scale_flux1(flux_nuebar1, flux_numubar1, 1. + (params.atm_flux_nuenumu_sigma * uncert))
+
+    # up/down
+    uncert = max(0., 7 / (1 + (e / 0.5)^2)) / 100.
+    f_updown = _updown1(cz, 1 + uncert * params.atm_flux_updown_sigma)
+
+    # up/horizontal
+    # nue
+    uncert = (-0.43*log10e^5 + 1.17*log10e^4 + 0.89*log10e^3 - 0.36*log10e^2 - 1.59*log10e + 1.96) / 100.
+    f_uphorizontal = uphorizontal(cz, 1 + uncert * params.atm_flux_uphorizonzal_sigma)
+    flux_nue3 = flux_nue2 * f_spectral_shift * f_uphorizontal * f_updown
+    flux_nuebar3 = flux_nuebar2 * f_spectral_shift * f_uphorizontal * f_updown
+
+    # numu
+    uncert = (-0.16*log10e^5 + 0.45*log10e^4 + 0.48*log10e^3 + 0.17*log10e^2 - 1.88*log10e + 1.88) / 100.
+    f_uphorizontal = uphorizontal(cz, 1 + uncert * params.atm_flux_uphorizonzal_sigma)
+    flux_numu3 = flux_numu2 * f_spectral_shift * f_uphorizontal * f_updown
+    flux_numubar3 = flux_numubar2 * f_spectral_shift * f_uphorizontal * f_updown
+
+    return (flux_nue3, flux_numu3, flux_nuebar3, flux_numubar3)
 end
 
 """

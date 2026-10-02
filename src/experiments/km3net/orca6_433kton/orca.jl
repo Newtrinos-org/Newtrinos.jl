@@ -106,31 +106,27 @@ function get_priors()
         )
 end
 
-# Function that should NOT allocate
-function gather_flux(p_flux, ef, cf, j)
-    result = Vector{eltype(p_flux)}(undef, length(ef))
-    @inbounds for i in eachindex(ef)
-        result[i] = p_flux[ef[i], cf[i], j]
-    end
-    result
-end
-
-
-function make_hist(e_idx, c_idx, p_idx, t_idx, w, size=(8,8,2,2))
-    hist = similar(w, size)
-    fill!(hist, zero(eltype(hist)))
-    for i in 1:length(w)
-        hist[e_idx[i], c_idx[i], p_idx[i], t_idx[i]] += w[i]
+# Histogram one MC channel straight from the oscillated flux on the true (E, cosθ) grid: each MC
+# row adds lifetime · W · flux[true bin] (× orca_norm_he for high-energy rows) to its reco bin.
+# CC rows use the flux oscillated into the channel's flavour j; NC rows (provided only for Pdg ±14,
+# standing for NC of all flavours) use the flavour-blind total active flux `p_flux_nc`.
+# Gathering and filling in one loop avoids per-event temporary arrays (~600k MC rows, 104 bytes per
+# element for Dual{12}), which otherwise dominate allocations and GC time under ForwardDiff.
+function make_hist_per_channel(mc, p_flux, p_flux_nc, j, lifetime_seconds, params, assets)
+    he_factor = params.orca_norm_he - 1.
+    T = typeof(lifetime_seconds * first(mc.W) * first(p_flux) * (first(mc.he_mask) * he_factor + 1.0))
+    hist = zeros(T, assets.reco_shape)
+    W, ef, cf, he = mc.W, mc.E_true_bin, mc.Ct_true_bin, mc.he_mask
+    er, cr, cls, cc = mc.E_reco_bin, mc.Ct_reco_bin, mc.AnaClass, mc.IsCC
+    @inbounds for i in eachindex(W)
+        f = cc[i] == 1 ? p_flux[ef[i], cf[i], j] : p_flux_nc[ef[i], cf[i]]
+        hist[er[i], cr[i], cls[i], cc[i] + 1] += lifetime_seconds * W[i] * f * (he[i] * he_factor + 1.0)
     end
     hist
 end
 
-function make_hist_per_channel(mc, osc_flux, lifetime_seconds, params, assets)
-    w = lifetime_seconds * mc.W .* osc_flux .* (mc.he_mask * (params.orca_norm_he - 1.) .+ 1.0)
-    h = make_hist(mc.E_reco_bin, mc.Ct_reco_bin, mc.AnaClass, mc.IsCC .+ 1, w, assets.reco_shape)
-end
 
-
+# Oscillated flux on the true grid, indexed [E, cosθ, detected flavour], for ν and ν̄
 function reweight(params, physics, assets)
 
     flux = physics.atm_flux.nominal_flux(assets.binning.e_fine * params.orca_energy_scale, assets.binning.cz_fine)
@@ -140,16 +136,12 @@ function reweight(params, physics, assets)
     s = assets.true_shape
 
     p = physics.osc.osc_prob(assets.binning.e_fine * params.orca_energy_scale, assets.paths, assets.layers, params)
-    p_flux = reshape(sys_flux.nue, s) .* p[:, :, 1, :] .+ reshape(sys_flux.numu, s) .* p[:, :, 2, :]
-    
-    nus = NamedTuple(ch=>gather_flux(p_flux, assets.mc[ch].E_true_bin, assets.mc[ch].Ct_true_bin, i) for (i, ch) in enumerate([:nue, :numu, :nutau]))
+    nu = @views reshape(sys_flux.nue, s) .* p[:, :, 1, :] .+ reshape(sys_flux.numu, s) .* p[:, :, 2, :]
 
     p = physics.osc.osc_prob(assets.binning.e_fine * params.orca_energy_scale, assets.paths, assets.layers, params, anti=true)
-    p_flux = reshape(sys_flux.nuebar, s) .* p[:, :, 1, :] .+ reshape(sys_flux.numubar, s) .* p[:, :, 2, :]
+    nubar = @views reshape(sys_flux.nuebar, s) .* p[:, :, 1, :] .+ reshape(sys_flux.numubar, s) .* p[:, :, 2, :]
 
-    nubars = NamedTuple(ch=>gather_flux(p_flux, assets.mc[ch].E_true_bin, assets.mc[ch].Ct_true_bin, i) for (i, ch) in enumerate([:nuebar, :numubar, :nutaubar]))
-
-    merge(nus, nubars)
+    (; nu, nubar)
 end
 
 function get_expected(params, physics, assets)
@@ -158,7 +150,13 @@ function get_expected(params, physics, assets)
 
     lifetime_seconds = 1.
 
-    hists = NamedTuple(ch=>make_hist_per_channel(assets.mc[ch], osc_flux[ch], lifetime_seconds, params, assets) for ch in keys(assets.mc))
+    # NC is flavour-blind: total active flux after oscillation, Σ_β Φ_osc(β)
+    nc_nu = dropdims(sum(osc_flux.nu, dims=3), dims=3)
+    nc_nubar = dropdims(sum(osc_flux.nubar, dims=3), dims=3)
+    H(ch, f, f_nc, j) = make_hist_per_channel(assets.mc[ch], f, f_nc, j, lifetime_seconds, params, assets)
+    hists = (nue = H(:nue, osc_flux.nu, nc_nu, 1), nuebar = H(:nuebar, osc_flux.nubar, nc_nubar, 1),
+             numu = H(:numu, osc_flux.nu, nc_nu, 2), numubar = H(:numubar, osc_flux.nubar, nc_nubar, 2),
+             nutau = H(:nutau, osc_flux.nu, nc_nu, 3), nutaubar = H(:nutaubar, osc_flux.nubar, nc_nubar, 3))
 
     hists_nc = sum(h[:, :, :, 1] for h in hists) * physics.xsec.scale(:any, :NC, params)
 

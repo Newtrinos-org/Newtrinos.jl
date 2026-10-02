@@ -994,12 +994,12 @@ function compute_dVdE(layer, anti, interaction::SI, ::Val{N}) where N
     dVdE = zeros(typeof(ve), N, N)
     if anti
         dVdE[1,1] = ve * (-2 * layer.p_density + layer.n_density)
-        for i in 2:N
+        for i in 2:min(N, 3)   # NC potential on active flavours only (no sterile/KK states)
             dVdE[i,i] = ve * layer.n_density
         end
     else
         dVdE[1,1] = ve * (2 * layer.p_density - layer.n_density)
-        for i in 2:N
+        for i in 2:min(N, 3)   # NC potential on active flavours only (no sterile/KK states)
             dVdE[i,i] = ve * (-layer.n_density)
         end
     end
@@ -1418,6 +1418,26 @@ end
 function propagate(U, h, E, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, propagation::PropagationModel, interaction::Vacuum, anti::Bool)
     L = [sum(segment.length for segment in path) for path in paths]
     propagate(U, h, E, L, propagation)
+end
+
+# Basic / Damping: write every (E, path) probability matrix straight into p_raw[out, in, E, path]
+# (one allocation), instead of stacking per energy, stacking over energies and permuting.
+function propagate(U, h, E, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, propagation::Union{Basic, Damping}, interaction::Union{SI, NSI}, anti::Bool, eigen_method::EigenMethod=DefaultEigen())
+    H_eff = U * Diagonal(h) * adjoint(U)
+    mm1 = [compute_matter_matrices(H_eff, first(E), layer, anti, interaction, eigen_method) for layer in layers]
+    P1 = osc_reduce(mm1, first(paths), first(E), propagation)
+    p = Array{eltype(P1)}(undef, size(P1)..., length(E), length(paths))
+    _fill_matter!(p, H_eff, E, layers, paths, anti, propagation, interaction, eigen_method)
+end
+
+function _fill_matter!(p, H_eff, E, layers, paths, anti, propagation, interaction, eigen_method)
+    for (ie, e) in enumerate(E)
+        matter_matrices = [compute_matter_matrices(H_eff, e, layer, anti, interaction, eigen_method) for layer in layers]
+        for (ip, path) in enumerate(paths)
+            @views p[:, :, ie, ip] .= osc_reduce(matter_matrices, path, e, propagation)
+        end
+    end
+    p
 end
 
 function propagate(U, h, E, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, propagation::PropagationModel, interaction::Union{SI, NSI}, anti::Bool, eigen_method::EigenMethod=DefaultEigen())

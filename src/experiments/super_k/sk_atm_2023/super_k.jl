@@ -629,19 +629,19 @@ function calc_weights(params, assets, physics)
     nuebar  = contract_R(assets.R.nuebar,  nuebar_flux)
     numubar = contract_R(assets.R.numubar, numubar_flux)
 
-    # nutau: SK MC lumps nutau + nutaubar CC into one channel.
-    # Use precomputed nu/nubar mixture fractions to combine with correct proportions.
-    nutau_combined = nutau_flux .* assets.nutau_nu_frac .+ nutaubar_flux .* (1 .- assets.nutau_nu_frac)
+    # nutau: SK MC lumps nutau + nutaubar CC into one channel. Both rates already carry their own
+    # flux, oscillation probability and cross-section, so the lumped rate is their sum.
+    nutau_combined = nutau_flux .+ nutaubar_flux
     nutau   = contract_R(assets.R.nutau,   nutau_combined)
 
-    # NC: SK MC lumps all NC (nu + nubar, all flavors) into one channel.
-    # Use precomputed nu/nubar mixture fractions with proper cross-sections.
+    # NC: SK MC lumps all NC (nu + nubar, all flavors) into one channel; the lumped rate is the sum
+    # of the nu and nubar rates (each with its own flux and cross-section).
     xsec_nc_anti = physics.xsec.dσdE(E, :nue, :NC, true, params)
     flux_nu_total = flux_nue .+ flux_numu
     flux_nubar_total = flux_nuebar .+ flux_numubar
     nc_nu_flux = flux_nu_total .* xsec_nc
     nc_nubar_flux = flux_nubar_total .* xsec_nc_anti
-    nc_combined = nc_nu_flux .* assets.nc_nu_frac .+ nc_nubar_flux .* (1 .- assets.nc_nu_frac)
+    nc_combined = nc_nu_flux .+ nc_nubar_flux
     nunc    = contract_R(assets.R.nunc,    nc_combined .* flux_norm)
 
     return (; nue, numu, nutau, nuebar, numubar, nunc)
@@ -678,7 +678,7 @@ function get_assets(physics; datadir = @__DIR__)
         upmu_thru = occursin.("_upmu_thru", bininfo.Sample),
         upmu_shower = occursin.(r"_upmu_.*_showering",  bininfo.Sample),
         upmu_nonshower = occursin.(r"_upmu_.*_nonshowering", bininfo.Sample),
-        mu_indices = occursin.("_numu", bininfo.Sample),
+        mu_indices = occursin.(r"(mulike|numubarlike)", bininfo.Sample),   # mu-like samples of all phases ("mulike" also matches "numulike")
         sk_i_iii_elike_0decay_e = occursin.(r"sk1-3_.*elike_0decaye", bininfo.Sample),
         sk_i_iii_elike_1decay_e = occursin.(r"sk1-3_.*elike_1decaye", bininfo.Sample),
         sk_i_iii_mulike_0decay_e = occursin.(r"sk1-3_.*mulike_0decaye", bininfo.Sample),
@@ -716,13 +716,16 @@ function get_assets(physics; datadir = @__DIR__)
         # PC + Up-mu mask (for relative normalization)
         pc_upmu = occursin.("_pc_", bininfo.Sample) .| occursin.("_upmu_", bininfo.Sample),
         # FC multi-GeV mu-like single-ring (for FC/PC separation)
-        fc_multigev_mulike = occursin.(r"_fc_multigev_1ring_mu", bininfo.Sample),
+        fc_multigev_mulike = occursin.(r"_fc_multigev_1ring_(mulike|numulike|numubarlike)", bininfo.Sample),
         # pi0 samples
         sk_1ring_pi0 = occursin.("_1ring_ncpi0", bininfo.Sample),
         sk_2ring_pi0 = occursin.("_2ring_ncpi0", bininfo.Sample),
         # Ring separation sub-GeV vs multi-GeV
-        sk_subgev_1ring = occursin.(r"_fc_subgev_1ring_", bininfo.Sample),
-        sk_subgev_multiring = occursin.(r"_fc_subgev.*(2ring|multiring)", bininfo.Sample),
+        # Sub-GeV ring counting is disabled: the 2023 release has no sub-GeV multi-ring sample (the
+        # only sub-GeV 2-ring sample is sk1-5_fc_2ring_ncpi0, ~5 bins, too small to be the migration
+        # partner of the sub-GeV 1-ring samples), so sk_subgev_ring_counting had no effect.
+        # sk_subgev_1ring = occursin.(r"_fc_subgev_1ring_", bininfo.Sample),
+        # sk_subgev_multiring = occursin.(r"_fc_subgev.*(2ring|multiring)", bininfo.Sample),
         sk_multigev_1ring = occursin.(r"_fc_multigev_1ring_", bininfo.Sample),
         sk_multigev_multiring = occursin.(r"_fc_multigev.*(2ring|multiring)", bininfo.Sample),
     )
@@ -794,53 +797,8 @@ function get_assets(physics; datadir = @__DIR__)
 
     R = flatten_R(R_3d)
 
-    # Compute nu/nubar mixture fractions for nutau CC and NC channels.
-    # The SK MC lumps nutau+nutaubar CC, and all NC, into single channels.
-    # We estimate the nu vs nubar fraction from nominal flux * actual cross-sections.
-    # For nutau CC, use numu cross-sections (nutau xsec not available separately).
-    E_mid = 10.0 .^ midpoints(loge_grid)
 
-    # Get actual cross-section curves from the xsec data file
-    xsec_data = load(joinpath(dirname(dirname(dirname(datadir))), "physics", "xsec_genie_data.jld2"))
-    xsec_E = xsec_data["E_grid"]
-    wester = xsec_data["wester_xsec"]  # NEUT5.4.0 cross-sections
-    cc_channels = ("CC1p1h", "CC2p2h", "CC1pi", "CCDIS", "CCother")
-
-    # Total CC xsec (sigma/E) for numu and numubar (used for nutau since nutau xsec ~ numu xsec)
-    numu_cc_total = sum(wester["numu"][ch] for ch in cc_channels)
-    numubar_cc_total = sum(wester["numubar"][ch] for ch in cc_channels)
-    # NC xsec for nu and nubar
-    numu_nc = wester["numu"]["NC"]
-    numubar_nc = wester["numubar"]["NC"]
-
-    # Interpolate to our energy grid
-    itp_numu_cc = extrapolate(interpolate((xsec_E,), numu_cc_total, Gridded(Linear())), Interpolations.Flat())
-    itp_numubar_cc = extrapolate(interpolate((xsec_E,), numubar_cc_total, Gridded(Linear())), Interpolations.Flat())
-    itp_nu_nc = extrapolate(interpolate((xsec_E,), numu_nc, Gridded(Linear())), Interpolations.Flat())
-    itp_nubar_nc = extrapolate(interpolate((xsec_E,), numubar_nc, Gridded(Linear())), Interpolations.Flat())
-
-    sigma_numu_cc = itp_numu_cc.(E_mid) .* E_mid      # sigma = (sigma/E) * E
-    sigma_numubar_cc = itp_numubar_cc.(E_mid) .* E_mid
-    sigma_nu_nc = itp_nu_nc.(E_mid) .* E_mid
-    sigma_nubar_nc = itp_nubar_nc.(E_mid) .* E_mid
-
-    # Atmospheric flux averaged over cosZ
-    flux_nom = physics.atm_flux.nominal_flux(E_mid, cz_midpoints)
-    s_flux = (length(E_mid), length(cz_midpoints))
-    flux_nu_E = vec(mean(reshape(flux_nom.nue, s_flux) .+ reshape(flux_nom.numu, s_flux), dims=2))
-    flux_nubar_E = vec(mean(reshape(flux_nom.nuebar, s_flux) .+ reshape(flux_nom.numubar, s_flux), dims=2))
-
-    # nutau CC mixture: use numu xsec as proxy for nutau
-    nutau_nu_rate = flux_nu_E .* sigma_numu_cc
-    nutau_nubar_rate = flux_nubar_E .* sigma_numubar_cc
-    nutau_nu_frac = nutau_nu_rate ./ (nutau_nu_rate .+ nutau_nubar_rate .+ 1e-30)
-
-    # NC mixture
-    nc_nu_rate = flux_nu_E .* sigma_nu_nc
-    nc_nubar_rate = flux_nubar_E .* sigma_nubar_nc
-    nc_nu_frac = nc_nu_rate ./ (nc_nu_rate .+ nc_nubar_rate .+ 1e-30)
-
-    nominal_weights = calc_weights(params_nominal, (;R, flux_nominal, flux_solar_ratio, paths, nominal_layers, loge_grid, cz_grid, cz_midpoints, nutau_nu_frac, nc_nu_frac), physics)
+    nominal_weights = calc_weights(params_nominal, (;R, flux_nominal, flux_solar_ratio, paths, nominal_layers, loge_grid, cz_grid, cz_midpoints), physics)
 
     # Build energy groups for reco bin overlap energy scale method
     sk_i_iii_mask = masks.sk_i_iii_bins
@@ -862,7 +820,7 @@ function get_assets(physics; datadir = @__DIR__)
 
 
     return (; MC, R, flux_nominal, flux_solar_ratio, nominal_layers, loge_grid, cz_grid, cz_midpoints, nominal_weights, observed, bininfo, masks,
-              energy_groups_sk_i_iii, energy_groups_sk_iv_v, nutau_nu_frac, nc_nu_frac, analysis_mask)
+              energy_groups_sk_i_iii, energy_groups_sk_iv_v, analysis_mask)
 
 end
 
@@ -908,7 +866,7 @@ function get_params()
         # pi0 selection
         sk_pi0_norm = 1.0,
         # Split ring counting: sub-GeV and multi-GeV
-        sk_subgev_ring_counting = 1.0,
+        # sk_subgev_ring_counting = 1.0,   # disabled: no sub-GeV multi-ring sample (see masks in get_assets)
         sk_multigev_ring_counting = 1.0,
         # Energy-dependent flux normalization (bathtub shape, split at 1 GeV)
         sk_flux_norm_low = 0.0,
@@ -965,7 +923,7 @@ function get_priors()
         # pi0 selection uncertainty
         sk_pi0_norm = Normal(1, 0.1),
         # Split ring counting
-        sk_subgev_ring_counting = Normal(1, 0.03),
+        # sk_subgev_ring_counting = Normal(1, 0.03),   # disabled: no sub-GeV multi-ring sample
         sk_multigev_ring_counting = Normal(1, 0.05),
         # Energy-dependent flux normalization (bathtub shape)
         # Low-E: 25% at 0.1 GeV, linear in logE to 7% at 1 GeV
@@ -1098,7 +1056,7 @@ function get_migration_factors(params, assets, channel, total)
         (G(assets.masks.sk_iv_v_multigev_1ring_elike, assets.masks.sk_iv_v_multigev_1ring_mulike, params.sk_iv_v_multigev_pid) .- 1) .+
         # Ring counting migration: overall + split by energy
         (G(assets.masks.sk_1ring, assets.masks.sk_multiring, params.sk_ring_counting) .- 1) .+
-        (G(assets.masks.sk_subgev_1ring, assets.masks.sk_subgev_multiring, params.sk_subgev_ring_counting) .- 1) .+
+        # (G(assets.masks.sk_subgev_1ring, assets.masks.sk_subgev_multiring, params.sk_subgev_ring_counting) .- 1) .+   # disabled, see get_assets
         (G(assets.masks.sk_multigev_1ring, assets.masks.sk_multigev_multiring, params.sk_multigev_ring_counting) .- 1) .+
         # FC/PC separation: FC multi-GeV mu-like ↔ PC
         (G(assets.masks.fc_multigev_mulike, assets.masks.pc, params.sk_fc_pc_separation) .- 1) .+
