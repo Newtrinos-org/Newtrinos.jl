@@ -728,8 +728,14 @@ function assemble_profile_results(opt_results, result_size)
     NamedTuple(s)
 end
 
+# AD backend for the per-point fits of a profile scan. With the default threaded loop the threads
+# are already busy with scan points, so a threaded AD backend (Polyester) inside each fit only adds
+# contention; use plain ForwardDiff there. Otherwise (one thread, or a custom map_func such as pmap
+# whose workers have their own threads) keep the find_mle default.
+_profile_adsel(map_func) = isnothing(map_func) && Threads.nthreads() > 1 ? AutoForwardDiff() : AutoPolyesterForwardDiff()
+
 """
-    _profile(likelihood, scanpoints, params, cache_dir; map_func=nothing)
+    _profile(likelihood, scanpoints, params, cache_dir; map_func=nothing, adsel=...)
         -> NamedTuple
 
 Execute [`find_mle_cached`](@ref) at every point in `scanpoints`, collect
@@ -744,16 +750,12 @@ to override the parallelism strategy.
 - `params::NamedTuple`: starting values for nuisance optimization.
 - `cache_dir::Union{String,Nothing}`: passed to [`find_mle_cached`](@ref).
 - `map_func`: optional custom mapping function; default=`nothing` uses threaded loops.
+- `adsel`: AD backend for the per-point fits; plain `AutoForwardDiff()` for the threaded loop,
+  `AutoPolyesterForwardDiff()` otherwise.
 
 # Returns
 A NamedTuple of result arrays as produced by [`assemble_profile_results`](@ref).
 """
-# AD backend for the per-point fits of a profile scan. With the default threaded loop the threads
-# are already busy with scan points, so a threaded AD backend (Polyester) inside each fit only adds
-# contention; use plain ForwardDiff there. Otherwise (one thread, or a custom map_func such as pmap
-# whose workers have their own threads) keep the find_mle default.
-_profile_adsel(map_func) = isnothing(map_func) && Threads.nthreads() > 1 ? AutoForwardDiff() : AutoPolyesterForwardDiff()
-
 function _profile(likelihood, scanpoints, params, cache_dir; map_func=nothing, adsel=_profile_adsel(map_func))
     do_work(i) = find_mle_cached(likelihood, scanpoints[i], deepcopy(params), cache_dir; adsel = adsel)
 
