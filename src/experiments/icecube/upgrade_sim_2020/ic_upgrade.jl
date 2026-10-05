@@ -30,13 +30,28 @@ function default_physics()
     (; osc, atm_flux, earth_layers, xsec)
 end
 
-function configure(physics=default_physics())
+"""
+    configure(physics=default_physics(); energy_scale_uncertainty=0.0) -> ICUpgrade
+
+Configure the IceCube Upgrade analysis based on the public neutrino MC release
+(doi:10.21234/qfz1-yh02).
+
+# Keywords
+- `energy_scale_uncertainty::Real = 0.0`: relative Gaussian uncertainty of the detector energy
+  scale `ic_upgrade_energy_scale`. With the default `0.0` the energy scale is fixed at 1, which
+  reproduces the 3-year sensitivity of the release's reference (Ishihara et al.,
+  PoS(ICRC2019)1031). A non-zero value (e.g. `0.02`) makes it a free nuisance parameter with prior
+  `Truncated(Normal(1, energy_scale_uncertainty), 0.5, 1.5)`; being nearly degenerate with
+  ``Δm^2_{32}``, a 2% uncertainty roughly doubles the width of the ``Δm^2_{32}`` constraint.
+"""
+function configure(physics=default_physics(); energy_scale_uncertainty::Real = 0.0)
+    energy_scale_uncertainty >= 0 || throw(ArgumentError("energy_scale_uncertainty must be ≥ 0"))
     physics = (;physics.osc, physics.atm_flux, physics.earth_layers, physics.xsec)
     assets = get_assets(physics)
     return ICUpgrade(
         physics = physics,
         params = get_params(),
-        priors = get_priors(),
+        priors = get_priors(energy_scale_uncertainty),
         assets = assets,
         forward_model = get_forward_model(physics, assets),
         plot = get_plot(physics, assets)
@@ -119,10 +134,12 @@ function get_params()
         )
 end
 
-function get_priors()
+function get_priors(energy_scale_uncertainty = 0.0)
     priors = (
         ic_upgrade_lifetime = Uniform(2, 4),
-        ic_upgrade_energy_scale = Truncated(Normal(1, 0.02), 0.5, 1.5),
+        # a fixed energy scale is given as a number (not fitted)
+        ic_upgrade_energy_scale = energy_scale_uncertainty > 0 ?
+            Truncated(Normal(1, energy_scale_uncertainty), 0.5, 1.5) : 1.0,
         )
 end
 
