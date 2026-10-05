@@ -58,7 +58,7 @@ fig = experiments.deepcore.plot(bestfit)
 save("test_output/datamc.png", fig)
 
 open("README.md", "w") do io
-    write(io, "# IceCube DeepCore 9y Verification Sample\n ## Resources\n")
+    write(io, "# IceCube DeepCore 8y Verification Sample\n ## Resources\n")
     write(io, """
 data source: https://icecube.wisc.edu/data-releases/2025/07/measurement-of-atmospheric-neutrino-mixing-with-improved-icecube-deepcore-calibration-and-data-processing/
 IceCube Collaboration, 2025, "Replication Data for: Measurement of atmospheric neutrino mixing with improved IceCube DeepCore calibration and data processing", https://doi.org/10.7910/DVN/B4RITM, Harvard Dataverse, V1, UNF:6:EqPPIAlmbhWU7MUgQgQVCw== [fileUNF]

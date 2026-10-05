@@ -14,7 +14,7 @@ julia --project benchmark/bench_likelihood.jl --experiments dayabay
 julia --project benchmark/bench_likelihood.jl --experiments deepcore super_k
 
 # Run an experiment's validation script (from its directory)
-cd src/experiments/icecube/deepcore_9y_verification_sample && julia --project=../../../.. test.jl
+cd src/experiments/icecube/deepcore_8y_verification_sample && julia --project=../../../.. test.jl
 
 # Analysis CLI
 julia --project src/analysis/analysis.jl --experiments deepcore dayabay --name myrun --task scan
