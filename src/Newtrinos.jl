@@ -43,8 +43,10 @@ include("utils/helpers.jl")
 
 include("experiments/daya_bay/daya_bay_3158days/dayabay.jl")
 include("experiments/minos/minos_sterile_16e20_POT/minos.jl")
-#include("experiments/icecube/deepcore_3y_highstats_sample_b/deepcore.jl")
-include("experiments/icecube/deepcore_9y_verification_sample/deepcore.jl")
+include("experiments/icecube/deepcore_3y_highstats_sample_b/deepcore.jl")  # module deepcore_3y
+include("experiments/icecube/deepcore_8y_verification_sample/deepcore.jl")  # module deepcore_8y
+# default DeepCore dataset: `Newtrinos.deepcore` refers to the current (8-year) sample
+const deepcore = deepcore_8y
 include("experiments/super_k/sk_atm_2023/super_k.jl")
 include("experiments/icecube/upgrade_sim_2020/ic_upgrade.jl")
 include("experiments/kamland/kamland_7years/kamland.jl")

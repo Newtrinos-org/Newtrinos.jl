@@ -14,7 +14,8 @@ Atmospheric neutrino experiments detect neutrinos produced by cosmic-ray interac
 
 | Experiment | Module | Dataset |
 |:-----------|:-------|:--------|
-| IceCube DeepCore | `Newtrinos.deepcore` | 9-year verification sample |
+| IceCube DeepCore | `Newtrinos.deepcore` (= `Newtrinos.deepcore_8y`) | 8-year verification sample |
+| IceCube DeepCore | `Newtrinos.deepcore_3y` | 3-year high-statistics sample (sample B) |
 | Super-Kamiokande | `Newtrinos.super_k` | Atmospheric 2023 analysis |
 | KM3NeT/ORCA | `Newtrinos.orca` | 6-line, 433 kton-years |
 | IceCube Upgrade | `Newtrinos.ic_upgrade` | Simulated upgrade detector |
@@ -81,6 +82,6 @@ implementation and are a good place to look when working with an unfamiliar expe
 
 ```bash
 # Run from the Newtrinos.jl root directory
-cd src/experiments/icecube/deepcore_9y_verification_sample
+cd src/experiments/icecube/deepcore_8y_verification_sample
 julia --project=../../../.. test.jl
 ```

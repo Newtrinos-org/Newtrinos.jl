@@ -1,4 +1,4 @@
-module deepcore
+module deepcore_3y
 
 using LinearAlgebra
 using Distributions
