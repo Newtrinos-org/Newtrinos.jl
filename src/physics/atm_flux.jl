@@ -428,7 +428,17 @@ end
 
 fun_numunumubar(cz, u) = (u / 0.77896) .* (1 .- 0.5 .* exp.(-abs.(cz).^1.75 ./ 0.3))
 fun_numunue(cz, u) = fun_numunumubar(cz, u)
-fun_nuenuebar(cz, u) = (1 .+ 9.62 .* u.^1.7) .* u .- 17 .* u.^2.7 .* exp.(-abs.(cz).^1.75 ./ 0.5)
+# Zenith shape of the nue/nuebar uncertainty (Barr et al. 2006, Fig. 8): u * (1 - c g(cz)) / (1 - c I), with
+# g = exp(-|cz|^1.75 / 0.5) and I = ∫₀¹ g = 0.566, so that the mean over cos θ_z is u. The depth of the horizontal dip,
+# c = 17 u^1.7 / (1 + 9.62 u^1.7), grows towards 17/9.62 > 1 for large u (E ≳ 350 GeV), where the uncertainty would turn
+# negative near the horizon; it is capped at 0.6, the horizontal/vertical ratio ≈ 0.44 of Barr's Fig. 8c (E > 30 GeV).
+# Below the cap (E ≲ 100 GeV) this agrees with the previous closed form (1 + 9.62 u^1.7) u - 17 u^2.7 g to 1e-4 (17 I = 9.622).
+const NUENUEBAR_ZENITH_I = 0.5659861219196888
+const NUENUEBAR_ZENITH_CMAX = 0.6
+function fun_nuenuebar(cz, u)
+    c = min.(17 .* u.^1.7 ./ (1 .+ 9.62 .* u.^1.7), NUENUEBAR_ZENITH_CMAX)
+    u .* (1 .- c .* exp.(-abs.(cz).^1.75 ./ 0.5)) ./ (1 .- c .* NUENUEBAR_ZENITH_I)
+end
 
 """
     get_sys_flux(cfg::FluxSystematicsModel) -> Function
