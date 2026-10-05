@@ -22,6 +22,7 @@ using Test
         include("test_molewhacker.jl")
     end
     
-    #@testset "experiments" begin 
-    #end 
+    @testset "experiments" begin
+        include("test_minos.jl")
+    end
 end
