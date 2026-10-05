@@ -24,5 +24,6 @@ using Test
     
     @testset "experiments" begin
         include("test_minos.jl")
+        include("test_ic_upgrade.jl")
     end
 end
