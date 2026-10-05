@@ -188,4 +188,16 @@ using Test
         @test !(sys_nuenumu.nue ≈ nominal.nue)
     end
 
+
+    @testset "nue/nuebar zenith shape (BarrEnergyBands)" begin
+        F = Newtrinos.atm_flux.fun_nuenuebar
+        cz = collect(range(-1, 1, length = 2001))
+        for E in (1.0, 10.0, 100.0, 500.0, 1000.0, 10000.0)
+            u = ((0.73 * E)^0.59 + 4.8) / 100
+            f = F(cz, u)
+            @test all(f .> 0)                                   # no sign change near the horizon at high energy
+            @test sum(f) / length(f) ≈ u rtol = 1e-3            # zenith average equals the energy-only uncertainty
+        end
+    end
+
 end
