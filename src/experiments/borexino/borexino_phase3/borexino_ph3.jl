@@ -11,7 +11,7 @@ import ..Newtrinos
 import ..Newtrinos.solar_common
 
 """
-Borexino Phase-III spectral analysis (D. Basilico et al., Phys. Rev. D 108, 102005 (2023),
+Borexino Phase-III spectral analysis (S. Appel et al., Phys. Rev. Lett. 129, 252701 (2022),
 arXiv:2205.15975): the TFC-subtracted (¹¹C-depleted) energy spectrum, 320–2640 keV, 817 bins,
 exposure 1431.6 d × 71.3 t × 63.97 % (TFC), from the Borexino open data.
 

@@ -1,5 +1,5 @@
 # Validation of the Borexino Phase-III spectral module: best fit and CNO-rate profile compared with
-# the published profile (PRD 108, 102005, Fig. 2b, solid line, including systematics).
+# the published profile (PRL 129, 252701, Fig. 2b, solid line, including systematics).
 #   cd src/experiments/borexino/borexino_phase3 && julia --project=../../../.. test.jl
 using Newtrinos, Distributions, DensityInterface, Optim, ADTypes, ForwardDiff, CairoMakie, DelimitedFiles, Printf
 const B = Newtrinos.borexino_ph3

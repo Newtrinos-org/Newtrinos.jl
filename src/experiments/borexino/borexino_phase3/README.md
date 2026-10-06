@@ -1,7 +1,8 @@
 # Borexino Phase III: spectral fit of the TFC-subtracted spectrum
 
-Module `borexino_ph3`. Reference: D. Basilico et al. (Borexino), *Final results of Borexino on CNO solar
-neutrinos*, Phys. Rev. D 108, 102005 (2023), arXiv:2205.15975.
+Module `borexino_ph3`. Reference: S. Appel et al. (Borexino), *Improved measurement of solar neutrinos from the
+CNO cycle by Borexino and its implications for the standard solar model*, Phys. Rev. Lett. 129, 252701 (2022),
+arXiv:2205.15975.
 
 ## Data (`data/`, Borexino open data, https://borex.lngs.infn.it/)
 
