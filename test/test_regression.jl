@@ -28,7 +28,7 @@ const ALL_REFERENCE_VALUES = (
     sk4_solar    = -44.07336046273934,
     borexino_ph1 = 0.6403126333967274,
     borexino_ph2 = -4.951643121727856,
-    borexino_ph3 = -3.101626418869148,
+    borexino_ph3 = -2290.499368699521,
 )
 
 # Parse --experiments from ARGS if present, otherwise run all

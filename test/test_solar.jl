@@ -345,7 +345,22 @@ end
     @test r1[1] ≈ 46.0 rtol=0.05
     @test r1[2] ≈ 0.217 rtol=0.1
     @test r2 ≈ [134.0, 2.43, 48.3] rtol=0.15
-    @test 4 < Newtrinos.borexino_ph3.get_expected(ps, b3.physics, b3.assets)[1] < 7
+    # Phase III spectral fit: CNO rate near the SSM, total counts close to the data, both background-prior options
+    e3 = Newtrinos.borexino_ph3.get_expected(ps, b3.physics, b3.assets)
+    @test 4 < e3.solar.cno < 7
+    @test e3.solar.pep ≈ 2.74 rtol=0.05
+    @test sum(e3.total) ≈ sum(b3.assets.observed.spectrum) rtol=0.05
+    @test size(e3.components) == (817, 12)
+    b3_free = Newtrinos.borexino_ph3.configure(physics; background_priors=:free)
+    @test b3_free.priors.borexino_ph3_c11 isa Uniform
+    @test b3.priors.borexino_ph3_c11 isa Truncated
+    # one-sided ²¹⁰Bi constraint: half-Gaussian penalty above 10.8 ± 1.0 on top of the spectral likelihood
+    llh3 = Newtrinos.generate_likelihood((; b3))
+    lspec(x) = sum(logpdf.(Poisson.(Newtrinos.borexino_ph3.get_expected(merge(ps, (borexino_ph3_bi210 = x,)), b3.physics, b3.assets).total),
+                           b3.assets.observed.spectrum))
+    ltot(x) = logdensityof(llh3, merge(ps, (borexino_ph3_bi210 = x,)))
+    @test ltot(9.0) - ltot(10.8) ≈ lspec(9.0) - lspec(10.8) rtol=1e-8
+    @test ltot(11.8) - ltot(10.8) ≈ lspec(11.8) - lspec(10.8) - 0.5 rtol=1e-8
     # oscillated / unoscillated rates; SK (arXiv:2312.12907) quotes 0.689, 0.614, 0.638 in restricted recoil windows
     phys0 = merge(physics, (osc = Newtrinos.osc.configure(),))
     b2_0 = Newtrinos.borexino_ph2.configure(phys0)
