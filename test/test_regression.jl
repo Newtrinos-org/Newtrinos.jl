@@ -18,6 +18,17 @@ const ALL_REFERENCE_VALUES = (
     coherent_lAr = -1755.0426661113386,
     katrin       = 0.4549394122046937,
     gerda        = -85.50961704258683,
+    chlorine     = 0.22859669683866551,
+    gallex_gno   = -6.320357533281708,
+    sage         = -2.3248522674452072,
+    sno          = 18.250388933673996,
+    sk1_solar    = -126.21700246447834,
+    sk2_solar    = -50.16329570823802,
+    sk3_solar    = -82.72845166243647,
+    sk4_solar    = -44.07336046273934,
+    borexino_ph1 = 0.6403126333967274,
+    borexino_ph2 = -4.951643121727856,
+    borexino_ph3 = -3.101626418869148,
 )
 
 # Parse --experiments from ARGS if present, otherwise run all

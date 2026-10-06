@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test Commands
 
 ```bash
-# Run unit tests (185 tests, ~20s)
+# Run unit tests (~2500 tests, ~8 min)
 julia --project -e 'using Pkg; Pkg.test()'
 
 # Run benchmarks
@@ -33,6 +33,10 @@ Theory predictions with no experiment knowledge. Each module returns a struct `<
 - **`atm_flux.jl`** — HKKM atmospheric neutrino fluxes with Barr systematics. Site-specific flux files in `src/physics/*.d`.
 - **`xsec.jl`** — Cross-section models: `SimpleScaling` or `Differential_H2O` (for Super-K).
 - **`cevns_xsec.jl`**, **`sns_flux.jl`** — COHERENT-specific physics.
+- **`solar_flux.jl`** — Standard solar model (B23, default MB22-met; data in `src/physics/solar/`): fluxes and spectra per component, `solar_norm_*`/`solar_b8_shape` priors, production regions (`production`, input to `osc.solar_prob`), `nadir_exposure(latitude)`.
+- **`solar_xsec.jl`** — ν–e elastic scattering (with radiative corrections) and ³⁷Cl/⁷¹Ga capture cross sections.
+- Solar oscillations live in `osc.jl`: `osc.solar_prob(E, production, params)` (day) and `osc.solar_prob(E, production, paths, layers, params)` (Earth regeneration); adiabatic MSW in the Sun via `compute_matter_matrices`, eigenstates labelled by eigenvalue order.
+- `earth_layers.compute_chord_paths` gives each path segment its own chord-averaged PREM density; `PREM_discontinuities()` is the zoning used for solar day/night.
 
 ### Experiments (`src/experiments/`)
 Each experiment module has `configure(physics=default_physics())` returning a struct `<: Newtrinos.Experiment` with fields: `physics`, `params`, `priors`, `assets`, `forward_model`, `plot`. Each experiment defines its own `default_physics()` with appropriate oscillation config, flux files, and cross-section models.
@@ -42,6 +46,7 @@ Experiment groups and their physics requirements:
 - **Reactor** (dayabay, kamland, juno, tao): `osc` (Vacuum)
 - **Accelerator** (minos): `osc`, `xsec`
 - **COHERENT** (coherent_csi, coherent_lAr): self-contained, no physics input
+- **Solar** (chlorine, gallex_gno, sage, sno, sk1_solar–sk4_solar, borexino_ph1–ph3): `osc` (SI), `solar_flux`, `solar_xsec`, `earth_layers` (PREM_discontinuities); shared code in `experiments/solar_common/` (`Site` day/night exposure, ES response, capture rates) and `experiments/super_k/sk_solar_common/` (one `SKPhase` per SK phase)
 
 ### Analysis (`src/analysis/`)
 Inference tools treating experiments as black boxes.

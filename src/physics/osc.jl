@@ -497,6 +497,7 @@ experiment's `configure(physics=...)` method.
     priors::NamedTuple
     matrices::Function
     osc_prob::Function
+    solar_prob::Function
 end
 
 """
@@ -532,7 +533,8 @@ function configure(cfg::OscillationConfig=OscillationConfig())
         params = get_params(cfg),
         priors = get_priors(cfg),
         matrices = get_matrices(cfg.flavour, cfg.eigen_method),
-        osc_prob = get_osc_prob(cfg)
+        osc_prob = get_osc_prob(cfg),
+        solar_prob = SolarProb(cfg)
     )
 end
 
@@ -1190,7 +1192,15 @@ function osc_reduce(matter_matrices, path, e, propagation::Damping)
     p = abs2.(S_total) .+ P_ave * Diagonal(1 .- decay) * P_ave'
 end
 
-function osc_reduce(matter_matrices, path, e, propagation::Basic)
+osc_reduce(matter_matrices, path, e, propagation::Basic) = abs2.(path_amplitude(matter_matrices, path, e))
+
+"""
+    path_amplitude(matter_matrices, path, e) -> Matrix
+
+Coherent flavour-basis evolution operator ``S = S_N \\cdots S_1`` along a multi-layer path
+at energy `e` [GeV], where ``S_k`` is the [`osc_kernel`](@ref) of the k-th path segment.
+"""
+function path_amplitude(matter_matrices, path, e)
     # Physical order: S_total = S_N · ... · S_1 (later layers multiply from the left)
     # Path is entry→exit, so each new section's S multiplies from the left
     sec = first(path)
@@ -1198,7 +1208,7 @@ function osc_reduce(matter_matrices, path, e, propagation::Basic)
     for sec in Iterators.drop(path, 1)
         S = osc_kernel(matter_matrices[sec.layer_idx]..., e, sec.length) * S
     end
-    abs2.(S)
+    S
 end
     
 
@@ -1603,6 +1613,169 @@ function _osc_prob(cfg, E::AbstractVector{<:Real}, paths::VectorOfVectors{Path},
 
     # fuse rest addition + permutedims into P[n_E, n_cz, in, out]
     return _add_rest_and_permute(p_raw, rest)
+end
+
+
+# SOLAR NEUTRINOS
+#
+# Solar neutrinos are produced as νe in the solar core and leave the Sun adiabatically as mass
+# eigenstates. Over the Sun–Earth distance all phases between mass eigenstates average out, so
+# they arrive as an incoherent mixture with weights P(νe → νᵢ) = Σ_r w(r) |U^m_{e i}(r)|², where
+# U^m(r) is the matter mixing matrix at the production radius r. At the detector,
+# P(νᵢ → ν_β) = |(S_earth U)_{β i}|², with S_earth the evolution operator along the path
+# through the Earth (no Earth crossing in daytime gives |U_{β i}|²).
+#
+# Assumptions: adiabatic evolution in the Sun (no level crossing; valid for LMA, see the
+# shell-by-shell cross-check in test/test_solar.jl), neutrinos only, all states coherent
+# (`cfg.states` is ignored).
+
+"""
+    solar_mass_fractions(U, h, E, production, interaction, eigen_method=DefaultEigen()) -> Matrix
+
+Probability ``P(\\nu_e \\to \\nu_i)`` that a νe produced in the Sun leaves it as mass eigenstate
+`i`, averaged over the production region.
+
+The matter eigenstates are labelled by continuity: the eigenvalues of the matter Hamiltonian
+never cross along the adiabatic path to vacuum, so the k-th smallest matter eigenvalue connects
+to the k-th smallest vacuum eigenvalue (`sortperm(h)`), for any ordering and number of states.
+
+# Arguments
+- `U`, `h`: vacuum mixing matrix and mass-squared eigenvalues [eV²].
+- `E`: neutrino energies [GeV].
+- `production`: object with fields `ne`, `nn` (electron and neutron densities [mol/cm³] at the
+  production sample points) and `w` (production weights, need not be normalised).
+- `interaction`: [`SI`](@ref) for MSW conversion, [`Vacuum`](@ref) for none.
+
+# Returns
+`Matrix` of shape `(n_E, n_mass)`.
+"""
+function solar_mass_fractions(U, h, E, production, interaction::SI, eigen_method::EigenMethod=DefaultEigen())
+    H_eff = U * Diagonal(h) * adjoint(U)
+    n = length(h)
+    perm = sortperm(h)
+    w = production.w ./ sum(production.w)
+    T = real(promote_type(eltype(H_eff), eltype(E), eltype(production.ne), eltype(w)))
+    F = zeros(T, length(E), n)
+    for (ie, e) in enumerate(E)
+        for k in eachindex(w)
+            layer = Layer(zero(T), production.ne[k], production.nn[k])
+            Um, _ = compute_matter_matrices(H_eff, e, layer, false, interaction, eigen_method)
+            for j in 1:n
+                F[ie, perm[j]] += w[k] * abs2(Um[1, j])
+            end
+        end
+    end
+    F
+end
+
+function solar_mass_fractions(U, h, E, production, interaction::Vacuum, eigen_method::EigenMethod=DefaultEigen())
+    [abs2(U[1, i]) for _ in E, i in eachindex(h)]
+end
+
+"""
+    earth_mass_to_flavour(U, h, E, paths, layers, interaction, eigen_method=DefaultEigen()) -> Array{T,4}
+
+Probability ``P(\\nu_i \\to \\nu_\\beta)`` that mass eigenstate `i` arriving at the Earth is
+detected as flavour `β` after traversing `paths` through `layers`.
+
+An empty path (no matter crossed) gives ``|U_{\\beta i}|^2``. Vacuum segments leave the
+result unchanged, as mass eigenstates do not oscillate in vacuum.
+
+# Returns
+`Array` of shape `(n_E, n_paths, n_mass, n_flav)`.
+"""
+function earth_mass_to_flavour(U, h, E, paths, layers, interaction::SI, eigen_method::EigenMethod=DefaultEigen())
+    H_eff = U * Diagonal(h) * adjoint(U)
+    n = length(h)
+    T = real(promote_type(eltype(H_eff), eltype(E), eltype(layers.p_density), eltype(layers.n_density)))
+    R = Array{T}(undef, length(E), length(paths), n, n)
+    for (ie, e) in enumerate(E)
+        matter_matrices = [compute_matter_matrices(H_eff, e, layer, false, interaction, eigen_method) for layer in layers]
+        for (ip, path) in enumerate(paths)
+            amp = isempty(path) ? U : path_amplitude(matter_matrices, path, e) * U
+            for i in 1:n, β in 1:n
+                R[ie, ip, i, β] = abs2(amp[β, i])
+            end
+        end
+    end
+    R
+end
+
+function earth_mass_to_flavour(U, h, E, paths, layers, interaction::Vacuum, eigen_method::EigenMethod=DefaultEigen())
+    P = abs2.(U)  # P[β, i]
+    T = real(promote_type(eltype(P), eltype(E)))
+    R = Array{T}(undef, length(E), length(paths), length(h), length(h))
+    for i in axes(P, 2), β in axes(P, 1)
+        R[:, :, i, β] .= P[β, i]
+    end
+    R
+end
+
+# Callable struct (see `OscProb`): `K` are the oscillation parameter names.
+struct SolarProb{C<:OscillationConfig, K} <: Function
+    cfg::C
+end
+SolarProb(cfg::C) where {C<:OscillationConfig} = SolarProb{C, keys(get_params(cfg))}(cfg)
+
+"""
+    solar_prob(E, production, params) -> Matrix
+    solar_prob(E, production, paths, layers, params) -> Array{T,3}
+
+Oscillation probability ``P(\\nu_e \\to \\nu_\\beta)`` for solar neutrinos, available as the
+`solar_prob` field of a configured [`Osc`](@ref).
+
+The first method gives the probability without Earth matter effects (daytime), of shape
+`(n_E, n_flav)`. The second includes Earth regeneration along `paths` through `layers` (as
+from `Newtrinos.earth_layers`), of shape `(n_E, n_paths, n_flav)`.
+
+The configured interaction applies to both the Sun and the Earth: [`SI`](@ref) for MSW effects,
+[`Vacuum`](@ref) for averaged vacuum oscillations.
+
+# Arguments
+- `E`: neutrino energies [GeV].
+- `production`: production region, see [`solar_mass_fractions`](@ref) (e.g. from `Newtrinos.solar_flux`).
+- `params::NamedTuple`: oscillation parameters.
+"""
+function (f::SolarProb{C,K})(E::AbstractVector{<:Real}, production, params::NamedTuple) where {C,K}
+    p = NamedTuple{K}(params)
+    T = _osc_numtype(E, p)
+    if T <: ForwardDiff.Dual && _no_partials(E, p)  # zero-partials shortcut, see `OscProb`
+        return T.(_solar_prob(f.cfg, _strip.(E), production, map(_strip, p)))
+    end
+    _solar_prob(f.cfg, E, production, p)
+end
+
+function (f::SolarProb{C,K})(E::AbstractVector{<:Real}, production, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, params::NamedTuple) where {C,K}
+    p = NamedTuple{K}(params)
+    T = _osc_numtype(E, layers.p_density, layers.n_density, p)
+    if T <: ForwardDiff.Dual && _no_partials(E, layers.p_density, layers.n_density, p)
+        layers64 = StructArray{Layer}((layers.radius, _strip.(layers.p_density), _strip.(layers.n_density)))
+        return T.(_solar_prob(f.cfg, _strip.(E), production, paths, layers64, map(_strip, p)))
+    end
+    _solar_prob(f.cfg, E, production, paths, layers, p)
+end
+
+function _solar_prob(cfg, E, production, params)
+    U, h = _solar_matrices(cfg, params)
+    F = solar_mass_fractions(U, h, E, production, cfg.interaction, cfg.eigen_method)
+    F * transpose(abs2.(U))
+end
+
+function _solar_prob(cfg, E, production, paths, layers, params)
+    U, h = _solar_matrices(cfg, params)
+    F = solar_mass_fractions(U, h, E, production, cfg.interaction, cfg.eigen_method)
+    R = earth_mass_to_flavour(U, h, E, paths, layers, cfg.interaction, cfg.eigen_method)
+    T = promote_type(eltype(F), eltype(R))
+    P = zeros(T, length(E), length(paths), size(R, 4))
+    for β in axes(R, 4), i in axes(R, 3), ip in axes(R, 2), ie in axes(R, 1)
+        P[ie, ip, β] += F[ie, i] * R[ie, ip, i, β]
+    end
+    P
+end
+
+function _solar_matrices(cfg, params)
+    U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
+    U, h_raw .- minimum(h_raw)
 end
 
 

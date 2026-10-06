@@ -273,4 +273,39 @@ using Distributions
             @test mantle_segments[1].length ≈ mantle_segments[2].length atol=0.1
         end
     end
+
+    @testset "Chord-averaged densities" begin
+        for prem in (Newtrinos.earth_layers.PREM(), Newtrinos.earth_layers.PREM_discontinuities())
+            earth = Newtrinos.earth_layers.configure(prem)
+            layers = earth.compute_layers()
+            cz = [-1.0, -0.8, -0.3, -0.05, 0.5]
+            paths = earth.compute_paths(cz, layers; r_detector=6370.0)
+            cpaths, clayers = earth.compute_chord_paths(cz, layers; r_detector=6370.0)
+            # same geometry, one layer per (path, segment) besides the shared atmosphere
+            @test [sum(s.length for s in p) for p in cpaths] ≈ [sum(s.length for s in p) for p in paths]
+            @test length(clayers) == 1 + sum(count(s -> s.layer_idx != 1, p) for p in paths)
+            @test all(clayers.p_density[2:end] .> 0)
+            # vertical chord samples the zones radially: densities equal the zone (radial) means
+            for (seg, cseg) in zip(paths[1], cpaths[1])
+                seg.layer_idx == 1 && continue
+                @test clayers.p_density[cseg.layer_idx] ≈ layers.p_density[seg.layer_idx] rtol=0.02
+            end
+            # splitting into pieces keeps the total length and the length-weighted density
+            spaths, slayers = earth.compute_chord_paths(cz, layers; r_detector=6370.0, max_length=100.0)
+            @test [sum(s.length for s in p) for p in spaths] ≈ [sum(s.length for s in p) for p in paths]
+            @test all(s.length <= 100.0 + 1e-9 for p in spaths for s in p if s.layer_idx != 1)
+            mass(p, L) = sum(s.length * L.p_density[s.layer_idx] for s in p)
+            @test mass(spaths[2], slayers) ≈ mass(cpaths[2], clayers) rtol=1e-3
+            # oscillation probabilities with chord layers are unitary
+            osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction=Newtrinos.osc.SI()))
+            P = osc.osc_prob([0.01, 5.0], cpaths, clayers, osc.params)
+            @test all(sum(P, dims=4) .≈ 1)
+        end
+        # shallow chords see less dense material than the zone average of the outer mantle zone
+        earth = Newtrinos.earth_layers.configure()
+        layers = earth.compute_layers()
+        cpaths, clayers = earth.compute_chord_paths([-0.05], layers; r_detector=6370.0)
+        seg = cpaths[1][2]
+        @test clayers.p_density[seg.layer_idx] < layers.p_density[2]
+    end
 end
