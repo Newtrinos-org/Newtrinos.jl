@@ -230,7 +230,7 @@ end
     @test avg_σ(:b8, :cl37) ≈ 1.14e4 rtol=0.02
     @test avg_σ(:n13, :cl37) ≈ 1.7 rtol=0.05
     @test avg_σ(:o15, :cl37) ≈ 6.8 rtol=0.05
-    @test xs.capture(:cl37, 0.8613, p) ≈ 2.38e-46
+    @test 0.8956 * xs.capture(:cl37, 0.8613, p) ≈ 2.38e-46 rtol=1e-4  # per ⁷Be neutrino (both lines)
     # gallium (Bahcall 1997, Table II): pp 11.72, ⁸B 2.40e4
     @test avg_σ(:pp, :ga71) ≈ 11.72 rtol=0.02
     @test avg_σ(:b8, :ga71) ≈ 2.40e4 rtol=0.03
