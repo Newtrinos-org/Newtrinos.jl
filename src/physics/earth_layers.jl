@@ -39,15 +39,32 @@ zones defined by density boundaries.
   `zones`), rather than a single value assumed constant across all layers.
 - `atm_heihgt::Float64 = 20.`: atmospheric shell thickness [km] added above the Earth's
   surface (density = 0).
+- `continental::Bool = false`: replace PREM's global 3 km ocean layer (1.02 g/cm³) by upper-crust
+  density (2.6 g/cm³), for detectors in continental rock. Matters for near-horizon paths (e.g.
+  the solar day/night asymmetry, where ~200 km of a grazing night path at Kamioka would
+  otherwise be water). Density zones that become empty are dropped.
 """
 @kwdef struct PREM <: DensityModel
     zones::Array{Float64} = [0., 4., 7.5, 12.5, 13.1]
     p_fractions::Vector{Float64} = [0.496, 0.494, 0.468, 0.466]  # Ye per density zone
     atm_heihgt::Float64 = 20.
+    continental::Bool = false
 end
 
+# PREM table, with the ocean replaced by upper crust for `continental` models
+function _prem_table(cfg::PREM)
+    PREM = CSV.read(joinpath(datadir, "PREM_1s.csv"), DataFrame, header=["radius","depth","density","Vpv","Vph","Vsv","Vsh","eta","Q-mu","Q-kappa"])
+    if cfg.continental
+        PREM.density[PREM.density .== 1.02] .= 2.6
+    end
+    PREM
+end
+
+# indices of the density zones that contain PREM rows
+_nonempty_zones(cfg::PREM, PREM) = [i for i in 1:length(cfg.zones)-1 if any((PREM.density .< cfg.zones[i+1]) .& (PREM.density .>= cfg.zones[i]))]
+
 """
-    PREM_discontinuities() -> PREM
+    PREM_discontinuities(; continental=false) -> PREM
 
 [`PREM`](@ref) zoning that follows the density discontinuities of the PREM table (ocean,
 upper and lower crust, LID/low-velocity zone, transition zone, lower mantle, outer and inner
@@ -56,9 +73,10 @@ core), with the mantle gradient split into a few zones. Together with chord-aver
 regeneration of solar neutrinos, whose oscillation length in the Earth (~300 km) resolves the
 crust and upper mantle.
 """
-PREM_discontinuities() = PREM(
+PREM_discontinuities(; continental::Bool=false) = PREM(
     zones = [0.0, 2.0, 2.75, 3.0, 3.45, 3.75, 4.0, 4.6, 5.0, 5.3, 5.6, 10.5, 11.5, 12.2, 13.1],
     p_fractions = [0.555, 0.495, 0.495, 0.495, 0.495, 0.495, 0.495, 0.495, 0.495, 0.495, 0.467, 0.467, 0.467, 0.467],
+    continental = continental,
 )
 
 """
@@ -200,7 +218,7 @@ A zero-argument closure `compute_layers() -> StructVector{Layer}`.
 function get_compute_layers(cfg::PREM)
     function compute_layers()
 
-        PREM = CSV.read(joinpath(datadir, "PREM_1s.csv"), DataFrame, header=["radius","depth","density","Vpv","Vph","Vsv","Vsh","eta","Q-mu","Q-kappa"])
+        PREM = _prem_table(cfg)
         # density boundaries to define the constant density zones
 
         radii = Float64[]
@@ -209,13 +227,14 @@ function get_compute_layers(cfg::PREM)
         push!(radii, 6371+cfg.atm_heihgt)
         push!(ave_densities, 0.)
 
-        for i in 1:length(cfg.zones)-1
+        zones = _nonempty_zones(cfg, PREM)
+        for i in zones
             mask = (PREM.density .< cfg.zones[i+1]) .& (PREM.density .>= cfg.zones[i])
             push!(radii, maximum(PREM.radius[mask]))
             push!(ave_densities, _radial_mean(PREM.radius[mask], PREM.density[mask]))
         end
 
-        ye = vcat([0.5], cfg.p_fractions)  # prepend atmosphere Ye (density=0, so value irrelevant)
+        ye = vcat([0.5], cfg.p_fractions[zones])  # prepend atmosphere Ye (density=0, so value irrelevant)
         layers = StructArray{Newtrinos.Layer}((radii, ave_densities .* ye, ave_densities .* (1 .- ye)))
     end
 end
@@ -417,8 +436,8 @@ end
 
 # PREM radial density profile restricted to each density zone, sorted by radius
 function _zone_profiles(cfg::PREM)
-    PREM = CSV.read(joinpath(datadir, "PREM_1s.csv"), DataFrame, header=["radius","depth","density","Vpv","Vph","Vsv","Vsh","eta","Q-mu","Q-kappa"])
-    map(1:length(cfg.zones)-1) do i
+    PREM = _prem_table(cfg)
+    map(_nonempty_zones(cfg, PREM)) do i
         mask = (PREM.density .< cfg.zones[i+1]) .& (PREM.density .>= cfg.zones[i])
         order = sortperm(PREM.radius[mask])
         Float64.(PREM.radius[mask][order]), Float64.(PREM.density[mask][order])
