@@ -5,7 +5,9 @@ using Newtrinos, Distributions, DensityInterface, Optim, ADTypes, ForwardDiff, C
 const B = Newtrinos.borexino_ph3
 mkpath(joinpath(@__DIR__, "test_output"))
 
-physics = B.default_physics()
+# independent flux normalisations: ⁷Be and CNO are freed individually below
+physics = merge(B.default_physics(), (solar_flux = Newtrinos.solar_flux.configure(
+    Newtrinos.solar_flux.SolarFluxConfig(systematics = Newtrinos.solar_flux.SSMPriors())),))
 pub = readdlm(joinpath(B.DATADIR, "Phase3Final_BiULLarge_Golden_Energy_Radial_May18_HybridMethod.txt"))
 
 function run(background_priors)

@@ -167,7 +167,8 @@ end
         @test sum(sf.spectrum(c, E, sf.params)) * step(E) ≈ sf.nominal[c] rtol=1e-4
     end
     # flux normalisation and ⁸B shape parameters
-    p = merge(sf.params, (solar_norm_b8 = 1.1, solar_b8_shape = 1.0))
+    ib8 = Newtrinos.solar_flux.component_index(:b8)
+    p = merge(sf.params, (solar_norms = [i == ib8 ? 1.1 : 1.0 for i in eachindex(sf.params.solar_norms)], solar_b8_shape = 1.0))
     @test sf.flux(:b8, p) ≈ 1.1 * sf.nominal.b8
     @test sum(sf.spectrum(:b8, E, p)) * step(E) ≈ 1.1 * sf.nominal.b8 rtol=1e-3
     @test sf.spectrum(:b8, [14.0], p)[1] > 1.1 * sf.spectrum(:b8, [14.0], sf.params)[1]
@@ -181,7 +182,18 @@ end
     # other compositions
     sf_gs = Newtrinos.solar_flux.configure(Newtrinos.solar_flux.SolarFluxConfig(model=Newtrinos.solar_flux.B23(composition=:GS98)))
     @test sf_gs.nominal.b8 != sf.nominal.b8
-    @test Newtrinos.solar_flux.ssm_prior(sf) isa MvNormal
+    # default: one vector parameter with the correlated solar-model prior
+    @test sf.priors.solar_norms isa MvNormal
+    @test sf.priors.solar_norms == Newtrinos.solar_flux.ssm_prior(sf)
+    ibe7 = Newtrinos.solar_flux.component_index(:be7)
+    Σ = cov(sf.priors.solar_norms)
+    @test sqrt(Σ[ib8, ib8]) ≈ sf.fractional_error.b8
+    @test Σ[ib8, ibe7] / sqrt(Σ[ib8, ib8] * Σ[ibe7, ibe7]) ≈ sf.correlation[ib8, ibe7]
+    # independent scalar normalisations
+    sf_ind = Newtrinos.solar_flux.configure(Newtrinos.solar_flux.SolarFluxConfig(systematics=Newtrinos.solar_flux.SSMPriors()))
+    @test keys(sf_ind.params) == keys(sf_ind.priors)
+    @test sf_ind.flux(:b8, merge(sf_ind.params, (solar_norm_b8 = 1.1,))) ≈ sf.flux(:b8, p)
+    @test sf_ind.spectrum(:b8, E, merge(sf_ind.params, (solar_norm_b8 = 1.1, solar_b8_shape = 1.0))) ≈ sf.spectrum(:b8, E, p)
     # yearly exposure: half night, ~flux-weighted; Kamioka never has the Sun at the zenith
     ex = Newtrinos.solar_flux.nadir_exposure(36.43; cz_edges=range(-1, 1, length=201))
     @test sum(ex.w) ≈ 1
@@ -276,7 +288,8 @@ end
     e3 = Newtrinos.sno.get_expected(merge(p2, (Δm²₂₁ = 8e-5,)), s.physics, s.assets)
     @test e3[5] < e[5]
     llh = Newtrinos.generate_likelihood((; s))
-    f(y) = logdensityof(llh, merge(p, (θ₁₂ = y[1], Δm²₂₁ = y[2], solar_norm_b8 = y[3])))
+    ib8 = Newtrinos.solar_flux.component_index(:b8)
+    f(y) = logdensityof(llh, merge(p, (θ₁₂ = y[1], Δm²₂₁ = y[2], solar_norms = [i == ib8 ? y[3] : one(y[3]) for i in 1:8])))
     y0 = [p.θ₁₂, p.Δm²₂₁, 1.02]
     g = ForwardDiff.gradient(f, y0)
     δ = [1e-6, 1e-11, 1e-6]

@@ -6,7 +6,7 @@ using Distributions
 using LinearAlgebra
 using ..Newtrinos
 
-export SolarFluxConfig, B23, SSMPriors
+export SolarFluxConfig, B23, SSMPriors, CorrelatedSSMPriors
 
 const datadir = joinpath(@__DIR__, "solar")
 
@@ -61,23 +61,33 @@ Gaussian prior of the solar-model fractional uncertainty, truncated to positive 
 `solar_b8_shape` (prior `Normal(0, 1)`) shifting the ⁸B spectral shape by its ±1σ variation
 (positive values give a harder spectrum).
 
-The priors are independent; the solar-model correlations are available via
-[`ssm_prior`](@ref).
+The priors are independent, so single components can be fixed, scanned or freed by name;
+[`CorrelatedSSMPriors`](@ref) includes the solar-model correlations.
 """
 struct SSMPriors <: SolarFluxSystematics end
+
+"""
+    CorrelatedSSMPriors <: SolarFluxSystematics
+
+Flux normalisations as one vector parameter `solar_norms` (nominal 1, entries in
+[`COMPONENTS`](@ref) order) with the correlated solar-model prior `MvNormal(1, Σ)`, where Σ is
+built from the fractional uncertainties and the correlation matrix of the solar model (see
+[`ssm_prior`](@ref)), plus `solar_b8_shape` as in [`SSMPriors`](@ref). Default.
+"""
+struct CorrelatedSSMPriors <: SolarFluxSystematics end
 
 """
     SolarFluxConfig{M<:SolarModel, S<:SolarFluxSystematics}
 
 # Fields
 - `model::M = B23()`: standard solar model.
-- `systematics::S = SSMPriors()`: flux uncertainty treatment.
+- `systematics::S = CorrelatedSSMPriors()`: flux uncertainty treatment.
 - `n_production::Int = 40`: number of radial sample points per component used to average the
   oscillation probability over the production region.
 """
 @kwdef struct SolarFluxConfig{M<:SolarModel, S<:SolarFluxSystematics}
     model::M = B23()
-    systematics::S = SSMPriors()
+    systematics::S = CorrelatedSSMPriors()
     n_production::Int = 40
 end
 
@@ -131,7 +141,7 @@ function configure(cfg::SolarFluxConfig=SolarFluxConfig())
     SolarFlux(
         cfg = cfg,
         params = get_params(cfg.systematics),
-        priors = get_priors(cfg.systematics, frac_err),
+        priors = get_priors(cfg.systematics, frac_err, corr),
         nominal = nominal,
         fractional_error = frac_err,
         correlation = corr,
@@ -146,21 +156,39 @@ norm_param(comp::Symbol) = Symbol(:solar_norm_, comp)
 
 get_params(::SSMPriors) = merge(NamedTuple(norm_param(c) => 1.0 for c in COMPONENTS), (solar_b8_shape = 0.0,))
 
-function get_priors(::SSMPriors, frac_err)
+function get_priors(::SSMPriors, frac_err, corr)
     merge(NamedTuple(norm_param(c) => truncated(Normal(1.0, frac_err[c]), 0.0, 1.0 + 5 * frac_err[c]) for c in COMPONENTS),
           (solar_b8_shape = Truncated(Normal(0.0, 1.0), -3, 3),))
 end
 
+get_params(::CorrelatedSSMPriors) = (solar_norms = ones(length(COMPONENTS)), solar_b8_shape = 0.0)
+
+get_priors(::CorrelatedSSMPriors, frac_err, corr) =
+    (solar_norms = ssm_prior(frac_err, corr), solar_b8_shape = Truncated(Normal(0.0, 1.0), -3, 3))
+
 """
     ssm_prior(sf::SolarFlux) -> MvNormal
+    ssm_prior(frac_err, corr) -> MvNormal
 
-Correlated solar-model prior on the flux normalisations `solar_norm_*` (in
-[`COMPONENTS`](@ref) order), for use with `Newtrinos.correlated_priors_vars`.
+Correlated solar-model prior on the flux normalisations (in [`COMPONENTS`](@ref) order), the
+prior of `solar_norms` with [`CorrelatedSSMPriors`](@ref).
 """
-function ssm_prior(sf::SolarFlux)
-    σ = [sf.fractional_error[c] for c in COMPONENTS]
-    MvNormal(ones(length(σ)), Symmetric(Diagonal(σ) * sf.correlation * Diagonal(σ)))
+ssm_prior(sf::SolarFlux) = ssm_prior(sf.fractional_error, sf.correlation)
+
+function ssm_prior(frac_err, corr)
+    σ = [frac_err[c] for c in COMPONENTS]
+    MvNormal(ones(length(σ)), Symmetric(Diagonal(σ) * corr * Diagonal(σ)))
 end
+
+"""
+    flux_norm(systematics, comp, params)
+
+Normalisation (relative to the solar model) of flux component `comp` for the given parameters.
+"""
+flux_norm(::SSMPriors, comp::Symbol, params) = params[norm_param(comp)]
+flux_norm(::CorrelatedSSMPriors, comp::Symbol, params) = params.solar_norms[component_index(comp)]
+
+component_index(comp::Symbol) = findfirst(==(comp), COMPONENTS)
 
 """
     read_fluxes(model::B23) -> (nominal, fractional_error, correlation)
@@ -226,13 +254,13 @@ function read_spectra()
      o15 = only(read_shape("o15")), f17 = only(read_shape("f17")), b8 = read_shape("b8"))
 end
 
-function get_flux(::SSMPriors, nominal)
-    flux(comp::Symbol, params) = nominal[comp] * params[norm_param(comp)]
+function get_flux(sys::SolarFluxSystematics, nominal)
+    flux(comp::Symbol, params) = nominal[comp] * flux_norm(sys, comp, params)
 end
 
-function get_spectrum(::SSMPriors, nominal, shapes)
+function get_spectrum(sys::SolarFluxSystematics, nominal, shapes)
     function spectrum(comp::Symbol, E, params)
-        Φ = nominal[comp] * params[norm_param(comp)]
+        Φ = nominal[comp] * flux_norm(sys, comp, params)
         if comp == :b8
             # positive shifts towards the harder spectrum (Bahcall's "-3σ" column)
             best, soft3, hard3 = shapes.b8
