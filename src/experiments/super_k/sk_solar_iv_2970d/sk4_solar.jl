@@ -31,7 +31,7 @@ const PHASE = SKPhase(
 
 default_physics() = solar_common.default_physics()
 
-configure(physics=default_physics()) = sk_solar_common.configure(PHASE, physics)
+configure(physics=default_physics(); kwargs...) = sk_solar_common.configure(PHASE, physics; kwargs...)
 
 get_expected(params, physics, assets) = sk_solar_common.get_expected(PHASE, params, physics, assets)
 

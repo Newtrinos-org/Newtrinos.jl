@@ -343,6 +343,25 @@ end
     δ = [1e-6, 1e-11, 1e-6, 1e-6]
     g_fd = [(f(y0 .+ δ .* (1:4 .== i)) - f(y0 .- δ .* (1:4 .== i))) / 2δ[i] for i in 1:4]
     @test g ≈ g_fd rtol=1e-4
+    # day and night samples merged per energy bin (for use with the amplitude-fit day/night term)
+    skc = Newtrinos.sk4_solar.configure(physics; daynight = :combined)
+    @test length(skc.assets.observed) == length(sk.assets.observed) ÷ 2
+    @test all(skc.assets.samples.zenith .== "all")
+    ec = Newtrinos.sk4_solar.get_expected(p, skc.physics, skc.assets)
+    @test all(minimum.(zip(e[1:2:end], e[2:2:end])) .<= ec .<= maximum.(zip(e[1:2:end], e[2:2:end])))
+    # SK day/night amplitude fit (arXiv:2312.12907): extracted curves and the expected asymmetry
+    for (ds, fit61, exp61, exp75) in ((:sk4, -2.62, -2.38, -1.69), (:sk1to4, -2.86, -2.42, -1.72))
+        dn = Newtrinos.sk_solar_dn.configure(physics; dataset = ds)
+        a = dn.assets
+        @test a.fit_spline(6.1e-5) ≈ fit61 atol=0.05
+        pd = merge(Newtrinos.get_params((; dn)), (θ₁₃ = asin(sqrt(0.0218)), θ₁₂ = asin(sqrt(0.31))))
+        @test Newtrinos.sk_solar_dn.expected_adn(merge(pd, (Δm²₂₁ = 6.1e-5,)), dn.physics, a) ≈ exp61 rtol=0.05
+        @test Newtrinos.sk_solar_dn.expected_adn(merge(pd, (Δm²₂₁ = 7.5e-5,)), dn.physics, a) ≈ exp75 rtol=0.05
+        lh = Newtrinos.generate_likelihood((; dn))
+        h(x) = logdensityof(lh, merge(pd, (Δm²₂₁ = x,)))
+        @test h(6.1e-5) > h(7.5e-5)          # the measured asymmetry prefers the lower Δm²₂₁
+        @test ForwardDiff.derivative(h, 7.5e-5) ≈ (h(7.5e-5 * (1 + 1e-6)) - h(7.5e-5 * (1 - 1e-6))) / 1.5e-10 rtol=1e-4
+    end
 end
 
 @testset "Borexino" begin

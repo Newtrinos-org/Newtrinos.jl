@@ -71,11 +71,18 @@ get_priors(phase::SKPhase) = NamedTuple{(param(phase, :escale), param(phase, :er
     ntuple(_ -> Truncated(Normal(0.0, 1.0), -3, 3), 3))
 
 """
-    configure(phase::SKPhase, physics) -> SKSolar
+    configure(phase::SKPhase, physics; daynight=:spectra) -> SKSolar
+
+`daynight = :spectra` uses the published day/night (or zenith-binned) spectra. With
+`daynight = :combined` the zenith samples of each energy bin are merged into one sample (the
+same linear combination, weighted with the inverse statistical variances, is applied to data,
+expectation and covariance), so that the day/night information can instead be taken from SK's
+amplitude fit (`Newtrinos.sk_solar_dn`) without double counting.
 """
-function configure(phase::SKPhase, physics)
+function configure(phase::SKPhase, physics; daynight::Symbol=:spectra)
+    daynight in (:spectra, :combined) || throw(ArgumentError("daynight must be :spectra or :combined"))
     physics = (; physics.osc, physics.solar_flux, physics.solar_xsec, physics.earth_layers)
-    assets = get_assets(phase, physics)
+    assets = get_assets(phase, physics; daynight)
     SKSolar(
         physics = physics,
         params = get_params(phase),
@@ -86,7 +93,7 @@ function configure(phase::SKPhase, physics)
     )
 end
 
-function get_assets(phase::SKPhase, physics)
+function get_assets(phase::SKPhase, physics; daynight::Symbol=:spectra)
     @info "Loading $(phase.title) data"
     d, h = readdlm(phase.datafile, ',', Any, '\n'; header=true, comments=true)
     col(name) = d[:, findfirst(==(name), vec(h))]
@@ -120,6 +127,19 @@ function get_assets(phase::SKPhase, physics)
     # covariance: statistics, plus energy-uncorrelated systematics correlated within an energy bin
     s = syst .* rate
     cov = Diagonal(stat .^ 2) .+ [bin_of[i] == bin_of[j] ? s[i] * s[j] : 0.0 for i in eachindex(s), j in eachindex(s)]
+
+    if daynight == :combined
+        # one sample per energy bin: inverse-variance weighted combination of its zenith samples
+        A = zeros(length(bins), length(rate))
+        for i in eachindex(rate)
+            A[bin_of[i], i] = 1 / stat[i]^2
+        end
+        A ./= sum(A, dims=2)
+        rate, cov, W = A * rate, A * cov * A', A * W
+        E_lo, E_hi = first.(bins), last.(bins)
+        zen, cz_lo, cz_hi = fill("all", length(bins)), fill(-1.0, length(bins)), fill(1.0, length(bins))
+        bin_of = collect(eachindex(bins))
+    end
 
     E = collect(range(2.0, 18.8, length=120))
     resp = solar_common.ESResponse(physics.solar_xsec, E, bins, phase.resolution;
