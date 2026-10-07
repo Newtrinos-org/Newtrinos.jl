@@ -14,13 +14,14 @@ Default physics for solar neutrino experiments: three-flavour oscillations with 
 effects (MSW in the Sun and Earth regeneration), the B23 MB22-met solar model with
 solar-model flux priors, solar detection cross sections and the PREM Earth with zones at its
 density discontinuities (`earth_layers.PREM_discontinuities`), used with chord-averaged
-densities by [`Site`](@ref).
+densities by [`Site`](@ref). All solar detectors are in continental rock, so PREM's ocean layer
+is replaced by upper crust (`continental = true`).
 """
 function default_physics()
     osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction=Newtrinos.osc.SI(), eigen_method=Newtrinos.BargerEigen()))
     solar_flux = Newtrinos.solar_flux.configure()
     solar_xsec = Newtrinos.solar_xsec.configure()
-    earth_layers = Newtrinos.earth_layers.configure(Newtrinos.earth_layers.PREM_discontinuities())
+    earth_layers = Newtrinos.earth_layers.configure(Newtrinos.earth_layers.PREM_discontinuities(continental=true))
     (; osc, solar_flux, solar_xsec, earth_layers)
 end
 

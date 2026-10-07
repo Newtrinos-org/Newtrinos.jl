@@ -102,9 +102,10 @@ Configured solar neutrino flux model.
 - `nominal::NamedTuple`: total flux per component [cm⁻² s⁻¹].
 - `fractional_error::NamedTuple`: solar-model fractional uncertainty per component.
 - `correlation::Matrix{Float64}`: solar-model correlation matrix, in [`COMPONENTS`](@ref) order.
-- `production::NamedTuple`: per component, the production region `(r, ne, nn, w)` with `r` in
-  R☉, electron and neutron densities in mol/cm³ and weights summing to 1; the format expected
-  by `Newtrinos.osc` `solar_prob`.
+- `production::NamedTuple`: per component, the production region `(r, ne, nn, w, profile)` with
+  `r` in R☉, electron and neutron densities in mol/cm³, weights summing to 1, and the solar
+  density profile `profile = (r, ne, nn)` (used for non-adiabatic conversion); the
+  format expected by `Newtrinos.osc` `solar_prob`.
 - `flux::Function`: `flux(comp, params)`, total flux of a component [cm⁻² s⁻¹].
 - `spectrum::Function`: `spectrum(comp, E, params)`, differential flux dΦ/dE
   [cm⁻² s⁻¹ MeV⁻¹] of a continuous component at energies `E` [MeV].
@@ -218,7 +219,21 @@ function read_production(model::B23, n)
     col(name) = data[:, findfirst(==(name), vec(header))]
     r, ne, ρ, X = col("r"), col("ne"), col("rho"), col("X")
     nn = ρ .* (1 .- X) ./ 2  # neutrons per nucleon ≈ ½ for everything but hydrogen
-    NamedTuple{COMPONENTS}(compress_production(r, ne, nn, col(String(c)), n) for c in COMPONENTS)
+    # the full electron-density profile is attached for the level-crossing probability (see osc.solar_mass_fractions)
+    # beyond the end of the structure table (0.5 R☉): BS05(OP) electron density, matched at the boundary
+    outer, _ = readdlm(joinpath(datadir, "ne_outer_bs05op.csv"), ',', Float64, '\n'; header=true, comments=true)
+    sel = outer[:, 1] .> r[end]
+    ne_out = outer[sel, 2] .* (ne[end] / ne_at(outer, r[end]))
+    # neutron density beyond the table: constant n_n / n_e (composition of the convective envelope)
+    profile = (r = vcat(r, outer[sel, 1]), ne = vcat(ne, ne_out), nn = vcat(nn, ne_out .* (nn[end] / ne[end])))
+    NamedTuple{COMPONENTS}(merge(compress_production(r, ne, nn, col(String(c)), n), (profile = profile,)) for c in COMPONENTS)
+end
+
+# log-linear interpolation of the tabulated electron density (r ascending)
+function ne_at(tab, x)
+    i = clamp(searchsortedlast(tab[:, 1], x), 1, size(tab, 1) - 1)
+    t = (x - tab[i, 1]) / (tab[i+1, 1] - tab[i, 1])
+    exp(log(tab[i, 2]) + t * (log(tab[i+1, 2]) - log(tab[i, 2])))
 end
 
 function compress_production(r, ne, nn, dndr, n)

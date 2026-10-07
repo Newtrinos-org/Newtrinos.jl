@@ -236,6 +236,24 @@ end
     @test avg_σ(:b8, :ga71) ≈ 2.40e4 rtol=0.03
 end
 
+@testset "Solar non-adiabatic conversion" begin
+    O = Newtrinos.osc
+    physics = Newtrinos.solar_common.default_physics()
+    prod = physics.solar_flux.production.b8
+    p0 = physics.osc.params
+    Pday(θ, dm2, E) = physics.osc.solar_prob([E * 1e-3], prod, merge(p0, (θ₁₂ = θ, θ₁₃ = 0.0, Δm²₂₁ = dm2)))[1, 1]
+    # LMA: crossing probability negligible, adiabatic
+    @test O.solar_crossing_probability(7.5e-5, 0.69, 0.31, 0.01, 90.0, prod.profile) < 1e-30
+    # SMA (Bahcall, Krastev & Smirnov 2000, Fig. 1; day P_ee from Bahcall's Psurv_SMA.dat)
+    θ = asin(sqrt(0.7244e-2)) / 2
+    @test Pday(θ, 0.5012e-5, 2.94) ≈ 0.0480 atol=0.005
+    @test Pday(θ, 0.5012e-5, 5.78) ≈ 0.2138 atol=0.005
+    @test Pday(θ, 0.5012e-5, 11.48) ≈ 0.4492 atol=0.005
+    # tiny Δm²: completely non-adiabatic, averaged vacuum oscillation 1 - sin²2θ/2
+    θ = asin(sqrt(0.8)) / 2
+    @test Pday(θ, 1e-11, 10.0) ≈ 1 - 0.8 / 2 atol=1e-3
+end
+
 @testset "Radiochemical experiments" begin
     physics = Newtrinos.solar_common.default_physics()
     cl = Newtrinos.chlorine.configure(physics)

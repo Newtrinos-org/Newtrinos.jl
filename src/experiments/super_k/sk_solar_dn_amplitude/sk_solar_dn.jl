@@ -29,8 +29,9 @@ is smooth in Δm²₂₁. The likelihood is Gaussian, ``A_{DN}^{fit}(Δm²₂₁
 statistical band of the figure and the quoted systematic uncertainty added in quadrature. The
 expected asymmetry is computed with Newtrinos (⁸B + hep elastic scattering with the SK-IV
 response, Earth regeneration at Kamioka) from the day and night rates with recoil kinetic energy
-above `E_min` (default 5.49 MeV, which reproduces SK's expected asymmetry curves within ~2 %),
-so the term applies to any oscillation model.
+above `E_min` (default 4.49 MeV, the SK-I energy range in which SK expresses the asymmetry), so
+the term applies to any oscillation model. With the default solar physics (continental crust
+instead of PREM's ocean layer) this reproduces SK's expected asymmetry curves within 1–2 %.
 
 Use together with the SK spectra configured with `daynight = :combined` (e.g.
 `Newtrinos.sk4_solar.configure(physics; daynight = :combined)`) to avoid counting the day/night
@@ -52,7 +53,7 @@ end
 
 default_physics() = solar_common.default_physics()
 
-function configure(physics=default_physics(); dataset::Symbol=:sk1to4, E_min=5.49)
+function configure(physics=default_physics(); dataset::Symbol=:sk1to4, E_min=4.49)
     haskey(DATASETS, dataset) || throw(ArgumentError("dataset must be one of $(keys(DATASETS))"))
     physics = (; physics.osc, physics.solar_flux, physics.solar_xsec, physics.earth_layers)
     assets = get_assets(physics, dataset, E_min)
