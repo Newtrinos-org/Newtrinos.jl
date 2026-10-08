@@ -497,6 +497,7 @@ experiment's `configure(physics=...)` method.
     priors::NamedTuple
     matrices::Function
     osc_prob::Function
+    solar_prob::Function
 end
 
 """
@@ -532,7 +533,8 @@ function configure(cfg::OscillationConfig=OscillationConfig())
         params = get_params(cfg),
         priors = get_priors(cfg),
         matrices = get_matrices(cfg.flavour, cfg.eigen_method),
-        osc_prob = get_osc_prob(cfg)
+        osc_prob = get_osc_prob(cfg),
+        solar_prob = SolarProb(cfg)
     )
 end
 
@@ -1190,7 +1192,15 @@ function osc_reduce(matter_matrices, path, e, propagation::Damping)
     p = abs2.(S_total) .+ P_ave * Diagonal(1 .- decay) * P_ave'
 end
 
-function osc_reduce(matter_matrices, path, e, propagation::Basic)
+osc_reduce(matter_matrices, path, e, propagation::Basic) = abs2.(path_amplitude(matter_matrices, path, e))
+
+"""
+    path_amplitude(matter_matrices, path, e) -> Matrix
+
+Coherent flavour-basis evolution operator ``S = S_N \\cdots S_1`` along a multi-layer path
+at energy `e` [GeV], where ``S_k`` is the [`osc_kernel`](@ref) of the k-th path segment.
+"""
+function path_amplitude(matter_matrices, path, e)
     # Physical order: S_total = S_N · ... · S_1 (later layers multiply from the left)
     # Path is entry→exit, so each new section's S multiplies from the left
     sec = first(path)
@@ -1198,7 +1208,7 @@ function osc_reduce(matter_matrices, path, e, propagation::Basic)
     for sec in Iterators.drop(path, 1)
         S = osc_kernel(matter_matrices[sec.layer_idx]..., e, sec.length) * S
     end
-    abs2.(S)
+    S
 end
     
 
@@ -1603,6 +1613,305 @@ function _osc_prob(cfg, E::AbstractVector{<:Real}, paths::VectorOfVectors{Path},
 
     # fuse rest addition + permutedims into P[n_E, n_cz, in, out]
     return _add_rest_and_permute(p_raw, rest)
+end
+
+
+# SOLAR NEUTRINOS
+#
+# Solar neutrinos are produced as νe in the solar core and leave the Sun adiabatically as mass
+# eigenstates. Over the Sun–Earth distance all phases between mass eigenstates average out, so
+# they arrive as an incoherent mixture with weights P(νe → νᵢ) = Σ_r w(r) |U^m_{e i}(r)|², where
+# U^m(r) is the matter mixing matrix at the production radius r. At the detector,
+# P(νᵢ → ν_β) = |(S_earth U)_{β i}|², with S_earth the evolution operator along the path
+# through the Earth (no Earth crossing in daytime gives |U_{β i}|²).
+#
+# Evolution in the Sun: if the production region provides the solar density profile
+# (`production.profile`, as from `Newtrinos.solar_flux`), the level crossing of the solar pair
+# (the two mass states with the largest νe admixture, ν1 and ν2 in the standard case) is
+# estimated with Parke's formula (`solar_crossing_probability`). Where it is not negligible
+# (P_c > 1e-5; LOW region Δm² ≲ 10⁻⁷ eV², small mixing), the evolution from well above the
+# resonance to the solar surface is computed numerically through thin constant-density shells
+# (`solar_transition_matrix`), exact for any number of states. Otherwise the conversion is
+# adiabatic (all of LMA). Neutrinos only, all states
+# coherent (`cfg.states` is ignored); the Sun–Earth propagation is averaged (no coherent vacuum
+# oscillations between Sun and Earth, i.e. not valid for Δm² ≲ 10⁻⁹ eV²).
+
+"""
+    solar_mass_fractions(U, h, E, production, interaction, eigen_method=DefaultEigen()) -> Matrix
+
+Probability ``P(\\nu_e \\to \\nu_i)`` that a νe produced in the Sun leaves it as mass eigenstate
+`i`, averaged over the production region.
+
+The matter eigenstates are labelled by continuity: the eigenvalues of the matter Hamiltonian
+never cross along the adiabatic path to vacuum, so the k-th smallest matter eigenvalue connects
+to the k-th smallest vacuum eigenvalue (`sortperm(h)`), for any ordering and number of states.
+
+# Arguments
+- `U`, `h`: vacuum mixing matrix and mass-squared eigenvalues [eV²].
+- `E`: neutrino energies [GeV].
+- `production`: object with fields `ne`, `nn` (electron and neutron densities [mol/cm³] at the
+  production sample points) and `w` (production weights, need not be normalised).
+- `interaction`: [`SI`](@ref) for MSW conversion, [`Vacuum`](@ref) for none.
+
+# Returns
+`Matrix` of shape `(n_E, n_mass)`.
+"""
+function solar_mass_fractions(U, h, E, production, interaction::SI, eigen_method::EigenMethod=DefaultEigen())
+    H_eff = U * Diagonal(h) * adjoint(U)
+    n = length(h)
+    perm = sortperm(h)
+    w = production.w ./ sum(production.w)
+    T = real(promote_type(eltype(H_eff), eltype(E), eltype(production.ne), eltype(w)))
+    F = zeros(T, length(E), n)
+    # solar pair: the two mass states with the largest νe admixture; adjacent in the eigenvalue order
+    nonad = hasproperty(production, :profile) && n >= 2
+    a, b = nonad ? sort(sortperm([abs2(U[1, i]) for i in 1:n], rev=true)[1:2], by=i -> h[i]) : (1, 1)
+    ja, jb = nonad ? (findfirst(==(a), perm), findfirst(==(b), perm)) : (1, 1)
+    nonad && abs(ja - jb) != 1 && (nonad = false)
+    f = zeros(T, n)
+    ne_max = maximum(production.ne)
+    for (ie, e) in enumerate(E)
+        # non-adiabatic: transition matrix from the matter eigenstates at r₁ (well above the
+        # resonance, adiabatic up to there) to the vacuum mass states
+        Tm = nothing
+        if nonad
+            Pc = solar_crossing_probability(h[b] - h[a], abs2(U[1, a]), abs2(U[1, b]), e, ne_max, production.profile)
+            if Pc > 1e-5
+                n_res = (h[b] - h[a]) * (1 - 2 * abs2(U[1, b]) / (abs2(U[1, a]) + abs2(U[1, b]))) /
+                        (2 * e * 1e9 * A * (abs2(U[1, a]) + abs2(U[1, b])))
+                # start where the matter eigenstates are still (nearly) flavour states: at 1000 n_res the
+                # matter mixing angle is within ~0.1° of 90°, or at the production region if that is outer
+                Tm = solar_transition_matrix(H_eff, U, e, min(1000 * _strip(n_res), minimum(production.ne)), production.profile,
+                                             interaction, eigen_method)
+            end
+        end
+        for k in eachindex(w)
+            layer = Layer(zero(T), production.ne[k], production.nn[k])
+            Um, _ = compute_matter_matrices(H_eff, e, layer, false, interaction, eigen_method)
+            for j in 1:n
+                f[j] = abs2(Um[1, j])
+            end
+            if Tm === nothing
+                for j in 1:n
+                    F[ie, perm[j]] += w[k] * f[j]
+                end
+            else
+                for i in 1:n, j in 1:n
+                    F[ie, i] += w[k] * Tm[i, j] * f[j]
+                end
+            end
+        end
+    end
+    F
+end
+
+"""
+    solar_transition_matrix(H_eff, U, E, ne_start, profile, interaction, eigen_method; dlog=0.005) -> Matrix
+
+``|⟨ν_i| S |ν^m_j(r_1)⟩|^2``: probability that the j-th matter eigenstate (ascending eigenvalue)
+at the radius r₁ where the electron density equals `ne_start` [mol/cm³] leaves the Sun as vacuum
+mass eigenstate i, for energy `E` [GeV]. The evolution operator S from r₁ to the surface is the
+product of constant-density shells with a relative density step `dlog` (log-interpolated
+`profile = (r, ne, nn)`, r in R☉, densities in mol/cm³). The general Hermitian eigensolver is
+used regardless of `eigen_method`: the analytic 3×3 solutions lose precision when Δm²₂₁ is many
+orders of magnitude below the other scales (Δm² ≲ 10⁻⁹ eV²).
+"""
+function solar_transition_matrix(H_eff, U, E, ne_start, profile, interaction, eigen_method; dlog=0.005)
+    r, ne, nn = profile.r, profile.ne, profile.nn
+    i1 = something(findfirst(x -> x <= ne_start, ne), length(ne))
+    i1 = max(i1, 2)
+    # shell boundaries: r₁ (interpolated) and subdivisions of the tabulated intervals beyond it
+    t1 = log(ne[i1-1] / ne_start) / log(ne[i1-1] / ne[i1])
+    rb = [r[i1-1] + clamp(t1, 0.0, 1.0) * (r[i1] - r[i1-1])]
+    lnb = [log(ne_start)]
+    lnn = [log(nn[i1-1]) + clamp(t1, 0.0, 1.0) * (log(nn[i1]) - log(nn[i1-1]))]
+    for i in i1:length(r)
+        m = max(1, ceil(Int, abs(log(ne[i-1] / ne[i])) / dlog))
+        for s in 1:m
+            t = s / m
+            r_s = r[i-1] + t * (r[i] - r[i-1])
+            r_s <= rb[end] && continue
+            push!(rb, r_s)
+            push!(lnb, log(ne[i-1]) + t * (log(ne[i]) - log(ne[i-1])))
+            push!(lnn, log(nn[i-1]) + t * (log(nn[i]) - log(nn[i-1])))
+        end
+    end
+    R_SUN_KM = R_SUN_M / 1000
+    l1 = Layer(0.0, exp(lnb[1]), exp(lnn[1]))
+    H = Matrix(H_eff)
+    Um1, _ = compute_matter_matrices(H, E, l1, false, interaction, DefaultEigen())
+    S = one(Matrix{complex(eltype(Um1))}(undef, size(Um1)...))
+    for s in 2:length(rb)
+        layer = Layer(0.0, exp((lnb[s-1] + lnb[s]) / 2), exp((lnn[s-1] + lnn[s]) / 2))
+        Uk, hk = compute_matter_matrices(H, E, layer, false, interaction, DefaultEigen())
+        S = osc_kernel(Uk, hk, E, (rb[s] - rb[s-1]) * R_SUN_KM) * S
+    end
+    abs2.(adjoint(U) * S * Um1)
+end
+
+const HBARC_EV_M = 1.973269804e-7   # ħc [eV m]
+const R_SUN_M = 6.957e8             # solar radius [m]
+
+"""
+    solar_crossing_probability(dm2, Ua2, Ub2, E, ne_prod, profile) -> P_c
+
+Level-crossing probability of the solar pair of mass states (a, b) with Δm² = `dm2` [eV²] and
+νe admixtures `Ua2` = |U_ea|², `Ub2` = |U_eb|², for a neutrino of energy `E` [GeV] produced at
+electron density `ne_prod` [mol/cm³].
+
+Parke's formula for an exponential density profile (Phys. Rev. Lett. 57, 1275 (1986); Petcov,
+Phys. Lett. B 200, 373 (1988)),
+``P_c = (e^{-γ \\sin^2θ} - e^{-γ}) / (1 - e^{-γ})``, ``γ = π Δm² r_0 / E``,
+in the effective two-state system (``\\sin^2θ = U_{eb}^2 / (U_{ea}^2 + U_{eb}^2)``, potential
+scaled by ``U_{ea}^2 + U_{eb}^2 = c_{13}^2``), with the local density scale height
+``r_0 = |n_e / (dn_e/dr)|`` at the resonance taken from `profile = (r, ne)` (r in R☉, nₑ in
+mol/cm³, ascending r). P_c = 0 if the resonance is not crossed (produced below the resonance
+density, or cos 2θ ≤ 0).
+"""
+function solar_crossing_probability(dm2, Ua2, Ub2, E, ne_prod, profile)
+    c2 = Ua2 + Ub2
+    s2 = Ub2 / c2
+    cos2θ = 1 - 2 * s2
+    T = promote_type(typeof(dm2), typeof(s2), typeof(E))
+    (dm2 <= 0 || cos2θ <= 0) && return zero(T)
+    # resonance: 2E V c² = Δm² cos2θ with V = A nₑ (A·nₑ in eV for nₑ in mol/cm³, E in eV)
+    n_res = dm2 * cos2θ / (2 * E * 1e9 * A * c2)
+    ne_prod <= n_res && return zero(T)
+    r, ne = profile.r, profile.ne
+    i = findfirst(x -> x < n_res, ne)   # first tabulated point beyond the resonance
+    i === nothing && return zero(T)
+    i = max(i, 2)
+    # exponential interpolation between the bracketing points: local scale height
+    r0 = (r[i] - r[i-1]) / log(ne[i-1] / ne[i]) * R_SUN_M
+    γ = π * dm2 * r0 / (E * 1e9 * HBARC_EV_M)
+    # (e^{-γ s²} - e^{-γ}) / (1 - e^{-γ}) = e^{-γ s²} (1 - e^{-γ c²}) / (1 - e^{-γ}), stable for any γ > 0
+    exp(-γ * s2) * expm1(-γ * (1 - s2)) / expm1(-γ)
+end
+
+function solar_mass_fractions(U, h, E, production, interaction::Vacuum, eigen_method::EigenMethod=DefaultEigen())
+    [abs2(U[1, i]) for _ in E, i in eachindex(h)]
+end
+
+"""
+    earth_mass_to_flavour(U, h, E, paths, layers, interaction, eigen_method=DefaultEigen()) -> Array{T,4}
+
+Probability ``P(\\nu_i \\to \\nu_\\beta)`` that mass eigenstate `i` arriving at the Earth is
+detected as flavour `β` after traversing `paths` through `layers`.
+
+An empty path (no matter crossed) gives ``|U_{\\beta i}|^2``. Vacuum segments leave the
+result unchanged, as mass eigenstates do not oscillate in vacuum.
+
+# Returns
+`Array` of shape `(n_E, n_paths, n_mass, n_flav)`.
+"""
+function earth_mass_to_flavour(U, h, E, paths, layers, interaction::SI, eigen_method::EigenMethod=DefaultEigen())
+    H_eff = U * Diagonal(h) * adjoint(U)
+    n = length(h)
+    T = real(promote_type(eltype(H_eff), eltype(E), eltype(layers.p_density), eltype(layers.n_density)))
+    R = Array{T}(undef, length(E), length(paths), n, n)
+    for (ie, e) in enumerate(E)
+        matter_matrices = [compute_matter_matrices(H_eff, e, layer, false, interaction, eigen_method) for layer in layers]
+        for (ip, path) in enumerate(paths)
+            amp = isempty(path) ? U : path_amplitude(matter_matrices, path, e) * U
+            for i in 1:n, β in 1:n
+                R[ie, ip, i, β] = abs2(amp[β, i])
+            end
+        end
+    end
+    R
+end
+
+function earth_mass_to_flavour(U, h, E, paths, layers, interaction::Vacuum, eigen_method::EigenMethod=DefaultEigen())
+    P = abs2.(U)  # P[β, i]
+    T = real(promote_type(eltype(P), eltype(E)))
+    R = Array{T}(undef, length(E), length(paths), length(h), length(h))
+    for i in axes(P, 2), β in axes(P, 1)
+        R[:, :, i, β] .= P[β, i]
+    end
+    R
+end
+
+# Callable struct (see `OscProb`): `K` are the oscillation parameter names.
+struct SolarProb{C<:OscillationConfig, K} <: Function
+    cfg::C
+end
+SolarProb(cfg::C) where {C<:OscillationConfig} = SolarProb{C, keys(get_params(cfg))}(cfg)
+
+"""
+    solar_prob(E, production, params) -> Matrix
+    solar_prob(E, production, paths, layers, params) -> Array{T,3}
+
+Oscillation probability ``P(\\nu_e \\to \\nu_\\beta)`` for solar neutrinos, available as the
+`solar_prob` field of a configured [`Osc`](@ref).
+
+The first method gives the probability without Earth matter effects (daytime), of shape
+`(n_E, n_flav)`. The second includes Earth regeneration along `paths` through `layers` (as
+from `Newtrinos.earth_layers`), of shape `(n_E, n_paths, n_flav)`.
+
+The configured interaction applies to both the Sun and the Earth: [`SI`](@ref) for MSW effects,
+[`Vacuum`](@ref) for averaged vacuum oscillations.
+
+# Arguments
+- `E`: neutrino energies [GeV].
+- `production`: production region, see [`solar_mass_fractions`](@ref) (e.g. from `Newtrinos.solar_flux`).
+- `params::NamedTuple`: oscillation parameters.
+"""
+# Memoisation of solar probabilities without derivatives (per task): during a fit at fixed oscillation parameters
+# (profile scans), every likelihood evaluation of every solar experiment would otherwise recompute the same day and
+# night probabilities. Keyed on the parameter values, the energies and the identities of production region, paths
+# and layers; at most `SOLAR_CACHE_SIZE` entries per task.
+const SOLAR_CACHE_SIZE = 64
+function _solar_cached(compute, key)
+    cache = get!(() -> Dict{UInt, Any}(), task_local_storage(), :newtrinos_solar_prob_cache)::Dict{UInt, Any}
+    haskey(cache, key) && return cache[key]
+    length(cache) >= SOLAR_CACHE_SIZE && empty!(cache)
+    cache[key] = compute()
+end
+
+function (f::SolarProb{C,K})(E::AbstractVector{<:Real}, production, params::NamedTuple) where {C,K}
+    p = NamedTuple{K}(params)
+    T = _osc_numtype(E, p)
+    if T <: ForwardDiff.Dual && _no_partials(E, p)  # zero-partials shortcut, see `OscProb`
+        return T.(f(_strip.(E), production, map(_strip, p)))
+    end
+    T <: AbstractFloat || return _solar_prob(f.cfg, E, production, p)
+    key = hash((:day, objectid(f), objectid(production), E, values(p)))
+    _solar_cached(() -> _solar_prob(f.cfg, E, production, p), key)
+end
+
+function (f::SolarProb{C,K})(E::AbstractVector{<:Real}, production, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, params::NamedTuple) where {C,K}
+    p = NamedTuple{K}(params)
+    T = _osc_numtype(E, layers.p_density, layers.n_density, p)
+    if T <: ForwardDiff.Dual && _no_partials(E, layers.p_density, layers.n_density, p)
+        layers64 = StructArray{Layer}((layers.radius, _strip.(layers.p_density), _strip.(layers.n_density)))
+        return T.(f(_strip.(E), production, paths, layers64, map(_strip, p)))
+    end
+    T <: AbstractFloat || return _solar_prob(f.cfg, E, production, paths, layers, p)
+    key = hash((:night, objectid(f), objectid(production), objectid(paths), E, values(p), layers.p_density, layers.n_density))
+    _solar_cached(() -> _solar_prob(f.cfg, E, production, paths, layers, p), key)
+end
+
+function _solar_prob(cfg, E, production, params)
+    U, h = _solar_matrices(cfg, params)
+    F = solar_mass_fractions(U, h, E, production, cfg.interaction, cfg.eigen_method)
+    F * transpose(abs2.(U))
+end
+
+function _solar_prob(cfg, E, production, paths, layers, params)
+    U, h = _solar_matrices(cfg, params)
+    F = solar_mass_fractions(U, h, E, production, cfg.interaction, cfg.eigen_method)
+    R = earth_mass_to_flavour(U, h, E, paths, layers, cfg.interaction, cfg.eigen_method)
+    T = promote_type(eltype(F), eltype(R))
+    P = zeros(T, length(E), length(paths), size(R, 4))
+    for β in axes(R, 4), i in axes(R, 3), ip in axes(R, 2), ie in axes(R, 1)
+        P[ie, ip, β] += F[ie, i] * R[ie, ip, i, β]
+    end
+    P
+end
+
+function _solar_matrices(cfg, params)
+    U, h_raw = get_matrices(cfg.flavour, cfg.eigen_method)(params)
+    U, h_raw .- minimum(h_raw)
 end
 
 

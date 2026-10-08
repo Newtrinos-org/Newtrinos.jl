@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test Commands
 
 ```bash
-# Run unit tests (185 tests, ~20s)
+# Run unit tests (~2500 tests, ~8 min)
 julia --project -e 'using Pkg; Pkg.test()'
 
 # Run benchmarks
@@ -33,6 +33,10 @@ Theory predictions with no experiment knowledge. Each module returns a struct `<
 - **`atm_flux.jl`** — HKKM atmospheric neutrino fluxes with Barr systematics. Site-specific flux files in `src/physics/*.d`.
 - **`xsec.jl`** — Cross-section models: `SimpleScaling` or `Differential_H2O` (for Super-K).
 - **`cevns_xsec.jl`**, **`sns_flux.jl`** — COHERENT-specific physics.
+- **`solar_flux.jl`** — Standard solar model (B23, default MB22-met; data in `src/physics/solar/`): fluxes and spectra per component; flux normalisations as one vector `solar_norms` with the correlated B23 `MvNormal` prior (`CorrelatedSSMPriors`, default) or as scalars `solar_norm_*` (`SSMPriors`, for fits that free single components); `solar_b8_shape`; production regions with the solar density profile (`production`, input to `osc.solar_prob`; beyond 0.5 R☉ from BS05(OP)); `nadir_exposure(latitude)`.
+- **`solar_xsec.jl`** — ν–e elastic scattering (with radiative corrections) and ³⁷Cl/⁷¹Ga capture cross sections.
+- Solar oscillations live in `osc.jl`: `osc.solar_prob(E, production, params)` (day) and `osc.solar_prob(E, production, paths, layers, params)` (Earth regeneration); MSW in the Sun via `compute_matter_matrices`, eigenstates labelled by eigenvalue order; adiabatic unless Parke's level-crossing estimate is non-negligible, then numerical evolution through the solar profile (`solar_transition_matrix`; LOW/SMA region, slow there).
+- `earth_layers.compute_chord_paths` gives each path segment its own chord-averaged PREM density; `PREM_discontinuities(continental=true)` (crust instead of PREM's ocean) is the zoning used for solar day/night.
 
 ### Experiments (`src/experiments/`)
 Each experiment module has `configure(physics=default_physics())` returning a struct `<: Newtrinos.Experiment` with fields: `physics`, `params`, `priors`, `assets`, `forward_model`, `plot`. Each experiment defines its own `default_physics()` with appropriate oscillation config, flux files, and cross-section models.
@@ -42,6 +46,7 @@ Experiment groups and their physics requirements:
 - **Reactor** (dayabay, kamland, juno, tao): `osc` (Vacuum)
 - **Accelerator** (minos): `osc`, `xsec`
 - **COHERENT** (coherent_csi, coherent_lAr): self-contained, no physics input
+- **Solar** (chlorine, gallex_gno, sage, sno, sk1_solar–sk4_solar, sk_solar_dn, borexino_ph1–ph3, borexino_ph2_spectrum): `osc` (SI), `solar_flux`, `solar_xsec`, `earth_layers` (PREM_discontinuities); shared code in `experiments/solar_common/` (`Site` day/night exposure, ES response, capture rates) and `experiments/super_k/sk_solar_common/` (one `SKPhase` per SK phase). SK day/night: either the day/night spectra (default) or `configure(physics; daynight=:combined)` together with `sk_solar_dn` (SK's amplitude-fit A_DN vs Δm²₂₁). Borexino: `borexino_ph1/ph2` published rates, `borexino_ph3` and `borexino_ph2_spectrum` spectral fits (MC solar shapes with calibrated response; Phase II with Borexino's extracted background components).
 
 ### Analysis (`src/analysis/`)
 Inference tools treating experiments as black boxes.
