@@ -73,6 +73,7 @@ include("experiments/super_k/sk_solar_dn_amplitude/sk_solar_dn.jl")
 include("experiments/borexino/borexino_phase1/borexino_ph1.jl")
 include("experiments/borexino/borexino_phase2/borexino_ph2.jl")
 include("experiments/borexino/borexino_phase3/borexino_ph3.jl")
+include("experiments/borexino/borexino_phase2_spectrum/borexino_ph2_spectrum.jl")
 
 include("experiments/juno/juno.jl")
 include("experiments/juno/tao.jl")

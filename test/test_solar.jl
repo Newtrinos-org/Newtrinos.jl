@@ -422,3 +422,26 @@ end
     lp(pred) = logpdf(Normal(pred, sqrt(Newtrinos.solar_common.asymmetric_variance(pred, 6.7, 2.0, 0.8))), 6.7)
     @test lp(8.7) > lp(4.7)
 end
+
+@testset "Borexino Phase-II spectrum" begin
+    B = Newtrinos.borexino_ph2_spectrum
+    bx = B.configure()
+    a = bx.assets
+    @test length(a.observed) == 851 && all(a.observed .>= 0) && all(isinteger, a.observed)
+    @test keys(bx.params) == keys(bx.priors)
+    # the extracted Borexino components with the ²¹⁰Po bin structure reproduce Borexino's total fit
+    @test sum(a.spectrum.bkg) / sum(a.spectrum.bestfit / B.EXPOSURE) > 0.8
+    # the calibrated model at Borexino's rates reproduces Borexino's best-fit spectrum (deviance per bin ≪ 1)
+    cal = a.calibration
+    p = merge(Newtrinos.get_params((; bx)), NamedTuple(B.param_name(k) => cal[k] for k in keys(B.BACKGROUNDS)))
+    ex = B.get_expected(p, bx.physics, a)
+    @test all(ex.total .> 0)
+    @test sum(ex.total) ≈ sum(a.spectrum.bestfit) rtol = 0.05
+    llh = Newtrinos.generate_likelihood((; bx))
+    f(y) = logdensityof(llh, merge(p, (borexino_ph2s_energy_scale = y[1], borexino_ph2s_c14 = y[2], θ₁₂ = y[3])))
+    y0 = [0.3, 1.01, p.θ₁₂]
+    g = ForwardDiff.gradient(f, y0)
+    δ = [1e-6, 1e-7, 1e-7]
+    g_fd = [(f(y0 .+ δ .* (1:3 .== i)) - f(y0 .- δ .* (1:3 .== i))) / 2δ[i] for i in 1:3]
+    @test g ≈ g_fd rtol = 1e-4
+end
