@@ -178,7 +178,9 @@ ssm_prior(sf::SolarFlux) = ssm_prior(sf.fractional_error, sf.correlation)
 
 function ssm_prior(frac_err, corr)
     σ = [frac_err[c] for c in COMPONENTS]
-    MvNormal(ones(length(σ)), Symmetric(Diagonal(σ) * corr * Diagonal(σ)))
+    # dense covariance: cholesky(::Symmetric) leaves the unused triangle of its factors uninitialised, which made the
+    # prior's content hash (fit cache key) differ between sessions
+    MvNormal(ones(length(σ)), Matrix(Symmetric(Diagonal(σ) * corr * Diagonal(σ))))
 end
 
 """
