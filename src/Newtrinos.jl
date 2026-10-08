@@ -75,6 +75,8 @@ include("experiments/borexino/borexino_phase1/borexino_ph1.jl")
 include("experiments/borexino/borexino_phase2/borexino_ph2.jl")
 include("experiments/borexino/borexino_phase3/borexino_ph3.jl")
 include("experiments/borexino/borexino_phase2_spectrum/borexino_ph2_spectrum.jl")
+include("experiments/borexino/borexino_phase1_spectrum/borexino_ph1_spectrum.jl")
+include("experiments/chi2map/chi2map.jl")
 
 include("experiments/juno/juno.jl")
 include("experiments/juno/tao.jl")

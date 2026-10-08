@@ -1856,13 +1856,27 @@ The configured interaction applies to both the Sun and the Earth: [`SI`](@ref) f
 - `production`: production region, see [`solar_mass_fractions`](@ref) (e.g. from `Newtrinos.solar_flux`).
 - `params::NamedTuple`: oscillation parameters.
 """
+# Memoisation of solar probabilities without derivatives (per task): during a fit at fixed oscillation parameters
+# (profile scans), every likelihood evaluation of every solar experiment would otherwise recompute the same day and
+# night probabilities. Keyed on the parameter values, the energies and the identities of production region, paths
+# and layers; at most `SOLAR_CACHE_SIZE` entries per task.
+const SOLAR_CACHE_SIZE = 64
+function _solar_cached(compute, key)
+    cache = get!(() -> Dict{UInt, Any}(), task_local_storage(), :newtrinos_solar_prob_cache)::Dict{UInt, Any}
+    haskey(cache, key) && return cache[key]
+    length(cache) >= SOLAR_CACHE_SIZE && empty!(cache)
+    cache[key] = compute()
+end
+
 function (f::SolarProb{C,K})(E::AbstractVector{<:Real}, production, params::NamedTuple) where {C,K}
     p = NamedTuple{K}(params)
     T = _osc_numtype(E, p)
     if T <: ForwardDiff.Dual && _no_partials(E, p)  # zero-partials shortcut, see `OscProb`
-        return T.(_solar_prob(f.cfg, _strip.(E), production, map(_strip, p)))
+        return T.(f(_strip.(E), production, map(_strip, p)))
     end
-    _solar_prob(f.cfg, E, production, p)
+    T <: AbstractFloat || return _solar_prob(f.cfg, E, production, p)
+    key = hash((:day, objectid(f), objectid(production), E, values(p)))
+    _solar_cached(() -> _solar_prob(f.cfg, E, production, p), key)
 end
 
 function (f::SolarProb{C,K})(E::AbstractVector{<:Real}, production, paths::VectorOfVectors{Path}, layers::StructVector{Layer}, params::NamedTuple) where {C,K}
@@ -1870,9 +1884,11 @@ function (f::SolarProb{C,K})(E::AbstractVector{<:Real}, production, paths::Vecto
     T = _osc_numtype(E, layers.p_density, layers.n_density, p)
     if T <: ForwardDiff.Dual && _no_partials(E, layers.p_density, layers.n_density, p)
         layers64 = StructArray{Layer}((layers.radius, _strip.(layers.p_density), _strip.(layers.n_density)))
-        return T.(_solar_prob(f.cfg, _strip.(E), production, paths, layers64, map(_strip, p)))
+        return T.(f(_strip.(E), production, paths, layers64, map(_strip, p)))
     end
-    _solar_prob(f.cfg, E, production, paths, layers, p)
+    T <: AbstractFloat || return _solar_prob(f.cfg, E, production, paths, layers, p)
+    key = hash((:night, objectid(f), objectid(production), objectid(paths), E, values(p), layers.p_density, layers.n_density))
+    _solar_cached(() -> _solar_prob(f.cfg, E, production, paths, layers, p), key)
 end
 
 function _solar_prob(cfg, E, production, params)

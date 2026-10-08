@@ -423,6 +423,26 @@ end
     @test lp(8.7) > lp(4.7)
 end
 
+@testset "Borexino Phase-I spectra" begin
+    B = Newtrinos.borexino_ph1_spectrum
+    bx = B.configure()
+    a = bx.assets
+    @test length(a.observed.le) == 133 && length(a.observed.he) == 5
+    @test sum(a.observed.he) ≈ 0.217 * 345.3 rtol = 0.01       # published ⁸B rate above 3 MeV × live time
+    p = Newtrinos.get_params((; bx))
+    ex = B.get_expected(p, bx.physics, a)
+    N = a.observed.le
+    @test 2 * sum(ex.le .- N .+ N .* log.(max.(N, 1e-300) ./ ex.le)) < 2.0 * length(N)   # deviance per bin at the defaults
+    @test ex.solar.be7_862 / ex.solar.be7 ≈ 0.961 atol = 0.005   # the 384 keV line contributes little to ES
+    llh = Newtrinos.generate_likelihood((; bx))
+    f(y) = logdensityof(llh, merge(p, (borexino_ph1s_energy_scale = y[1], borexino_ph1s_kr85 = y[2], θ₁₂ = y[3])))
+    y0 = [0.3, 0.9, p.θ₁₂]
+    g = ForwardDiff.gradient(f, y0)
+    δ = [1e-6, 1e-7, 1e-7]
+    g_fd = [(f(y0 .+ δ .* (1:3 .== i)) - f(y0 .- δ .* (1:3 .== i))) / 2δ[i] for i in 1:3]
+    @test g ≈ g_fd rtol = 1e-4
+end
+
 @testset "Borexino Phase-II spectrum" begin
     B = Newtrinos.borexino_ph2_spectrum
     bx = B.configure()
