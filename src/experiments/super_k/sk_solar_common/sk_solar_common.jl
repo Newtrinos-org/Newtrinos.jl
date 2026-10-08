@@ -4,6 +4,7 @@ using LinearAlgebra
 using Distributions
 using DelimitedFiles
 using CairoMakie
+using BAT: distprod
 import ..Newtrinos
 import ..Newtrinos.solar_common
 
@@ -25,7 +26,8 @@ Description of one Super-Kamiokande solar data set.
 - `norm_unc`: energy-independent rate systematics not contained in the per-bin errors.
 - `phi_b8_mc`, `phi_hep_mc`: ⁸B and hep fluxes [cm⁻² s⁻¹] assumed for the expected rates.
 - `night_edges`: solar cos θ_z night binning (SK convention, 0 to 1) used to average the
-  Earth regeneration; must contain all zenith bin edges of the data samples.
+  Earth regeneration; must contain all zenith bin edges of the data samples. The default 80 bins
+  converge the likelihood to Δln L ≲ 0.01 (20 bins: up to 0.45 at Δm²₂₁ ≈ 5×10⁻⁵ eV²).
 """
 @kwdef struct SKPhase
     name::Symbol
@@ -38,7 +40,7 @@ Description of one Super-Kamiokande solar data set.
     norm_unc::Float64
     phi_b8_mc::Float64
     phi_hep_mc::Float64
-    night_edges::Vector{Float64} = collect(range(0, 1, length=21))
+    night_edges::Vector{Float64} = collect(range(0, 1, length=81))
 end
 
 """
@@ -93,7 +95,7 @@ function configure(phase::SKPhase, physics; daynight::Symbol=:spectra)
     )
 end
 
-function get_assets(phase::SKPhase, physics; daynight::Symbol=:spectra)
+function get_assets(phase::SKPhase, physics; daynight::Symbol=:spectra, site=nothing)
     @info "Loading $(phase.title) data"
     d, h = readdlm(phase.datafile, ',', Any, '\n'; header=true, comments=true)
     col(name) = d[:, findfirst(==(name), vec(h))]
@@ -108,7 +110,7 @@ function get_assets(phase::SKPhase, physics; daynight::Symbol=:spectra)
     mc_hep = [num("mc_hep")[findfirst(==(k), bin_of)] for k in eachindex(bins)]
 
     # zenith weights per sample over [day; night bins]; Site uses cos(zenith) of the Sun = -cos θ_z(SK)
-    site = solar_common.Site(physics, 36.43; depth_km=1.0, night_edges=reverse(-phase.night_edges))
+    site = something(site, kamioka_site(physics, phase.night_edges))
     sk_cz = -site.cz_night  # SK convention, night > 0
     W = zeros(length(rate), 1 + length(sk_cz))
     for i in eachindex(rate)
@@ -158,19 +160,35 @@ function get_assets(phase::SKPhase, physics; daynight::Symbol=:spectra)
     )
 end
 
-"""
-    get_expected(phase, params, physics, assets) -> Vector
+# Kamioka (36.43° N, 1 km rock overburden); `night_edges` in SK's cos θ_z convention (night > 0)
+kamioka_site(physics, night_edges) = solar_common.Site(physics, 36.43; depth_km=1.0, night_edges=reverse(-night_edges))
 
-Expected rate [events/kton/year] of each data sample.
 """
-function get_expected(phase::SKPhase, params, physics, assets)
+    solar_probabilities(physics, site, E, params) -> NamedTuple
+
+νe survival probabilities of ⁸B and hep neutrinos at energies `E` [MeV], as matrices with columns
+[day, night bins of `site`...]. Shared by all SK phases evaluated at the same site and energies.
+"""
+function solar_probabilities(physics, site, E, params)
+    map((b8 = :b8, hep = :hep)) do comp
+        P = solar_common.survival(physics, site, comp, E, params)
+        hcat(P.day[:, 1], P.night[:, :, 1])
+    end
+end
+
+"""
+    get_expected(phase, params, physics, assets[, Pe]) -> Vector
+
+Expected rate [events/kton/year] of each data sample; `Pe` from [`solar_probabilities`](@ref)
+(computed if not given).
+"""
+function get_expected(phase::SKPhase, params, physics, assets,
+                      Pe = solar_probabilities(physics, assets.site, assets.resp.E, params))
     sf, resp = physics.solar_flux, assets.resp
     pulls = (scale = params[param(phase, :escale)], reso = params[param(phase, :ereso)])
     # rates per energy bin (rows) and zenith column [day, night bins...] (columns)
     function rates(comp, rate0, mc)
-        P = solar_common.survival(physics, assets.site, comp, resp.E, params)
-        Pe = hcat(P.day[:, 1], P.night[:, :, 1])
-        r = solar_common.es_rates(resp, sf.spectrum(comp, resp.E, params), Pe; pulls...)
+        r = solar_common.es_rates(resp, sf.spectrum(comp, resp.E, params), Pe[comp]; pulls...)
         mc .* r ./ rate0
     end
     R = rates(:b8, assets.rate0_b8, assets.mc_b8) .+ rates(:hep, assets.rate0_hep, assets.mc_hep)
@@ -186,14 +204,19 @@ end
 
 function get_plot(phase::SKPhase, physics, assets)
     function plot(params, data=assets.observed)
-        e = solar_common.ForwardDiffValue.(get_expected(phase, params, physics, assets))
+        f = Figure()
+        plot_phase!(f[1, 1], phase, solar_common.ForwardDiffValue.(get_expected(phase, params, physics, assets)), assets, data)
+        f
+    end
+end
+
+function plot_phase!(pos, phase::SKPhase, e, assets, data)
         s = assets.samples
         mc = (assets.mc_b8 .+ assets.mc_hep)[assets.bin_of]
         err = sqrt.(diag(assets.cov))
         classes = unique(collect(zip(s.zenith, s.cz_lo, s.cz_hi)))
         label(c) = c[1] == "night" && (c[2], c[3]) != (0.0, 1.0) ? "night $(c[2])–$(c[3])" : c[1]
-        f = Figure()
-        ax = Axis(f[1, 1], title=phase.title, ylabel="Data / MC (unoscillated)",
+        ax = Axis(pos, title=phase.title, ylabel="Data / MC (unoscillated)",
                   xlabel=phase.total_energy ? "Recoil electron total energy (MeV)" : "Recoil electron kinetic energy (MeV)")
         for (j, c) in enumerate(classes)
             idx = findall(i -> (s.zenith[i], s.cz_lo[i], s.cz_hi[i]) == c, eachindex(s.zenith))
@@ -205,6 +228,63 @@ function get_plot(phase::SKPhase, physics, assets)
         end
         ylims!(ax, 0.2, 0.8)
         axislegend(ax, position=:rt, labelsize=10)
+        ax
+end
+
+# SEVERAL PHASES IN ONE EXPERIMENT (Newtrinos.sk_solar): the survival probabilities are computed once per evaluation
+
+"""
+    configure(phases::Tuple{Vararg{SKPhase}}, physics; daynight=:spectra) -> SKSolar
+
+Several SK phases as one experiment. All phases share one Kamioka site, with the finest zenith binning
+among them (SK-I's, which contains the day/night split of the other phases), and one energy grid, so the
+⁸B and hep survival probabilities are computed once per evaluation. Each phase keeps its data, response,
+covariance and nuisance parameters.
+"""
+function configure(phases::Tuple{Vararg{SKPhase}}, physics; daynight::Symbol=:spectra)
+    daynight in (:spectra, :combined) || throw(ArgumentError("daynight must be :spectra or :combined"))
+    physics = (; physics.osc, physics.solar_flux, physics.solar_xsec, physics.earth_layers)
+    edges = phases[argmax([length(p.night_edges) for p in phases])].night_edges
+    site = kamioka_site(physics, edges)
+    names = Tuple(p.name for p in phases)
+    pa = NamedTuple{names}(Tuple(get_assets(p, physics; daynight, site) for p in phases))
+    E = first(pa).resp.E
+    @assert all(a.resp.E == E for a in pa) "SK phases must share the energy grid"
+    assets = (observed = map(a -> a.observed, pa), phases = pa, site = site, E = E)
+    SKSolar(
+        physics = physics,
+        params = merge(map(get_params, phases)...),
+        priors = merge(map(get_priors, phases)...),
+        assets = assets,
+        forward_model = get_forward_model(phases, physics, assets),
+        plot = get_plot(phases, physics, assets),
+    )
+end
+
+"""
+    get_expected(phases::Tuple, params, physics, assets) -> NamedTuple
+
+Expected rates of each phase (keyed by the phase names), from one evaluation of the survival probabilities.
+"""
+function get_expected(phases::Tuple{Vararg{SKPhase}}, params, physics, assets)
+    Pe = solar_probabilities(physics, assets.site, assets.E, params)
+    NamedTuple{Tuple(p.name for p in phases)}(Tuple(get_expected(p, params, physics, assets.phases[p.name], Pe) for p in phases))
+end
+
+function get_forward_model(phases::Tuple{Vararg{SKPhase}}, physics, assets)
+    function forward_model(params)
+        e = get_expected(phases, params, physics, assets)
+        distprod(map((ei, a) -> MvNormal(ei, a.cov), e, assets.phases))
+    end
+end
+
+function get_plot(phases::Tuple{Vararg{SKPhase}}, physics, assets)
+    function plot(params, data=assets.observed)
+        e = get_expected(phases, params, physics, assets)
+        f = Figure(size=(700, 380 * length(phases)))
+        for (k, p) in enumerate(phases)
+            plot_phase!(f[k, 1], p, solar_common.ForwardDiffValue.(e[p.name]), assets.phases[p.name], data[p.name])
+        end
         f
     end
 end

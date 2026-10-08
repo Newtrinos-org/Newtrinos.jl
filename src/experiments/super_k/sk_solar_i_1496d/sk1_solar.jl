@@ -27,7 +27,8 @@ const PHASE = SKPhase(
     norm_unc = 0.028,
     phi_b8_mc = 5.79e6,
     phi_hep_mc = 7.88e3,
-    night_edges = vcat([range(a, b, length=5)[1:end-1] for (a, b) in zip([0, 0.16, 0.33, 0.50, 0.67, 0.84], [0.16, 0.33, 0.50, 0.67, 0.84, 1.0])]..., [1.0]),
+    # the six zenith classes of the data, each subdivided into 16 bins for the Earth regeneration average
+    night_edges = vcat([range(a, b, length=17)[1:end-1] for (a, b) in zip([0, 0.16, 0.33, 0.50, 0.67, 0.84], [0.16, 0.33, 0.50, 0.67, 0.84, 1.0])]..., [1.0]),
 )
 
 default_physics() = solar_common.default_physics()

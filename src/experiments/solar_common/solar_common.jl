@@ -51,14 +51,14 @@ end
 Site(w_day, cz_night, w_night, paths, layers) = Site(w_day, cz_night, w_night, paths, layers, 2.0)
 
 """
-    Site(physics, latitude_deg; depth_km=1.0, n_night=20, night_edges=range(-1, 0, length=n_night + 1)) -> Site
+    Site(physics, latitude_deg; depth_km=1.0, n_night=80, night_edges=range(-1, 0, length=n_night + 1)) -> Site
 
 Exposure of a detector at geographic latitude `latitude_deg` and depth `depth_km` below the
 surface, using `physics.solar_flux` for the Sun's yearly path and `physics.earth_layers` for
 the Earth model. The night is binned with `night_edges` in cos(zenith) of the Sun (from -1 to
 0).
 """
-function Site(physics, latitude_deg; depth_km=1.0, n_night=20, night_edges=range(-1, 0, length=n_night + 1), E_night_min=2.0)
+function Site(physics, latitude_deg; depth_km=1.0, n_night=80, night_edges=range(-1, 0, length=n_night + 1), E_night_min=2.0)
     n_night = length(night_edges) - 1
     ex = Newtrinos.solar_flux.nadir_exposure(latitude_deg; cz_edges=vcat(night_edges, [1.0]))
     layers = physics.earth_layers.compute_layers()
