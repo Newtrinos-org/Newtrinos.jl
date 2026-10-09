@@ -1008,8 +1008,8 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     function forward_model(params)
         output = []
         for (c, p_AD) in enumerate(detector_list)
-            push!(output, background_models[p_AD](params) .+ neutrino_models[p_AD](params))
-            #push!(output, neutrino_models[p_AD](params))
+            #push!(output, background_models[p_AD](params) .+ neutrino_models[p_AD](params))
+            push!(output, neutrino_models[p_AD](params))
             #push!(output, background_models[p_AD](params))
             # break
         end
