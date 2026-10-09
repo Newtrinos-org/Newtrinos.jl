@@ -16,7 +16,9 @@ with open(os.path.join(OUT, 'noosc_2011.csv'), 'w') as f:
     for x0, x1, y in steps:
         if min(abs(E(x0) - (0.9 + 0.425 * k)) for k in range(19)) > 0.02: continue          # legend sample
         f.write('%.3f,%.3f,%.2f\n' % (E(x0), E(x1), (471.5 - y) / 0.8136))
-red = sorted({(round(q[0], 2), round(q[1], 2)) for p in paths if p['color'] == '1 0 0' for s in p['segs'] for q in s})
+# efficiency points; the legend sample (a two-point horizontal line at x 340–370 pt) is excluded
+red = sorted({(round(q[0], 2), round(q[1], 2)) for p in paths if p['color'] == '1 0 0' for s in p['segs'] for q in s
+              if not (len(s) == 2 and abs(s[0][1] - s[1][1]) < 0.01)})
 xs = sorted({x for x, _ in red})
 with open(os.path.join(OUT, 'efficiency_2011.csv'), 'w') as f:
     f.write('# KamLAND 2011 (PRD 83, 052002), Fig. 1 top panel: selection efficiency (weighted average over five periods),\n'
