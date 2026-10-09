@@ -34,6 +34,7 @@ Theory predictions with no experiment knowledge. Each module returns a struct `<
 - **`xsec.jl`** — Cross-section models: `SimpleScaling` or `Differential_H2O` (for Super-K).
 - **`cevns_xsec.jl`**, **`sns_flux.jl`** — COHERENT-specific physics.
 - **`solar_flux.jl`** — Standard solar model (B23, default MB22-met; data in `src/physics/solar/`): fluxes and spectra per component; flux normalisations as one vector `solar_norms` with the correlated B23 `MvNormal` prior (`CorrelatedSSMPriors`, default) or as scalars `solar_norm_*` (`SSMPriors`, for fits that free single components); `solar_b8_shape`; production regions with the solar density profile (`production`, input to `osc.solar_prob`; beyond 0.5 R☉ from BS05(OP)); `nadir_exposure(latitude)`.
+- **`reactor_flux.jl`** — Reactor ν̄e flux and IBD detection shared by reactor experiments: Huber–Mueller isotope spectra, energy per fission, Strumia–Vissani IBD cross section, Bugey-4 rate anchoring (`bugey4_scale`), and a reactor database (`src/physics/reactors/`: IAEA PRIS units of Japan and Korea with thermal power, annual load factors and site coordinates; `load_units`, `daily_power`, `ecef`/`baseline`).
 - **`solar_xsec.jl`** — ν–e elastic scattering (with radiative corrections) and ³⁷Cl/⁷¹Ga capture cross sections.
 - Solar oscillations live in `osc.jl`: `osc.solar_prob(E, production, params)` (day) and `osc.solar_prob(E, production, paths, layers, params)` (Earth regeneration); MSW in the Sun via `compute_matter_matrices`, eigenstates labelled by eigenvalue order; adiabatic unless Parke's level-crossing estimate is non-negligible, then numerical evolution through the solar profile (`solar_transition_matrix`; LOW/SMA region, slow there).
 - `earth_layers.compute_chord_paths` gives each path segment its own chord-averaged PREM density; `PREM_discontinuities(continental=true)` (crust instead of PREM's ocean) is the zoning used for solar day/night.
@@ -43,7 +44,7 @@ Each experiment module has `configure(physics=default_physics())` returning a st
 
 Experiment groups and their physics requirements:
 - **Atmospheric** (deepcore, ic_upgrade, super_k, orca): `osc` (SI), `atm_flux`, `earth_layers`, `xsec`
-- **Reactor** (dayabay, kamland, juno, tao): `osc` (Vacuum)
+- **Reactor** (dayabay, juno, tao): `osc` (Vacuum); **kamland** (2013 data, three periods, PRD 88, 033001): `osc` (SI, crust) and `reactor_flux` (first-principles reactor prediction from the PRIS power histories)
 - **Accelerator** (minos): `osc`, `xsec`
 - **COHERENT** (coherent_csi, coherent_lAr): self-contained, no physics input
 - **Solar** (chlorine, gallex_gno, sage, sno, sk1_solar–sk4_solar, sk_solar_dn, borexino_ph1–ph3, borexino_ph2_spectrum): `osc` (SI), `solar_flux`, `solar_xsec`, `earth_layers` (PREM_discontinuities); shared code in `experiments/solar_common/` (`Site` day/night exposure, ES response, capture rates) and `experiments/super_k/sk_solar_common/` (one `SKPhase` per SK phase). SK day/night: either the day/night spectra (default) or `configure(physics; daynight=:combined)` together with `sk_solar_dn` (SK's amplitude-fit A_DN vs Δm²₂₁). Borexino: `borexino_ph1/ph2` published rates, `borexino_ph3` and `borexino_ph2_spectrum` spectral fits (MC solar shapes with calibrated response; Phase II with Borexino's extracted background components).
