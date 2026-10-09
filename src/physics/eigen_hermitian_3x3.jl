@@ -157,30 +157,48 @@ function fast_eigen(
 end
 
 """
+    _eigen2_hermitian(a, b, c) -> (values::SVector{2}, vectors::SMatrix{2,2})
+
+Closed-form eigendecomposition of the 2×2 Hermitian matrix `[a conj(c); c b]` (`a`, `b` real),
+eigenvalues ascending. Plain arithmetic (no LAPACK, no generic `eigen`), so it is type-stable for
+`ForwardDiff.Dual` elements and compiles in GPU kernels.
+"""
+@inline function _eigen2_hermitian(a, b, c)
+    m = (a + b) / 2
+    r = sqrt(abs2((a - b) / 2) + abs2(c))
+    λs = SVector(m - r, m + r)
+    CT = typeof(c * one(m))
+    if iszero(c)
+        # already diagonal: eigenpairs (a, e₁), (b, e₂), ordered ascending
+        o, z = one(CT), zero(CT)
+        return a <= b ? (SVector(a, b), SMatrix{2,2,CT,4}(o, z, z, o)) :
+                        (SVector(b, a), SMatrix{2,2,CT,4}(z, o, o, z))
+    end
+    # (A - λ)v = 0: v₁ ∝ (c̄, λ₁ - a) and v₂ ∝ (λ₂ - b, c); each keeps an exact component
+    v1 = SVector{2,CT}(conj(c), λs[1] - a)
+    v2 = SVector{2,CT}(λs[2] - b, c)
+    v1 = v1 / sqrt(sum(abs2, v1))
+    v2 = v2 / sqrt(sum(abs2, v2))
+    return λs, SMatrix{2,2,CT,4}(v1[1], v1[2], v2[1], v2[2])
+end
+
+"""
     _fast_eigen_efzero(C; sortby=identity) -> Eigen
 
 Edge-case eigendecomposition when `C[3,1] == C[3,2] == 0` (off-diagonal elements `e=f=0`).
 
 Row 3 decouples: ``\\lambda_3 = C_{33}`` with eigenvector ``(0, 0, 1)``. The remaining
-two eigenvalues and vectors are obtained by calling Julia's `eigen` on the 2×2 upper-left
-submatrix ``C_{1:2,1:2}``, then embedding the result back into 3×3.
+two eigenvalues and vectors are obtained from the closed-form 2×2 solution
+([`_eigen2_hermitian`](@ref)) of the upper-left submatrix ``C_{1:2,1:2}``, then embedded back into 3×3.
 """
 function _fast_eigen_efzero(
         C::Hermitian{T, <:SMatrix{3,3,T}};
         sortby::F = identity,
     ) where {T, F}
-    Csub = let A = parent(C)
-        Asub = SA[A[1, 1] A[1, 2]; A[2, 1] A[2, 2]]
-        Hermitian(Asub)
-    end
-    Esub = eigen(Csub)  # 2×2 Hermitian eigendecomposition
-    values = SVector(Esub.values..., C[3, 3])
-    vs = Esub.vectors
-    vectors = @SMatrix [
-        vs[1, 1] vs[1, 2] 0;
-        vs[2, 1] vs[2, 2] 0;
-        0        0        1;
-    ]
+    λ2, vs = _eigen2_hermitian(real(C[1, 1]), real(C[2, 2]), C[2, 1])
+    values = SVector(λ2[1], λ2[2], real(C[3, 3]))
+    VT = eltype(vs); z, o = zero(VT), one(VT)
+    vectors = SMatrix{3,3,VT,9}(vs[1, 1], vs[2, 1], z,   vs[1, 2], vs[2, 2], z,   z, z, o)
     _sorted_eigen(sortby, values, vectors)
 end
 
@@ -196,18 +214,10 @@ function _fast_eigen_edzero(
         C::Hermitian{T, <:SMatrix{3,3,T}};
         sortby::F = identity,
     ) where {T, F}
-    Csub = let A = parent(C)
-        Asub = SA[A[1, 1] A[1, 3]; A[3, 1] A[3, 3]]
-        Hermitian(Asub)
-    end
-    Esub = eigen(Csub)  # 2×2 Hermitian eigendecomposition
-    values = SVector(Esub.values[1], C[2, 2], Esub.values[2])
-    vs = Esub.vectors
-    vectors = @SMatrix [
-        vs[1, 1] 0 vs[1, 2];
-        0 1 0;
-        vs[2, 1] 0 vs[2, 2];
-    ]
+    λ2, vs = _eigen2_hermitian(real(C[1, 1]), real(C[3, 3]), C[3, 1])
+    values = SVector(λ2[1], real(C[2, 2]), λ2[2])
+    VT = eltype(vs); z, o = zero(VT), one(VT)
+    vectors = SMatrix{3,3,VT,9}(vs[1, 1], z, vs[2, 1],   z, o, z,   vs[1, 2], z, vs[2, 2])
     _sorted_eigen(sortby, values, vectors)
 end
 
@@ -223,18 +233,10 @@ function _fast_eigen_dfzero(
         C::Hermitian{T, <:SMatrix{3,3,T}};
         sortby::F = identity,
     ) where {T, F}
-    Csub = let A = parent(C)
-        Asub = SA[A[2, 2] A[2, 3]; A[3, 2] A[3, 3]]
-        Hermitian(Asub)
-    end
-    Esub = eigen(Csub)
-    values = SVector(C[1, 1], Esub.values[1], Esub.values[2] )
-    vs = Esub.vectors
-    vectors = @SMatrix [
-        1 0 0;
-        0 vs[1, 1] vs[1, 2];
-        0 vs[2, 1] vs[2, 2];
-    ]
+    λ2, vs = _eigen2_hermitian(real(C[2, 2]), real(C[3, 3]), C[3, 2])
+    values = SVector(real(C[1, 1]), λ2[1], λ2[2])
+    VT = eltype(vs); z, o = zero(VT), one(VT)
+    vectors = SMatrix{3,3,VT,9}(o, z, z,   z, vs[1, 1], vs[2, 1],   z, vs[1, 2], vs[2, 2])
     _sorted_eigen(sortby, values, vectors)
 end
 
@@ -265,6 +267,19 @@ An `Eigen` object with eigenvalues sorted by `by` and eigenvectors permuted to m
     vs = vecs[:, p]
     Eigen(λs, vs)
 end
+
+# 3 eigenpairs: stable 3-comparison sorting network, the same permutation as `sortperm`
+# (stable, `isless` on `by` keys) but without the generic sorting machinery, which does not
+# compile for GPUs.
+@inline function _sorted_eigen(by::F, vals::SVector{3}, vecs::SMatrix{3,3}) where {F}
+    k = map(by, vals)
+    p = SVector(1, 2, 3)
+    isless(k[p[2]], k[p[1]]) && (p = SVector(p[2], p[1], p[3]))
+    isless(k[p[3]], k[p[2]]) && (p = SVector(p[1], p[3], p[2]))
+    isless(k[p[2]], k[p[1]]) && (p = SVector(p[2], p[1], p[3]))
+    Eigen(vals[p], vecs[:, p])
+end
+_sorted_eigen(::Nothing, vals::SVector{3}, vecs::SMatrix{3,3}) = Eigen(vals, vecs)
 
 """
     _sorted_eigen(by::Fun, F::Eigen) -> Eigen

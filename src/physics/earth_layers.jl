@@ -152,6 +152,17 @@ function configure(cfg::VariableDensity)
 end
 
 
+# Thickness-weighted (trapezoidal) mean density of a radial zone. The PREM table is not evenly
+# spaced (1 km steps near the surface, up to 100 km deeper), so a plain mean over rows would
+# over-weight the thin shallow layers. Zones end at density discontinuities, where the table lists
+# the boundary radius twice, so the integral covers the zone's full radial extent.
+function _radial_mean(radius, density)
+    order = sortperm(radius)
+    r, ρ = radius[order], density[order]
+    ∫ρ = sum((r[k+1] - r[k]) * (ρ[k+1] + ρ[k]) / 2 for k in 1:length(r)-1)
+    ∫ρ / (r[end] - r[1])
+end
+
 """
     get_compute_layers(cfg::PREM) -> Function
 
@@ -183,7 +194,7 @@ function get_compute_layers(cfg::PREM)
         for i in 1:length(cfg.zones)-1
             mask = (PREM.density .< cfg.zones[i+1]) .& (PREM.density .>= cfg.zones[i])
             push!(radii, maximum(PREM.radius[mask]))
-            push!(ave_densities, mean(PREM.density[mask]))
+            push!(ave_densities, _radial_mean(PREM.radius[mask], PREM.density[mask]))
         end
 
         ye = vcat([0.5], cfg.p_fractions)  # prepend atmosphere Ye (density=0, so value irrelevant)

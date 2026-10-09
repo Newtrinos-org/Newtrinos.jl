@@ -2,6 +2,7 @@ using Test
 using LinearAlgebra
 using StaticArrays
 using Newtrinos 
+using ForwardDiff
 
 #define test cases with known eigenvalues for testing fast_eigen function
 # Case 0: identity matrix -> eigenvalues are all 1
@@ -98,6 +99,25 @@ all_cases= [(Cid, λid_expected), (C1, λ1_expected), (C2, λ2_expected), (C3, �
         # 3. Descending order
         E_rev = Newtrinos.fast_eigen(A, sortby=x -> -x)
         @test E_rev.values == SVector(10.0, 2.0, -5.0)
+    end
+
+    @testset "degenerate branches: default sort, real eigenvalues, Dual inference" begin
+        # The block-diagonal branches used to return complex eigenvalues for complex Hermitian
+        # input, so the default sortby=identity threw (isless on Complex).
+        for C in (C4, C5, C6, Cid)
+            F = Newtrinos.fast_eigen(C)
+            @test eltype(F.values) <: Real
+            @test issorted(F.values)
+            @test F.vectors' * F.vectors ≈ I atol=1e-12
+            @test F.vectors * Diagonal(F.values) * F.vectors' ≈ Matrix(C) atol=1e-12
+        end
+        # ForwardDiff Duals: concretely inferred and correct derivatives in the 2x2 branch
+        seed(x, d) = ForwardDiff.Dual{Nothing}(Float64(x), Float64(d))
+        CD = Hermitian(SMatrix{3,3}([complex(seed(real(C4[i, j]), i == j == 1), seed(imag(C4[i, j]), 0)) for i in 1:3, j in 1:3]))
+        FD = @inferred Newtrinos.fast_eigen(CD)
+        @test ForwardDiff.value.(FD.values) ≈ λ4_expected atol=1e-12
+        # d(eigenvalues)/d(C[1,1]) = |v₁|² of each eigenvector
+        @test ForwardDiff.partials.(FD.values, 1) ≈ abs2.(ForwardDiff.value.(real.(FD.vectors[1, :])) .+ im .* ForwardDiff.value.(imag.(FD.vectors[1, :]))) atol=1e-12
     end
 
 end

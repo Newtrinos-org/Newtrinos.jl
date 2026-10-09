@@ -91,7 +91,7 @@ function get_timing_efficiency(time_edges)
     return eff
 end
 
-function configure(; datadir = @__DIR__, use_flux_data::Bool = true, ff_model::Symbol = :helm, ff_kwargs::NamedTuple = (;), sns_flux_kwargs::NamedTuple = (;))
+function configure(; datadir = @__DIR__, use_flux_data::Bool = true, ff_model::Symbol = :helm, ff_kwargs::NamedTuple = (;), sns_flux_kwargs::NamedTuple = (;), xsec_model::Symbol = :bsm)
     assets = get_assets(datadir)
 
     # Configure the SNS flux module
@@ -112,6 +112,7 @@ function configure(; datadir = @__DIR__, use_flux_data::Bool = true, ff_model::S
         sns_flux.assets.E;         # Pass the energy grid from the SNS flux assets
         ff_model = ff_model,
         ff_kwargs = ff_kwargs,
+        xsec_model = xsec_model,
     )
 
     @info "Configured COHERENT CsI module."

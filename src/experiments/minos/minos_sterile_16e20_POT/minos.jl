@@ -25,9 +25,27 @@ function default_physics()
     (; osc, xsec)
 end
 
-function configure(physics=default_physics())
+"""
+    configure(physics=default_physics(); detectors=:FD) -> Minos
+
+Configure the MINOS/MINOS+ two-detector νμ CC and NC analysis (data release of arXiv:1710.06488).
+
+# Keywords
+- `detectors::Symbol = :FD`: likelihood construction.
+  - `:FD`: far-detector spectra conditioned on the near-detector data (Gaussian conditioning
+    with the release covariance). Appropriate for three-flavour fits, where the near-detector
+    prediction does not depend on the oscillation parameters.
+  - `:FD_ND`: joint far+near spectrum with the release covariance ``V = μμ^T ∘ V_{rel} + \\mathrm{diag}(μ)``,
+    as in the χ² of the data release (`dataRelease_chi2Calc_compile.C`). Required for
+    sterile-neutrino fits, where the near detector oscillates. The covariance depends on the
+    prediction in the quadratic form, while the normalisation (log-determinant) is fixed at the
+    nominal prediction (see [`FixedNormGaussian`](@ref)); otherwise the log-determinant
+    rewards parameter points with lower predicted rates.
+"""
+function configure(physics=default_physics(); detectors::Symbol = :FD)
+    detectors in (:FD, :FD_ND) || throw(ArgumentError("detectors must be :FD or :FD_ND, got :$(detectors)"))
     physics = (;physics.osc, physics.xsec)
-    assets = get_assets(physics)
+    assets = get_assets(physics; detectors)
     return Minos(
         physics = physics,
         params = (;),
@@ -38,7 +56,36 @@ function configure(physics=default_physics())
     )
 end
 
-function get_assets(physics; datadir = @__DIR__)
+"""
+    FixedNormGaussian(μ, Σ, logdetΣ₀) <: ContinuousMultivariateDistribution
+
+Gaussian likelihood term whose covariance `Σ` may depend on the prediction `μ` in the quadratic
+form, while the normalisation uses a fixed log-determinant `logdetΣ₀`:
+
+``\\log L = -\\tfrac12 \\left[(x-μ)^T Σ^{-1} (x-μ) + \\log\\det Σ_0 + n \\log 2π\\right]``
+
+so that ``-2Δ\\log L`` is the usual covariance-matrix χ². With a prediction-dependent `Σ` the
+exact Gaussian normalisation ``\\log\\det Σ(μ)`` would favour lower predictions independently of
+the data. `mean`, `cov`, `var` and `rand` refer to the Gaussian ``N(μ, Σ)``.
+"""
+struct FixedNormGaussian{V<:AbstractVector, M<:AbstractMatrix} <: Distributions.ContinuousMultivariateDistribution
+    μ::V
+    Σ::M
+    logdetΣ₀::Float64
+end
+Base.length(d::FixedNormGaussian) = length(d.μ)
+Base.eltype(d::FixedNormGaussian) = eltype(d.μ)
+Distributions.mean(d::FixedNormGaussian) = d.μ
+Distributions.cov(d::FixedNormGaussian) = d.Σ
+Distributions.var(d::FixedNormGaussian) = diag(d.Σ)
+function Distributions._logpdf(d::FixedNormGaussian, x::AbstractArray)
+    r = x .- d.μ
+    -(dot(r, d.Σ \ r) + d.logdetΣ₀ + length(r) * log(2π)) / 2
+end
+Distributions._rand!(rng::Distributions.AbstractRNG, d::FixedNormGaussian, x::AbstractVector) =
+    copyto!(x, rand(rng, MvNormal(d.μ, Symmetric(d.Σ))))
+
+function get_assets(physics; datadir = @__DIR__, detectors::Symbol = :FD)
     @info "Loading minos data"
 
     h5file = h5open(joinpath(datadir, "dataRelease.h5"), "r")
@@ -66,18 +113,37 @@ function get_assets(physics; datadir = @__DIR__)
         for channel in channels
     ])
 
-   assets = (
-        ch_data = ch_data,
-        TotalCCCovar = (x->reshape(x, fill(Int(sqrt(length(x))), 2)...))(read(h5file["TotalCCCovar"])),
-        TotalNCCovar = (x->reshape(x, fill(Int(sqrt(length(x))), 2)...))(read(h5file["TotalNCCovar"])),
-        observed = (
-            CC = ch_data["FDCC"].observed,
-            NC = ch_data["FDNC"].observed,
-        ),
-    )
+    TotalCCCovar = (x->reshape(x, fill(Int(sqrt(length(x))), 2)...))(read(h5file["TotalCCCovar"]))
+    TotalNCCovar = (x->reshape(x, fill(Int(sqrt(length(x))), 2)...))(read(h5file["TotalNCCovar"]))
+    close(h5file)
 
+    joint(ch) = vcat(ch_data["FD"*ch].observed, ch_data["ND"*ch].observed)
+    assets = (
+        ch_data = ch_data,
+        detectors = detectors,
+        TotalCCCovar = TotalCCCovar,
+        TotalNCCovar = TotalNCCovar,
+        observed = detectors == :FD ? (CC = ch_data["FDCC"].observed, NC = ch_data["FDNC"].observed) :
+                                      (CC = joint("CC"), NC = joint("NC")),
+    )
+    if detectors == :FD_ND
+        # fixed normalisation: log det of the joint covariance at the nominal prediction
+        p0 = merge(physics.osc.params, physics.xsec.params)
+        logdet0 = Dict(ch => logdet(Symmetric(joint_covariance(joint_expected(p0, physics, ch, assets), ch, assets)))
+                       for ch in ("CC", "NC"))
+        assets = merge(assets, (logdetΣ₀ = (CC = logdet0["CC"], NC = logdet0["NC"]),))
+    end
+    assets
 end
 
+# expected joint [FD; ND] spectrum and its covariance (release convention: FD bins first)
+joint_expected(params, physics, channel, assets) =
+    vcat(get_expected_per_channel(params, physics, assets.ch_data["FD"*channel]),
+         get_expected_per_channel(params, physics, assets.ch_data["ND"*channel])) * physics.xsec.scale(:any, Symbol(channel), params)
+function joint_covariance(μ, channel, assets)
+    V = (μ * μ') .* (channel == "CC" ? assets.TotalCCCovar : assets.TotalNCCovar) + diagm(μ)
+    (V + V') / 2
+end
 
 function get_expected_per_channel(params, physics, assets)
     # Minos baseline:
@@ -118,11 +184,17 @@ function forward_model_per_channel(params, physics, channel, assets)
     Distributions.MvNormal(expected, (cov+cov')/2)
 end
 
+function forward_model_two_detector(params, physics, channel, assets)
+    μ = joint_expected(params, physics, channel, assets)
+    FixedNormGaussian(μ, joint_covariance(μ, channel, assets), assets.logdetΣ₀[Symbol(channel)])
+end
+
 function get_forward_model(physics, assets)
+    fm = assets.detectors == :FD ? forward_model_per_channel : forward_model_two_detector
     function forward_model(params)
         distprod(
-            CC = forward_model_per_channel(params, physics, "CC", assets),
-            NC = forward_model_per_channel(params, physics, "NC", assets),
+            CC = fm(params, physics, "CC", assets),
+            NC = fm(params, physics, "NC", assets),
         )
     end
 end
@@ -136,6 +208,8 @@ function get_plot(physics, assets)
         v = var(get_forward_model(physics, assets)(params))
         
         for (i, ch) in enumerate([:CC, :NC])
+            nfd = length(assets.ch_data["FD"*String(ch)].observed)     # with detectors = :FD_ND, show the FD part
+            m, v, d = merge(m, (; ch => m[ch][1:nfd])), merge(v, (; ch => v[ch][1:nfd])), merge(d, (; ch => d[ch][1:nfd]))
         
             ax = Axis(f[1,i])
             energy_bins = assets.ch_data["FD"*String(ch)].bin_edges
