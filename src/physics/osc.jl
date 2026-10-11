@@ -1462,6 +1462,9 @@ end
 # Per-section dL/dh for Spray: only the first (atmosphere) section of each path depends on the
 # production height; see the comment in the Spray `propagate`.
 function _spray_dldh(paths, layers)
+    # without an atmosphere layer (e.g. one constant-density layer for an accelerator or reactor baseline) the
+    # source position is fixed: no production-height spread
+    length(layers.radius) < 2 && return map(p -> zeros(length(p)), paths)
     R_atm = layers.radius[1]  # atmosphere outer radius
     R_det = layers.radius[2]  # next layer below atmosphere
     map(paths) do p
