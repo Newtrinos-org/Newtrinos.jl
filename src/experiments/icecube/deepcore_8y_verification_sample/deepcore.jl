@@ -10,7 +10,12 @@ ToDos:
 - GENIE xsecs
 - DEAMON flux?
 - enough energy bins??
-- NC norm is fucked.....probably needs 1/3 applied or so
+
+Note on NC events: the NC MC contains separate νe, νμ and ντ NC sets, each of which on its own
+estimates the full NC rate. They are weighted with the unoscillated flavour-summed flux and divided
+by 3 (see `get_expected`), which equals the sum of the oscillated fluxes for three-flavour
+(unitary) oscillations. This does NOT hold for sterile neutrinos (NC disappearance): there each
+flavour set must be weighted with its own oscillated flux, without the 1/3.
 """
 
 using LinearAlgebra
@@ -264,6 +269,7 @@ function get_expected(params, physics, assets)
 
     f = osc_flux
     H(ch, flux_at) = make_hist_per_channel(assets.mc[ch], flux_at, lifetime_seconds)
+    # NC: each flavour set of the NC MC estimates the full rate, hence /3 (three-flavour only, see module note)
     hists = (nu_nc       = H(:nu_nc,       (e, c) -> f.nc[e, c] / 3),
              nubar_nc    = H(:nubar_nc,    (e, c) -> f.nc_bar[e, c] / 3),
              nue_cc      = H(:nue_cc,      (e, c) -> f.nu[e, c, 1]),

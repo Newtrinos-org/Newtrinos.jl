@@ -175,4 +175,20 @@ isotopes_test = [cs133, i127, ar40, ge76]
         @test results[:Rn_Ar40] == Newtrinos.cevns_xsec.ds(er, enu, params, (37.211, 18, 22), :Rn_Ar40)
         @test results[:Rn_Ge76] == Newtrinos.cevns_xsec.ds(er, enu, params, (71.922, 32, 44), :Rn_Ge76)
     end
+
+    @testset "SM-scaled cross-section model" begin
+        er, enu = [0.001, 0.005, 0.01], [10.0, 20.0, 50.0]
+        bsm = Newtrinos.cevns_xsec.configure(isotopes_test, er, enu)
+        sm = Newtrinos.cevns_xsec.configure(isotopes_test, er, enu; xsec_model = :sm_scale)
+        @test haskey(sm.params, :cevns_xsec_scale) && !haskey(sm.params, :cevns_xsec_a)
+        @test !haskey(bsm.params, :cevns_xsec_scale)
+        xs_bsm = bsm.diff_xsec(bsm.params)               # BSM defaults are the SM point
+        xs_sm1 = sm.diff_xsec(sm.params)
+        xs_sm2 = sm.diff_xsec(merge(sm.params, (cevns_xsec_scale = 0.7,)))
+        for k in keys(xs_bsm)
+            @test xs_sm1[k] == xs_bsm[k]
+            @test xs_sm2[k] ≈ 0.7 .* xs_bsm[k]
+        end
+        @test_throws ArgumentError Newtrinos.cevns_xsec.configure(isotopes_test, er, enu; xsec_model = :foo)
+    end
 end
