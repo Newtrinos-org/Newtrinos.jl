@@ -319,12 +319,19 @@ function get_assets(physics; file = datafile, response = RESPONSE, ws_ratio = RH
         end
     end |> NamedTuple
     observed = map(s -> s.observed, built)
-    xsec_weights = map(values(SAMPLES)) do cfg
+    # cross-section weight closures, one per (flavour, anti, processes) (shared between samples), and per sample the
+    # keys of the weights it uses
+    closures = Dict{Tuple{Symbol, Bool, Tuple}, Function}()
+    key(flavour, anti, process) = (k = (flavour, anti, process);
+        haskey(closures, k) || (closures[k] = physics.xsec.weights(Et; flavour, anti, current = :CC, target = XSEC_TARGET, generator = XSEC_GENERATOR, process)); k)
+    xsec_keys = map(values(SAMPLES)) do cfg
         pr = mode_processes(cfg.A)
-        w(flavour, anti, process) = physics.xsec.weights(Et; flavour, anti, current = :CC, target = XSEC_TARGET, generator = XSEC_GENERATOR, process)
-        (μA = w(:numu, cfg.anti, pr.A), μB = w(:numu, cfg.anti, pr.B), eA = w(:nue, cfg.anti, pr.A), eB = w(:nue, cfg.anti, pr.B),
-         μA_ws = w(:numu, !cfg.anti, pr.A), μB_ws = w(:numu, !cfg.anti, pr.B), eA_ws = w(:nue, !cfg.anti, pr.A), eB_ws = w(:nue, !cfg.anti, pr.B))
+        μ = (μA = key(:numu, cfg.anti, pr.A), μB = key(:numu, cfg.anti, pr.B))
+        cfg.kind == :mu ? μ :
+            merge(μ, (eA = key(:nue, cfg.anti, pr.A), eB = key(:nue, cfg.anti, pr.B), μA_ws = key(:numu, !cfg.anti, pr.A),
+                      μB_ws = key(:numu, !cfg.anti, pr.B), eA_ws = key(:nue, !cfg.anti, pr.A), eB_ws = key(:nue, !cfg.anti, pr.B)))
     end |> NamedTuple{keys(SAMPLES)}
+    xsec_weights = (; closures, keys = xsec_keys)
     (; Et, dlnE = log(Et[2] / Et[1]), layers, paths, samples = built, observed, xsec_weights)
 end
 
@@ -377,7 +384,7 @@ function sample_expected(k, s, P, params, xw)
     norm = params.t2k_flux_xsec_norm * getproperty(params, SAMPLE_NORM[k]) * (s.anti ? params.t2k_rhc_norm : one(params.t2k_rhc_norm))
     nqe = params.t2k_nonqe_norm
     nc = params.t2k_nc_norm .* s.nc
-    w = map(f -> f(params), xw)
+    w = xw
     λ = if s.kind == :mu
         # the unoscillated CC rate per reconstructed bin is fixed by the near detector
         nd = (s.UA .* wmean(s.WA, w.μA) .+ s.UB .* wmean(s.WB, w.μB)) ./ max.(s.UA .+ s.UB, 1e-12)
@@ -395,8 +402,10 @@ end
 
 function get_expected(params, physics, assets)
     P = scale_energy(channel_probabilities(physics, assets.Et, assets.paths, assets.layers, params), assets.dlnE, params.t2k_energy_scale)
+    xw = assets.xsec_weights
+    wvals = Dict(k => f(params) for (k, f) in xw.closures)     # each distinct weight evaluated once
     map(keys(assets.samples), values(assets.samples)) do k, s
-        k => sample_expected(k, s, P, params, assets.xsec_weights[k])
+        k => sample_expected(k, s, P, params, map(kk -> wvals[kk], xw.keys[k]))
     end |> NamedTuple
 end
 
