@@ -15,7 +15,7 @@ const SPLINE_FILE = joinpath(@__DIR__, "xsec_data", "genie_splines.h5")
 "Interaction processes of the CC cross section (NC is treated as one inclusive process)"
 const PROCESSES = (:QE, :MEC, :RES, :DIS, :COH)
 
-const NUCLEUS_A = Dict("H1" => 1, "C12" => 12, "O16" => 16, "Ar40" => 40, "Fe56" => 56)
+const NUCLEUS_A = Dict("n" => 1, "H1" => 1, "C12" => 12, "O16" => 16, "Ar40" => 40, "Fe56" => 56)
 
 """
 Detector targets as nucleus multiplicities. Cross sections of a target are per nucleon:
@@ -30,6 +30,9 @@ const TARGETS = Dict(
     :Ar => ("Ar40" => 1,),
     :Fe => ("Fe56" => 1,),
     :H => ("H1" => 1,),
+    :n => ("n" => 1,),
+    # isoscalar: free proton and neutron (the nuclear isoscalar corrections of measurements use their ratio)
+    :N => ("H1" => 1, "n" => 1),
 )
 
 """
@@ -93,6 +96,20 @@ function generator_sigma(generator::Symbol, target::Symbol, flavour::Symbol, ant
         return (NC = sum(per_nucleon(p) for p in PROCESSES),)
     end
     NamedTuple{PROCESSES}(Tuple(p in drop ? zeros(length(tab.E)) : per_nucleon(p) for p in PROCESSES))
+end
+
+"""
+    isoscalar_correction(generator, Z, A, flavour, anti; current = :CC) -> Vector
+
+Factor that turns σ per nucleon of a nucleus with `Z` protons and `A` nucleons into σ per nucleon of an
+isoscalar nucleus (as many measurements are quoted), from the free-nucleon cross sections of `generator`:
+`((σp + σn) / 2) / ((Z σp + (A - Z) σn) / A)`, on the table grid (1 where both vanish).
+"""
+function isoscalar_correction(generator::Symbol, Z, A, flavour::Symbol, anti::Bool; current::Symbol = :CC)
+    σp = sum(generator_sigma(generator, :H, flavour, anti, current))
+    σn = sum(generator_sigma(generator, :n, flavour, anti, current))
+    den = (Z .* σp .+ (A - Z) .* σn) ./ A
+    ifelse.(den .> 0, (σp .+ σn) ./ 2 ./ max.(den, 1e-300), 1.0)
 end
 
 # NEUT 5.4.0 (water) channels → processes. CC multi-π ("CCother", W < 2 GeV) is non-resonant

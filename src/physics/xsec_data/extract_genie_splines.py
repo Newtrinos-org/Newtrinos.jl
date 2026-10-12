@@ -2,7 +2,7 @@
 
 Reads the `gxspl-*small.xml` spline lists published on CVMFS
 (/cvmfs/larsoft.opensciencegrid.org/products/genie_xsec/<version>/NULL/<tune>/data) and sums the
-splines into the process classes used by `Newtrinos.xsec`, per nucleus, flavour and current:
+splines into the process classes used by `Newtrinos.xsec`, per nucleus (free neutron, H, C, O, Ar, Fe), flavour and current:
 
     CC: QE (incl. hyperon/charm QE), MEC, RES, DIS (incl. charm), COH
     NC: QE (elastic), MEC, RES, DIS, COH
@@ -35,7 +35,7 @@ TUNES = [
     ("AR23_20i_00_000", "v3_04_00/NULL/AR2320i00000-k250-e1000", "gxspl-FNALsmall.xml"),
 ]
 
-TARGETS = {1000010010: "H1", 1000060120: "C12", 1000080160: "O16", 1000180400: "Ar40", 1000260560: "Fe56"}
+TARGETS = {1000000010: "n", 1000010010: "H1", 1000060120: "C12", 1000080160: "O16", 1000180400: "Ar40", 1000260560: "Fe56"}
 FLAVOURS = {12: "nue", -12: "nuebar", 14: "numu", -14: "numubar", 16: "nutau", -16: "nutaubar"}
 PROCS = ("QE", "MEC", "RES", "DIS", "COH")
 E_GRID = np.logspace(-2, 3, 301)
