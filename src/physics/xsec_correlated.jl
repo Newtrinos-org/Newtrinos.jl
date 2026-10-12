@@ -64,6 +64,10 @@ function load_table()
                 σ[(tune, nuc, fl, cur, p)] = Float64.(read(h[tune][nuc][fl][cur][p])) ./ E
             end
         end
+        # the mean of all tunes ("tune_mean"), process by process (a tune without a key contributes zero)
+        for key in unique((k[2], k[3], k[4], k[5]) for k in keys(σ))
+            σ[("tune_mean", key...)] = sum(get(σ, (t, key...), zeros(length(E))) for t in tunes) ./ length(tunes)
+        end
         _table_cache[] = XsecTable(E, σ, tunes)
     end
 end
@@ -77,7 +81,8 @@ flavour_key(flavour::Symbol, anti::Bool) = string(flavour, anti ? "bar" : "")
 for NC only the total, in `NC`), for a cross-section `generator`:
 
 - a GENIE tune from the table (e.g. `:G18_10a_02_11a`, `:G18_02a_00_000`, `:AR23_20i_00_000`,
-  `:G2_12_10_Default_MEC`); `:GENIE2_12` is GENIE 2.12 default without MEC;
+  `:G2_12_10_Default_MEC`); `:GENIE2_12` is GENIE 2.12 default without MEC; `:tune_mean` is the mean of all
+  tunes in the table (the nominal model of `CorrelatedXsec`);
 - `:NEUT5_4_0`: NEUT 5.4.0 on water (digitised, T. Wester, Super-K PhD thesis, Fig. 4.7; valid up to
   26 GeV and continued with the G18_10a_02_11a shape above, ντ from νμ times the G18_10a_02_11a ντ/νμ
   ratio). Only for `target = :H2O`.
@@ -86,7 +91,8 @@ function generator_sigma(generator::Symbol, target::Symbol, flavour::Symbol, ant
     tab = load_table()
     generator === :NEUT5_4_0 && return neut_sigma(target, flavour, anti, current)
     tune, drop = generator === :GENIE2_12 ? ("G2_12_10_Default_MEC", (:MEC,)) : (string(generator), ())
-    tune in tab.tunes || throw(ArgumentError("unknown cross-section generator $generator; available: $(tab.tunes), :GENIE2_12, :NEUT5_4_0"))
+    tune in tab.tunes || tune == "tune_mean" ||
+        throw(ArgumentError("unknown cross-section generator $generator; available: $(tab.tunes), :tune_mean, :GENIE2_12, :NEUT5_4_0"))
     haskey(TARGETS, target) || throw(ArgumentError("unknown target $target; available: $(collect(keys(TARGETS)))"))
     fl = flavour_key(flavour, anti)
     comp = TARGETS[target]
@@ -231,8 +237,9 @@ end
     CorrelatedXsec <: XsecModel
 
 Cross-section model for global fits: every experiment is reweighted from its own simulation's
-cross sections (`generator`, declared by the experiment) to one common `reference` GENIE tune, whose
-uncertainties are one shared parameter set, so that all experiments are correlated through it.
+cross sections (`generator`, declared by the experiment) to one common nominal model (`reference`, by
+default the mean of the GENIE tunes), whose uncertainties are one shared parameter set, so that all
+experiments are correlated through it.
 
 The uncertainty model has two parts:
 
@@ -246,16 +253,18 @@ The uncertainty model has two parts:
    - `xsec_res_norm`, `xsec_dis_norm`, `xsec_coh_norm`: process normalisations (10 %, 3 %, 30 %);
    - `xsec_nc_norm` (20 %), `xsec_nutau_cc_norm` (20 %);
    - `xsec_nubar_ratio`: ν̄ CC QE + MEC + RES + COH relative to ν (5 %);
+   - `xsec_nubar_dis_ratio`: ν̄ CC DIS relative to ν (3 %; sea-quark and structure-function uncertainty);
    - `xsec_nue_numu_ratio`: νe/ν̄e CC QE + MEC + RES relative to νμ (3 %).
 
 # Fields
-- `reference::Symbol = :G18_10a_02_11a`: the reference model (unit weights at nominal parameters).
+- `reference::Symbol = :tune_mean`: the nominal model (unit weights at nominal parameters): the mean of the
+  tunes, around which the PCA spread is computed, or a single tune (e.g. `:G18_10a_02_11a`).
 - `tunes`: the GENIE tunes spanning the model spread (default: all in the table).
 - `n_modes::Int = 4`: number of principal components.
 - `pca_range = (0.1, 100.0)`: energy range (GeV) of the PCA; outside, the relative mode is held constant.
 """
 @kwdef struct CorrelatedXsec <: XsecModel
-    reference::Symbol = :G18_10a_02_11a
+    reference::Symbol = :tune_mean
     tunes::Union{Nothing, Vector{Symbol}} = nothing
     n_modes::Int = 4
     pca_range::Tuple{Float64, Float64} = (0.1, 100.0)
@@ -268,6 +277,7 @@ const NORM_PRIORS = (
     xsec_nc_norm = Truncated(Normal(1, 0.20), 0.2, 1.8),
     xsec_nutau_cc_norm = Truncated(Normal(1, 0.20), 0.2, 1.8),
     xsec_nubar_ratio = Truncated(Normal(1, 0.05), 0.75, 1.25),
+    xsec_nubar_dis_ratio = Truncated(Normal(1, 0.03), 0.85, 1.15),
     xsec_nue_numu_ratio = Truncated(Normal(1, 0.03), 0.85, 1.15),
 )
 
@@ -297,7 +307,7 @@ function xsec_modes(cfg::CorrelatedXsec)
     tab = load_table()
     tunes = isnothing(cfg.tunes) ? tab.tunes : string.(cfg.tunes)
     ref = string(cfg.reference)
-    ref in tab.tunes || throw(ArgumentError("reference $(cfg.reference) not in the table: $(tab.tunes)"))
+    ref in tab.tunes || ref == "tune_mean" || throw(ArgumentError("reference $(cfg.reference) not in the table: $(tab.tunes)"))
     E = tab.E
     inrange = (E .>= cfg.pca_range[1]) .& (E .<= cfg.pca_range[2])
     ie = findall(inrange)
@@ -413,6 +423,7 @@ function get_weights(cfg::CorrelatedXsec)
         knob(p, params) = (p === :RES ? params.xsec_res_norm : p === :DIS ? params.xsec_dis_norm :
                            p === :COH ? params.xsec_coh_norm : one(params.xsec_res_norm)) *
                           (anti && p in lowE ? params.xsec_nubar_ratio : one(params.xsec_res_norm)) *
+                          (anti && p === :DIS ? params.xsec_nubar_dis_ratio : one(params.xsec_res_norm)) *
                           (flavour === :nue && p in (:QE, :MEC, :RES) ? params.xsec_nue_numu_ratio : one(params.xsec_res_norm))
         σp(p, params) = begin
             s = getfield(R, p) .+ sum(getproperty(params, pcs[k]) .* getfield(D[k], p) for k in eachindex(D))

@@ -220,20 +220,27 @@ using ForwardDiff
         E = [0.3, 1.0, 3.0, 10.0, 100.0]
         kw = (flavour=:numu, anti=false, target=:H2O)
         # unit weights for the reference generator, inclusive and per process
-        @test xs.weights(E; current=:CC, generator=:G18_10a_02_11a, kw...)(p) ≈ ones(5)
-        @test xs.weights(E; current=:NC, generator=:G18_10a_02_11a, kw...)(p) ≈ ones(5)
-        @test xs.weights(E; current=:CC, generator=:G18_10a_02_11a, process=:RES, kw...)(p) ≈ ones(5)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, kw...)(p) ≈ ones(5)
+        @test xs.weights(E; current=:NC, generator=:tune_mean, kw...)(p) ≈ ones(5)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, process=:RES, kw...)(p) ≈ ones(5)
         # knobs act on their process only
         q = merge(p, (xsec_dis_norm = 1.1,))
-        @test xs.weights(E; current=:CC, generator=:G18_10a_02_11a, process=:DIS, kw...)(q) ≈ fill(1.1, 5)
-        @test xs.weights(E; current=:CC, generator=:G18_10a_02_11a, process=:QE, kw...)(q) ≈ ones(5)
-        @test xs.weights(E; current=:CC, generator=:G18_10a_02_11a, kw...)(merge(p, (xsec_ma_qe = 1.0,)))[3] > 1.0
-        # ν̄ ratio does not act on neutrinos
-        @test xs.weights(E; current=:CC, generator=:G18_10a_02_11a, kw...)(merge(p, (xsec_nubar_ratio = 1.1,))) ≈ ones(5)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, process=:DIS, kw...)(q) ≈ fill(1.1, 5)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, process=:QE, kw...)(q) ≈ ones(5)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, kw...)(merge(p, (xsec_ma_qe = 1.0,)))[3] > 1.0
+        # ν̄ ratios do not act on neutrinos; the DIS one acts on ν̄ DIS only
+        @test xs.weights(E; current=:CC, generator=:tune_mean, kw...)(merge(p, (xsec_nubar_ratio = 1.1, xsec_nubar_dis_ratio = 1.1))) ≈ ones(5)
+        kwb = (flavour=:numu, anti=true, target=:H2O)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, process=:DIS, kwb...)(merge(p, (xsec_nubar_dis_ratio = 1.1,))) ≈ fill(1.1, 5)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, process=:QE, kwb...)(merge(p, (xsec_nubar_dis_ratio = 1.1,))) ≈ ones(5)
+        # the nominal is the mean of the tunes
+        tab = Newtrinos.xsec.load_table()
+        @test sum(Newtrinos.xsec.generator_sigma(:tune_mean, :C, :numu, false, :CC)) ≈
+              sum(sum(Newtrinos.xsec.generator_sigma(Symbol(t), :C, :numu, false, :CC)) for t in tab.tunes) ./ length(tab.tunes)
         # one shared parameter moves different targets together
         q = merge(p, (xsec_pc1 = 1.0,))
-        wO = xs.weights(E; current=:CC, generator=:G18_10a_02_11a, kw...)(q)
-        wC = xs.weights(E; current=:CC, generator=:G18_10a_02_11a, flavour=:numu, anti=false, target=:CH2)(q)
+        wO = xs.weights(E; current=:CC, generator=:tune_mean, kw...)(q)
+        wC = xs.weights(E; current=:CC, generator=:tune_mean, flavour=:numu, anti=false, target=:CH2)(q)
         @test sign(wO[1] - 1) == sign(wC[1] - 1)
         # per-event weights equal the per-process ones; MEC goes with QE for a generator without MEC
         we = xs.weights(E; current=:CC, generator=:GENIE2_12, process=[:QE, :RES, :DIS, :DIS, :DIS], kw...)(p)
