@@ -228,9 +228,31 @@ to create a [`Newtrinos.xsec.Xsec`](@ref) physics module.
 
 ```@docs
 Newtrinos.xsec.XsecModel
+Newtrinos.xsec.Nominal
 Newtrinos.xsec.SimpleScaling
 Newtrinos.xsec.Differential_H2O
+Newtrinos.xsec.H2O_PCA
+Newtrinos.xsec.CorrelatedXsec
 Newtrinos.xsec.Xsec
+```
+
+### Reweighting interface
+
+All models provide `xsec.weights(E; flavour, anti, current, target, generator, process)`, so experiments are
+written once against it and the model is chosen in the physics configuration. Experiments declare the
+cross-section model of their simulation (`generator`) and their `target`; `CorrelatedXsec` reweights all of
+them to one reference model with one shared, correlated parameter set (for global fits), while the
+experiments' defaults (`Nominal`, `SimpleScaling`, `H2O_PCA`) reproduce the publications.
+
+```@docs
+Newtrinos.xsec.get_weights
+Newtrinos.xsec.get_sigma
+Newtrinos.xsec.event_weights
+Newtrinos.xsec.generator_sigma
+Newtrinos.xsec.TARGETS
+Newtrinos.xsec.XsecTable
+Newtrinos.xsec.xsec_modes
+Newtrinos.xsec.llewellyn_smith
 ```
 
 ### Configuration and Functions

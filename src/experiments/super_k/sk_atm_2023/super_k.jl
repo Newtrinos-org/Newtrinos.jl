@@ -593,16 +593,14 @@ function calc_weights(params, assets, physics)
     fnh = haskey(params, :sk_flux_norm_high) ? params.sk_flux_norm_high : zero(eltype(E))
     flux_norm = 1 .+ fnl .* flux_norm_sigma_low.(logE) .+ fnh .* flux_norm_sigma_high.(logE)
 
-    xsec_nue     = physics.xsec.dσdE(E, :nue,   :CC, false, params)
-    xsec_numu    = physics.xsec.dσdE(E, :numu,  :CC, false, params)
-    xsec_nutau   = physics.xsec.dσdE(E, :nutau, :CC, false, params)
-    xsec_nuebar  = physics.xsec.dσdE(E, :nue,   :CC, true,  params)
-    xsec_numubar = physics.xsec.dσdE(E, :numu,  :CC, true,  params)
-    xsec_nutaubar= physics.xsec.dσdE(E, :nutau, :CC, true,  params)
-    xsec_nc      = physics.xsec.dσdE(E, :nue,   :NC, false, params)
+    # σ/E: NEUT 5.4.0 on water times the cross-section model's weights
+    xs = map((σ0, w) -> σ0 .* w(params), assets.xsec.σ0, assets.xsec.w)
+    xsec_nue, xsec_numu, xsec_nutau = xs.nue, xs.numu, xs.nutau
+    xsec_nuebar, xsec_numubar, xsec_nutaubar = xs.nuebar, xs.numubar, xs.nutaubar
+    xsec_nc = xs.nc
 
     # HKKM flux is differential: Φ(E) in (m² s sr GeV)⁻¹.
-    # dσdE returns σ/E (cross-section per nucleon per GeV, divided by E).
+    # xsec_* are σ/E (cross-section per nucleon per GeV, divided by E).
     # On our logE grid: event rate ∝ Φ(E) × σ(E) × dE = Φ(E) × (σ/E × E) × (E × dlogE × ln10)
     # = Φ(E) × σ/E × E² × dlogE × ln10
     # So we need E² after reshape: one E from the Jacobian, one E from σ/E → σ.
@@ -636,7 +634,7 @@ function calc_weights(params, assets, physics)
 
     # NC: SK MC lumps all NC (nu + nubar, all flavors) into one channel; the lumped rate is the sum
     # of the nu and nubar rates (each with its own flux and cross-section).
-    xsec_nc_anti = physics.xsec.dσdE(E, :nue, :NC, true, params)
+    xsec_nc_anti = xs.nc_anti
     flux_nu_total = flux_nue .+ flux_numu
     flux_nubar_total = flux_nuebar .+ flux_numubar
     nc_nu_flux = flux_nu_total .* xsec_nc
@@ -648,6 +646,25 @@ function calc_weights(params, assets, physics)
 end
 
 safe_div(a, b, ε=1e-10) = a / (b + ε)
+
+# Cross-section model of the predictions: NEUT 5.4.0 (water), and the reweighting closures of the
+# configured cross-section physics (`physics.xsec.weights`) relative to it
+const XSEC_GENERATOR = :NEUT5_4_0
+const XSEC_TARGET = :H2O
+const XSEC_CHANNELS = (nue = (:nue, false, :CC), numu = (:numu, false, :CC), nutau = (:nutau, false, :CC),
+                       nuebar = (:nue, true, :CC), numubar = (:numu, true, :CC), nutaubar = (:nutau, true, :CC),
+                       nc = (:nue, false, :NC), nc_anti = (:nue, true, :NC))
+
+function xsec_setup(physics, E)
+    tabE = Newtrinos.xsec.load_table().E
+    σ0 = map(XSEC_CHANNELS) do (flavour, anti, current)
+        Newtrinos.xsec.at_energies(tabE, sum(Newtrinos.xsec.generator_sigma(XSEC_GENERATOR, XSEC_TARGET, flavour, anti, current)), E)
+    end
+    w = map(XSEC_CHANNELS) do (flavour, anti, current)
+        physics.xsec.weights(E; flavour, anti, current, target = XSEC_TARGET, generator = XSEC_GENERATOR)
+    end
+    (; σ0, w)
+end
 
 function get_assets(physics; datadir = @__DIR__)
     @info "Loading Super-K Data"
@@ -798,7 +815,9 @@ function get_assets(physics; datadir = @__DIR__)
     R = flatten_R(R_3d)
 
 
-    nominal_weights = calc_weights(params_nominal, (;R, flux_nominal, flux_solar_ratio, paths, nominal_layers, loge_grid, cz_grid, cz_midpoints), physics)
+    xsec = xsec_setup(physics, E_mid)
+
+    nominal_weights = calc_weights(params_nominal, (;R, flux_nominal, flux_solar_ratio, paths, nominal_layers, loge_grid, cz_grid, cz_midpoints, xsec), physics)
 
     # Build energy groups for reco bin overlap energy scale method
     sk_i_iii_mask = masks.sk_i_iii_bins
@@ -819,7 +838,7 @@ function get_assets(physics; datadir = @__DIR__)
     masks = (; masks..., sk_i_iii_updown, sk_iv_v_updown)
 
 
-    return (; MC, R, flux_nominal, flux_solar_ratio, nominal_layers, loge_grid, cz_grid, cz_midpoints, nominal_weights, observed, bininfo, masks,
+    return (; MC, R, flux_nominal, flux_solar_ratio, nominal_layers, loge_grid, cz_grid, cz_midpoints, xsec, nominal_weights, observed, bininfo, masks,
               energy_groups_sk_i_iii, energy_groups_sk_iv_v, analysis_mask)
 
 end

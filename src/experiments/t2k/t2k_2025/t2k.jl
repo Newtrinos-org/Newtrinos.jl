@@ -71,6 +71,14 @@ const SAMPLES = (
 )
 
 """
+Cross-section model of the released predictions (NEUT 5.4.0, water) and the processes of modes A and B,
+for reweighting with `physics.xsec.weights`.
+"""
+const XSEC_GENERATOR = :NEUT5_4_0
+const XSEC_TARGET = :H2O
+mode_processes(A) = A == ("CCQE",) ? (A = (:QE,), B = (:MEC, :RES, :DIS, :COH)) : (A = (:RES, :COH), B = (:QE, :MEC, :DIS))
+
+"""
 Effective response E_rec ~ N((1 + bias) E − shift, σ E) for mode A (`σA`, `biasA`) and mode B
 (`σB`, `shiftB` in GeV), calibrated with `calibrate_response.jl`.
 """
@@ -98,19 +106,39 @@ const CC1PI_EDGES = vcat(collect(0.5:0.1:3.0), [3.5, 4.0])
     plot::Function
 end
 
+"""
+Default physics: no shared cross-section model (`xsec.Nominal`); the module's own post-ND cross-section
+parameters describe the uncertainties, as in the publication.
+"""
 function default_physics()
     osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction = Newtrinos.osc.SI(),
                                                                   eigen_method = Newtrinos.BargerEigen()))
-    (; osc)
+    xsec = Newtrinos.xsec.configure(Newtrinos.xsec.Nominal())
+    (; osc, xsec)
 end
 
+"""
+    configure(physics = default_physics(); response, ws_ratio)
+
+With a cross-section model in `physics.xsec` (e.g. `xsec.CorrelatedXsec` for global fits), the
+predictions are reweighted from NEUT 5.4.0 with it, constrained by the near detector: per reconstructed
+bin the unoscillated νμ (ν̄μ) CC rate is kept (the released predictions are fitted to ND280), so the
+weights act through the true-energy distribution within the bin, the A/B mode composition, and
+νe/νμ differences. If that model has a νe/νμ ratio parameter, the module's own
+`t2k_nue_xsec_ratio_*` are fixed to 1.
+"""
 function configure(physics = default_physics(); response = RESPONSE, ws_ratio = RHC_WRONG_SIGN_RATIO)
-    physics = (; physics.osc)
+    xsec = haskey(physics, :xsec) ? physics.xsec : Newtrinos.xsec.configure(Newtrinos.xsec.Nominal())
+    physics = (; physics.osc, xsec)
     assets = get_assets(physics; response, ws_ratio)
+    priors = get_priors()
+    if haskey(xsec.params, :xsec_nue_numu_ratio)
+        priors = merge(priors, (t2k_nue_xsec_ratio_nu = 1.0, t2k_nue_xsec_ratio_nubar = 1.0))
+    end
     return T2K(
         physics = physics,
         params = get_params(),
-        priors = get_priors(),
+        priors = priors,
         assets = assets,
         forward_model = get_forward_model(physics, assets),
         plot = get_plot(physics, assets),
@@ -291,7 +319,13 @@ function get_assets(physics; file = datafile, response = RESPONSE, ws_ratio = RH
         end
     end |> NamedTuple
     observed = map(s -> s.observed, built)
-    (; Et, dlnE = log(Et[2] / Et[1]), layers, paths, samples = built, observed)
+    xsec_weights = map(values(SAMPLES)) do cfg
+        pr = mode_processes(cfg.A)
+        w(flavour, anti, process) = physics.xsec.weights(Et; flavour, anti, current = :CC, target = XSEC_TARGET, generator = XSEC_GENERATOR, process)
+        (μA = w(:numu, cfg.anti, pr.A), μB = w(:numu, cfg.anti, pr.B), eA = w(:nue, cfg.anti, pr.A), eB = w(:nue, cfg.anti, pr.B),
+         μA_ws = w(:numu, !cfg.anti, pr.A), μB_ws = w(:numu, !cfg.anti, pr.B), eA_ws = w(:nue, !cfg.anti, pr.A), eB_ws = w(:nue, !cfg.anti, pr.B))
+    end |> NamedTuple{keys(SAMPLES)}
+    (; Et, dlnE = log(Et[2] / Et[1]), layers, paths, samples = built, observed, xsec_weights)
 end
 
 # ---------------------------------------------------------------------------------------------
@@ -331,18 +365,30 @@ _ratio(a, b) = ifelse.(b .> 0, a ./ max.(b, 1e-12), one.(a))
 const SAMPLE_NORM = (fhc1rmu = :t2k_fhc1rmu_norm, rhc1rmu = :t2k_rhc1rmu_norm, fhcnumucc1pi = :t2k_cc1pi_norm,
                      fhc1re = :t2k_fhc1re_norm, rhc1re = :t2k_rhc1re_norm, fhc1re1de = :t2k_fhc1re1de_norm)
 
-function sample_expected(k, s, P, params)
+# W ⟨P w⟩ per reconstructed bin (W rows are normalised), and the ND-constrained ratio ⟨P w_e⟩ / ⟨w_μ⟩
+wavg(W, P, w::Number) = (W * P) .* w
+wavg(W, P, w::AbstractVector) = W * (P .* w)
+wmean(W, w::Number) = w
+wmean(W, w::AbstractVector) = W * w
+nd_ratio(W, P, we, wμ) = wavg(W, P, we) ./ max.(wmean(W, wμ), 1e-12)
+
+function sample_expected(k, s, P, params, xw)
     main, other = s.anti ? (P.nubar, P.nu) : (P.nu, P.nubar)
     norm = params.t2k_flux_xsec_norm * getproperty(params, SAMPLE_NORM[k]) * (s.anti ? params.t2k_rhc_norm : one(params.t2k_rhc_norm))
     nqe = params.t2k_nonqe_norm
     nc = params.t2k_nc_norm .* s.nc
+    w = map(f -> f(params), xw)
     λ = if s.kind == :mu
-        norm .* (s.UA .* (s.WA * main.mm) .+ nqe .* s.UB .* (s.WB * main.mm)) .+ nc
+        # the unoscillated CC rate per reconstructed bin is fixed by the near detector
+        nd = (s.UA .* wmean(s.WA, w.μA) .+ s.UB .* wmean(s.WB, w.μB)) ./ max.(s.UA .+ s.UB, 1e-12)
+        norm .* (s.UA .* wavg(s.WA, main.mm, w.μA) .+ nqe .* s.UB .* wavg(s.WB, main.mm, w.μB)) ./ max.(nd, 1e-12) .+ nc
     else
         xs = s.anti ? params.t2k_nue_xsec_ratio_nubar : params.t2k_nue_xsec_ratio_nu
-        sigA = s.sigA .* ((1 .- s.ws) .* _ratio(s.WA * main.me, s.ref.A.me) .+ s.ws .* _ratio(s.WA * other.me, s.ref.A.me_ws))
-        sigB = s.sigB .* ((1 .- s.ws) .* _ratio(s.WB * main.me, s.ref.B.me) .+ s.ws .* _ratio(s.WB * other.me, s.ref.B.me_ws))
-        norm .* (xs .* (sigA .+ nqe .* sigB) .+ s.bkg_cc .* (s.WA * main.ee)) .+ nc
+        sigA = s.sigA .* ((1 .- s.ws) .* _ratio(nd_ratio(s.WA, main.me, w.eA, w.μA), s.ref.A.me) .+
+                          s.ws .* _ratio(nd_ratio(s.WA, other.me, w.eA_ws, w.μA_ws), s.ref.A.me_ws))
+        sigB = s.sigB .* ((1 .- s.ws) .* _ratio(nd_ratio(s.WB, main.me, w.eB, w.μB), s.ref.B.me) .+
+                          s.ws .* _ratio(nd_ratio(s.WB, other.me, w.eB_ws, w.μB_ws), s.ref.B.me_ws))
+        norm .* (xs .* (sigA .+ nqe .* sigB) .+ s.bkg_cc .* nd_ratio(s.WA, main.ee, w.eA, w.μA)) .+ nc
     end
     s.target === s.edges ? λ : rebin(s.edges, λ, s.target)
 end
@@ -350,7 +396,7 @@ end
 function get_expected(params, physics, assets)
     P = scale_energy(channel_probabilities(physics, assets.Et, assets.paths, assets.layers, params), assets.dlnE, params.t2k_energy_scale)
     map(keys(assets.samples), values(assets.samples)) do k, s
-        k => sample_expected(k, s, P, params)
+        k => sample_expected(k, s, P, params, assets.xsec_weights[k])
     end |> NamedTuple
 end
 
