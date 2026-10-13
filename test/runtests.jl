@@ -12,6 +12,7 @@ using Test
         include("test_cevns_xsec.jl")
         include("test_fast_eigen_3x3.jl")
         include("test_solar.jl")
+        include("test_reactor_flux.jl")
     end
 
     @testset "analysis" begin
