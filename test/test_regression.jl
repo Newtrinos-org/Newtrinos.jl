@@ -7,7 +7,7 @@ using Printf
 # To update: run the experiment and replace the reference value.
 const ALL_REFERENCE_VALUES = (
     dayabay      = -168.90003273508322,
-    kamland      = -143.63190655361166,
+    kamland      = -144.63869819545005,
     minos        = -268.4046154382636,
     deepcore     = -942.5706065958955,
     super_k      = -3432.5312315130445,
@@ -18,17 +18,17 @@ const ALL_REFERENCE_VALUES = (
     coherent_lAr = -1755.0426661113386,
     katrin       = 0.4549394122046937,
     gerda        = -85.50961704258683,
-    chlorine     = -0.06465105652607861,
-    gallex_gno   = -6.319846225801688,
-    sage         = -2.3247879229366926,
-    sno          = 18.25318882930893,
-    sk1_solar    = -125.84889881066155,
-    sk2_solar    = -50.0705650589741,
-    sk3_solar    = -82.53448590194941,
-    sk4_solar    = -43.77243676432187,
-    borexino_ph1 = 0.6403743490550309,
-    borexino_ph2 = -4.951643121727856,
-    borexino_ph3 = -2290.499368699521,
+    chlorine     = -0.3161211491885203,
+    gallex_gno   = -6.3130576725955,
+    sage         = -2.3240030626211583,
+    sno          = 18.25318881919382,
+    sk1_solar    = -127.27197625330082,
+    sk2_solar    = -50.54386516276435,
+    sk3_solar    = -83.55199911835112,
+    sk4_solar    = -45.788946357271385,
+    borexino_ph1 = 0.6366322757818439,
+    borexino_ph2 = -5.065586938970489,
+    borexino_ph3 = -2290.7264526090985,
 )
 
 # Parse --experiments from ARGS if present, otherwise run all

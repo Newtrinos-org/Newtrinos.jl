@@ -16,6 +16,10 @@ using Test, Newtrinos, Dates, DataFrames
         end
         # Bugey-4 anchoring lowers the Huber–Mueller rate by the reactor anomaly (~5–6 %)
         @test 0.92 < R.bugey4_scale((U235 = 0.567, U238 = 0.078, Pu239 = 0.298, Pu241 = 0.057)) < 0.97
+        # IBD kinematics (Strumia & Vissani Eq. 16): prompt energy 2 m_e at threshold, E_ν − E_prompt grows with the neutron recoil
+        @test R.neutrino_energy(2 * R.M_E) ≈ R.IBD_THRESHOLD atol = 1e-3
+        @test R.neutrino_energy(8.0) - 8.0 ≈ 0.853 atol = 2e-3
+        @test all(R.positron_energy(R.neutrino_energy(e)) + R.M_E ≈ e for e in 1.1:0.5:9.0)
     end
     @testset "PRIS reactor database" begin
         u = R.load_units()

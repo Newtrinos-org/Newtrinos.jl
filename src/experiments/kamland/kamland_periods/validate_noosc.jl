@@ -11,7 +11,8 @@ eff = CSV.read(joinpath(D, "efficiency_2011.csv"), DataFrame; comment = "#")
 eff2011(e) = K.lin(clamp(e, eff.E_MeV[1], eff.E_MeV[end]), eff.E_MeV, eff.efficiency)
 fr2011 = (U235 = 0.571, U238 = 0.078, Pu239 = 0.295, Pu241 = 0.056)
 Et = collect(1.0:0.01:9.0)
-o = K.response(Et, eff2011) * [rf.spectrum(e + K.ΔE_NU, fr2011) * rf.ibd_xsec(e + K.ΔE_NU) for e in Et]
+Eν = Newtrinos.reactor_flux.neutrino_energy.(Et); jac = Newtrinos.reactor_flux.neutrino_energy.(Et .+ 0.005) .- Newtrinos.reactor_flux.neutrino_energy.(Et .- 0.005)
+o = K.response(Et, eff2011) * [rf.spectrum(e, fr2011) * rf.ibd_xsec(e) * j for (e, j) in zip(Eν, jac)]
 kl = noosc.events
 r = (o ./ sum(o)) ./ (kl ./ sum(kl))
 @printf "shape χ² (Poisson errors of %.0f events) = %.2f for %d bins\n" sum(kl) sum(abs2, (o ./ sum(o) .- kl ./ sum(kl)) ./ sqrt.(kl ./ sum(kl)^2)) length(kl)

@@ -36,7 +36,7 @@ const TARGET_PROTONS = 5.98e31
 const LONG_LIVED = 1.007
 const WORLD_FRACTION = 0.011
 const EDGES = collect(0.9:0.425:8.125)
-const ΔE_NU = 0.782 + 0.010                      # E_ν = E_prompt + 0.782 MeV + mean neutron recoil
+const ΔE_NU = 0.782 + 0.010                      # mean E_ν − E_prompt (for plots); the prediction uses reactor_flux.neutrino_energy
 const RESOLUTION = 0.064                         # σ_E / E = 6.4 % / √(E/MeV)
 const BEST_FIT = (θ₁₂ = atan(sqrt(0.481)), θ₁₃ = asin(sqrt(0.010)), θ₂₃ = 0.785, δCP = 0.0, Δm²₂₁ = 7.54e-5, Δm²₃₁ = 2.4e-3)
 const ESCALE_UNC = 0.018
@@ -138,9 +138,10 @@ function get_assets(physics, ds = DATASETS.periods2013)
     end
     # true prompt energies and ν̄e flux × IBD cross section per fission [cm² / MeV / fission], Bugey-4 anchored
     Et = collect(1.0:0.01:9.0); dE = 0.01
-    Eν = Et .+ ΔE_NU
+    Eν = Newtrinos.reactor_flux.neutrino_energy.(Et)
+    dEν = (Newtrinos.reactor_flux.neutrino_energy.(Et .+ dE / 2) .- Newtrinos.reactor_flux.neutrino_energy.(Et .- dE / 2))
     norm = Newtrinos.reactor_flux.bugey4_scale(ds.fractions) * LONG_LIVED
-    φσ = [rf.spectrum(e, ds.fractions) * rf.ibd_xsec(e) * norm * dE for e in Eν]
+    φσ = [rf.spectrum(e, ds.fractions) * rf.ibd_xsec(e) * norm * d for (e, d) in zip(Eν, dEν)]
     ex = reactor_exposure(rf, ds)
     L = vcat(ex.L, 5000.0)
     periods = map(1:np) do p

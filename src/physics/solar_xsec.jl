@@ -60,11 +60,45 @@ Maximum electron recoil kinetic energy [MeV] in ν–e scattering at neutrino en
 """
 t_max(E) = 2E^2 / (M_E + 2E)
 
-# Bahcall, Kamionkowski & Sirlin, Phys. Rev. D 51, 6146 (1995), eq. (B3)
-function κ_ES(T)
+# Bahcall, Kamionkowski & Sirlin, Phys. Rev. D 51, 6146 (1995) (BKS), Eqs. (A4), (A5) and (A7):
+# κ(T) of νe–e and of νμ,τ–e scattering
+function κ_ES(flavour::Symbol, T)
     x = sqrt(1 + 2M_E / T)
     I = (1 / 3 + (3 - x^2) * (x / 2 * log((x + 1) / (x - 1)) - 1)) / 6
-    0.9791 + 0.0097 * I
+    flavour == :e ? 0.9791 + 0.0097 * I : 0.9970 - 0.00037 * I
+end
+
+const ALPHA = 1 / 137.035999
+
+# dilogarithm Li₂(x) for 0 ≤ x ≤ 1 (BKS's Spence function is L(x) = -Li₂(x))
+function li2(x)
+    iszero(x) && return zero(x)
+    x == 1 && return oftype(x, π^2 / 6)
+    x > 0.5 && return π^2 / 6 - log(x) * log1p(-x) - li2(1 - x)
+    s = zero(x); p = one(x)
+    for k in 1:60
+        p *= x; s += p / k^2
+    end
+    s
+end
+
+# QED corrections of BKS, Eqs. (B3)–(B5): f₋(z), (1 - z)² f₊(z) and f₊₋(z) for neutrino energy E and recoil
+# kinetic energy T (z = T/E). The log divergence at the end point is integrable.
+function qed_es(E, T)
+    Ee = T + M_E; ℓ = sqrt(T * (T + 2M_E)); β = ℓ / Ee; z = T / E
+    c = Ee / ℓ * log1p((T + ℓ) / M_E) - 1
+    a = 1 - z - M_E / (Ee + ℓ)
+    a <= 0 && return (zero(z), zero(z), zero(z))
+    la, l1, lz = log(a), log1p(-z), log(z)
+    L(x) = -li2(x)
+    fm = c * (2la - l1 - lz / 2 - 5 / 12) + (L(z) - L(β)) / 2 - l1^2 / 2 - (11 / 12 + z / 2) * l1 +
+         z * (lz + log(2E / M_E) / 2) - (31 / 18 + lz / 12) * β - 11z / 12 + z^2 / 24
+    fp = c * ((1 - z)^2 * (2la - l1 - lz / 2 - 2 / 3) - (z^2 * lz + 1 - z) / 2) -
+         (1 - z)^2 / 2 * (l1^2 + β * (L(1 - z) - lz * l1)) +
+         l1 * (z^2 / 2 * lz + (1 - z) / 3 * (2z - 1 / 2)) -
+         z^2 / 2 * L(1 - z) - z * (1 - 2z) / 3 * lz - z * (1 - z) / 6 -
+         β / 12 * (lz + (1 - z) * (115 - 109z) / 6)
+    fm, fp, c * 2la
 end
 
 """
@@ -72,17 +106,19 @@ end
 
 Differential ν–e elastic scattering cross section [cm² MeV⁻¹].
 
-Includes the electroweak radiative corrections of Bahcall, Kamionkowski & Sirlin (1995)
-through ρ_NC and κ(T); the QED corrections (≲ 2% on the recoil spectrum) are neglected.
-`flavour` is `:e` (charged + neutral current) or `:x` (νμ, ντ; neutral current only).
+Includes the electroweak (ρ_NC, κ(T)) and QED radiative corrections of Bahcall, Kamionkowski &
+Sirlin, Phys. Rev. D 51, 6146 (1995), Eq. (A1). `flavour` is `:e` (charged + neutral current) or
+`:x` (νμ, ντ; neutral current only).
 """
 function dσdT_es(flavour::Symbol, E, T)
     (T <= 0 || T >= t_max(E)) && return zero(promote_type(typeof(E), typeof(T)))
-    κs = κ_ES(T) * SIN2_W
+    κs = κ_ES(flavour, T) * SIN2_W
     gL = RHO_NC * (0.5 - κs) - (flavour == :e ? 1 : 0)
     gR = -RHO_NC * κs
     z = T / E
-    SIGMA_0 * (gL^2 + gR^2 * (1 - z)^2 - gL * gR * M_E * T / E^2)
+    fm, fp, fpm = qed_es(E, T)
+    r = ALPHA / π
+    SIGMA_0 * (gL^2 * (1 + r * fm) + gR^2 * ((1 - z)^2 + r * fp) - gL * gR * M_E * T / E^2 * (1 + r * fpm))
 end
 
 function read_table(name)
