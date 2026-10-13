@@ -1,0 +1,8 @@
+# Borexino Phase I, 8B (PRD 82, 033006 (2010), arXiv:0808.2868), Fig. 7: background-subtracted spectrum, counts per
+# 2 MeV bin in 345.3 live days (100 t fiducial mass), extracted from the vector graphics; err_lo/err_hi: error bars.
+E_lo_MeV,E_hi_MeV,counts,err_lo,err_hi
+3.001,4.998,29.004,8.496,8.496
+4.998,7.001,26.001,5.493,5.493
+7.001,8.997,14.026,3.809,3.772
+8.997,11.000,5.017,2.197,2.197
+11.000,12.997,1.025,1.025,0.989

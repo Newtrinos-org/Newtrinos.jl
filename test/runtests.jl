@@ -11,10 +11,12 @@ using Test
         include("test_atmflux.jl")
         include("test_cevns_xsec.jl")
         include("test_fast_eigen_3x3.jl")
+        include("test_solar.jl")
     end
 
     @testset "analysis" begin
         include("test_helpers.jl")
+        include("test_chi2map.jl")
         include("test_analysis.jl")
         include("test_autodiff.jl")
         include("test_regression.jl")
