@@ -87,11 +87,14 @@ struct CorrelatedSSMPriors <: SolarFluxSystematics end
 - `systematics::S = CorrelatedSSMPriors()`: flux uncertainty treatment.
 - `n_production::Int = 40`: number of radial sample points per component used to average the
   oscillation probability over the production region.
+- `b8_spectrum::Symbol = :winter`: nominal ⁸B spectrum, `:winter` (Winter et al. 2006, the
+  spectrum used by SK, SNO and Borexino) or `:bahcall` (Bahcall et al. 1996); see [`read_spectra`](@ref).
 """
 @kwdef struct SolarFluxConfig{M<:SolarModel, S<:SolarFluxSystematics}
     model::M = B23()
     systematics::S = CorrelatedSSMPriors()
     n_production::Int = 40
+    b8_spectrum::Symbol = :winter
 end
 
 """
@@ -141,7 +144,7 @@ osc.solar_prob(E_GeV, sf.production.b8, osc_params) # oscillation probability
 """
 function configure(cfg::SolarFluxConfig=SolarFluxConfig())
     nominal, frac_err, corr = read_fluxes(cfg.model)
-    shapes = read_spectra()
+    shapes = read_spectra(cfg.b8_spectrum)
     SolarFlux(
         cfg = cfg,
         params = get_params(cfg.systematics),
@@ -253,14 +256,38 @@ function read_shape(name)
 end
 
 """
-    read_spectra() -> NamedTuple
+    read_spectra(b8_spectrum=:winter) -> NamedTuple
 
-Normalised spectral shapes [MeV⁻¹] of the continuous components as interpolators. For ⁸B,
-the best estimate and the ±3σ shape variations (Bahcall et al. 1996).
+Normalised spectral shapes [MeV⁻¹] of the continuous components as interpolators. For ⁸B, the
+best estimate and the shapes at ±3σ of `solar_b8_shape`, `(best, soft3, hard3)`.
+
+The ±3σ variations are those of Bahcall et al. (1996), applied as differences to the nominal
+spectrum. With `b8_spectrum = :winter` the nominal is Winter et al., PRC 73, 025503 (2006),
+Table IV (recommended by Solar fusion II), which is 1.1σ harder than Bahcall's best estimate. Its
+own quoted 1σ is only a quarter of Bahcall's, but the later α-spectrum measurements differ from
+it by up to ≈5 % below 15 MeV (Solar fusion III, Sec. II.D.3), so the wider Bahcall variation is
+kept. The table ends at 15.2 MeV; above, Bahcall's shape is scaled to match (≈10⁻⁵ of the flux).
 """
-function read_spectra()
+function read_spectra(b8_spectrum::Symbol=:winter)
+    b8 = read_shape("b8")
+    if b8_spectrum == :winter
+        best, soft3, hard3 = b8
+        data, _ = readdlm(joinpath(datadir, "spectrum_b8_winter.csv"), ',', Float64, '\n'; header=true, comments=true)
+        Ew, Pw = data[:, 1], data[:, 2]
+        @assert Ew ≈ 0.1:0.1:15.5
+        winter = cubic_spline_interpolation(0.0:0.1:15.5, vcat(0.0, Pw), extrapolation_bc=0.0)
+        E_end = Ew[findlast(>(0), Pw)]
+        tail = winter(E_end) / best(E_end)
+        E = best.itp.knots[1]
+        w = [e <= E_end ? max(winter(e), 0.0) : tail * best(e) for e in E]
+        w ./= sum(diff(E) .* (w[1:end-1] .+ w[2:end]) ./ 2)
+        shape(y) = linear_interpolation(E, y, extrapolation_bc=0.0)
+        b8 = (shape(w), shape(w .+ soft3.(E) .- best.(E)), shape(w .+ hard3.(E) .- best.(E)))
+    elseif b8_spectrum != :bahcall
+        throw(ArgumentError("unknown b8_spectrum $b8_spectrum, expected :winter or :bahcall"))
+    end
     (pp = only(read_shape("pp")), hep = only(read_shape("hep")), n13 = only(read_shape("n13")),
-     o15 = only(read_shape("o15")), f17 = only(read_shape("f17")), b8 = read_shape("b8"))
+     o15 = only(read_shape("o15")), f17 = only(read_shape("f17")), b8 = b8)
 end
 
 function get_flux(sys::SolarFluxSystematics, nominal)
@@ -271,7 +298,7 @@ function get_spectrum(sys::SolarFluxSystematics, nominal, shapes)
     function spectrum(comp::Symbol, E, params)
         Φ = nominal[comp] * flux_norm(sys, comp, params)
         if comp == :b8
-            # positive shifts towards the harder spectrum (Bahcall's "-3σ" column)
+            # positive shifts towards the harder spectrum (Bahcall's "-3σ" variation)
             best, soft3, hard3 = shapes.b8
             s = params.solar_b8_shape
             return Φ .* (best.(E) .+ s .* (hard3.(E) .- soft3.(E)) ./ 6)
