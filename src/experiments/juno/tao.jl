@@ -134,6 +134,8 @@ function get_assets(physics, livetime_years; datadir = @__DIR__)
     E_deposited_MeV_raw = df_response_sorted.E_deposited_MeV
     response_arr_raw = df_response_sorted.response
     
+    # TODO: constant IBD offset neglects the neutron recoil (E_ν − E_prompt = 0.784 MeV at threshold → 0.853 MeV at
+    #       E_prompt = 8 MeV); use Newtrinos.reactor_flux.neutrino_energy / positron_energy as KamLAND does (commit 3082702)
     IBD_KINEMATIC_OFFSET = 0.782
     E_arr_deposited_for_response = E_nu_grid_no_osc .- IBD_KINEMATIC_OFFSET
     
