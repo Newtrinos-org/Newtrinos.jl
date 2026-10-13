@@ -35,8 +35,11 @@ abstract type SolarModel end
 """
     B23 <: SolarModel
 
-B23 standard solar models (Herrera & Serenelli 2023, doi:10.5281/zenodo.10174170), computed
-with SF-III nuclear rates. This is the solar model used in NuFIT 6.0.
+B23 standard solar models (Herrera & Serenelli 2023, v1.2, doi:10.5281/zenodo.10822316; concept
+doi:10.5281/zenodo.10174170), computed with SF-III nuclear rates. This is the solar model used in
+NuFIT 6.0. Fluxes, uncertainties and correlations are the package's `fluxes_SF3_*.dat`; the structure
+tables (`b23_*_structure.csv`, centre to surface) are written from its `struct+nu_SF3_*.dat` by
+`solar/make_b23_structure.py`.
 
 # Fields
 - `composition::Symbol = :MB22m`: solar surface composition, one of `:MB22m` (Magg et al.
@@ -221,21 +224,10 @@ function read_production(model::B23, n)
     col(name) = data[:, findfirst(==(name), vec(header))]
     r, ne, ρ, X = col("r"), col("ne"), col("rho"), col("X")
     nn = ρ .* (1 .- X) ./ 2  # neutrons per nucleon ≈ ½ for everything but hydrogen
-    # the full electron-density profile is attached for the level-crossing probability (see osc.solar_mass_fractions)
-    # beyond the end of the structure table (0.5 R☉): BS05(OP) electron density, matched at the boundary
-    outer, _ = readdlm(joinpath(datadir, "ne_outer_bs05op.csv"), ',', Float64, '\n'; header=true, comments=true)
-    sel = outer[:, 1] .> r[end]
-    ne_out = outer[sel, 2] .* (ne[end] / ne_at(outer, r[end]))
-    # neutron density beyond the table: constant n_n / n_e (composition of the convective envelope)
-    profile = (r = vcat(r, outer[sel, 1]), ne = vcat(ne, ne_out), nn = vcat(nn, ne_out .* (nn[end] / ne[end])))
+    # the full density profile (centre to surface) is attached for the level-crossing probability
+    # (see osc.solar_mass_fractions)
+    profile = (r = r, ne = ne, nn = nn)
     NamedTuple{COMPONENTS}(merge(compress_production(r, ne, nn, col(String(c)), n), (profile = profile,)) for c in COMPONENTS)
-end
-
-# log-linear interpolation of the tabulated electron density (r ascending)
-function ne_at(tab, x)
-    i = clamp(searchsortedlast(tab[:, 1], x), 1, size(tab, 1) - 1)
-    t = (x - tab[i, 1]) / (tab[i+1, 1] - tab[i, 1])
-    exp(log(tab[i, 2]) + t * (log(tab[i+1, 2]) - log(tab[i, 2])))
 end
 
 function compress_production(r, ne, nn, dndr, n)
