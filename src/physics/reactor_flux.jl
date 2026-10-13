@@ -69,6 +69,32 @@ function ibd_xsec(E)
     1e-43 * pe * Ee * E^(-0.07056 + 0.02018 * lE - 0.001953 * lE^3)
 end
 
+"""
+    positron_energy(E) -> Float64
+
+Mean total positron energy [MeV] of IBD at antineutrino energy `E` [MeV], including the neutron recoil (Strumia & Vissani
+(2003), Eq. (16): ⟨E_e⟩ ≈ (E₁ + E₂)/2 = E − δ − E^CM_ν E^CM_e / m_p, better than 1 % below 100 MeV). The prompt (visible)
+energy of the event is `positron_energy(E) + M_E`.
+"""
+function positron_energy(E)
+    s = M_P^2 + 2 * M_P * E; rs = sqrt(s)
+    E - (M_N^2 - M_P^2 - M_E^2) / (2 * M_P) - (s - M_P^2) / (2rs) * (s - M_N^2 + M_E^2) / (2rs) / M_P
+end
+
+"""
+    neutrino_energy(E_prompt) -> Float64
+
+Antineutrino energy [MeV] whose mean prompt energy `positron_energy(E) + M_E` is `E_prompt` [MeV] (inverse of
+[`positron_energy`](@ref); E − E_prompt grows from 0.784 MeV at threshold to 0.84 MeV at E = 8 MeV).
+"""
+function neutrino_energy(E_prompt)
+    E = E_prompt + DELTA_NP - M_E
+    for _ in 1:5                               # Newton with dE_e/dE ≈ 1 − 2E/m_p
+        E -= (positron_energy(E) + M_E - E_prompt) / (1 - 2E / M_P)
+    end
+    E
+end
+
 configure() = ReactorFlux(isotope_spectrum = isotope_spectrum, spectrum = spectrum, ibd_xsec = ibd_xsec, fission_rate = fission_rate)
 
 "IBD yield per fission ∫ S(E) σ(E) dE [cm²/fission] of the Huber–Mueller model."
