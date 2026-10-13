@@ -1631,8 +1631,8 @@ end
 # Evolution in the Sun: if the production region provides the solar density profile
 # (`production.profile`, as from `Newtrinos.solar_flux`), the level crossing of the solar pair
 # (the two mass states with the largest νe admixture, ν1 and ν2 in the standard case) is
-# estimated with Parke's formula (`solar_crossing_probability`). Where it is not negligible
-# (P_c > 1e-5; LOW region Δm² ≲ 10⁻⁷ eV², small mixing), the evolution from well above the
+# estimated with Parke's formula (`solar_crossing_probability`, both octants). Where it is not
+# negligible (P_c > 1e-5; Δm²/E ≲ 10⁻⁷ eV²/MeV), the evolution from well above the
 # resonance to the solar surface is computed numerically through thin constant-density shells
 # (`solar_transition_matrix`), exact for any number of states. Otherwise the conversion is
 # adiabatic (all of LMA). Neutrinos only, all states
@@ -1680,11 +1680,12 @@ function solar_mass_fractions(U, h, E, production, interaction::SI, eigen_method
         if nonad
             Pc = solar_crossing_probability(h[b] - h[a], abs2(U[1, a]), abs2(U[1, b]), e, ne_max, production.profile)
             if Pc > 1e-5
-                n_res = (h[b] - h[a]) * (1 - 2 * abs2(U[1, b]) / (abs2(U[1, a]) + abs2(U[1, b]))) /
-                        (2 * e * 1e9 * A * (abs2(U[1, a]) + abs2(U[1, b])))
-                # start where the matter eigenstates are still (nearly) flavour states: at 1000 n_res the
-                # matter mixing angle is within ~0.1° of 90°, or at the production region if that is outer
-                Tm = solar_transition_matrix(H_eff, U, e, min(1000 * _strip(n_res), minimum(production.ne)), production.profile,
+                # density at which the potential equals the vacuum splitting (the resonance is at n_* cos2θ)
+                n_star = (h[b] - h[a]) / (2 * e * 1e9 * A * (abs2(U[1, a]) + abs2(U[1, b])))
+                # start where the matter eigenstates are still (nearly) flavour states: at 1000 n_* the matter
+                # mixing angle is within ~0.03° of 90° for any vacuum angle (also near and beyond maximal mixing,
+                # where the resonance density → 0), or at the production region if that is outer
+                Tm = solar_transition_matrix(H_eff, U, e, min(1000 * _strip(n_star), minimum(production.ne)), production.profile,
                                              interaction, eigen_method)
             end
         end
@@ -1767,22 +1768,28 @@ Phys. Lett. B 200, 373 (1988)),
 ``P_c = (e^{-γ \\sin^2θ} - e^{-γ}) / (1 - e^{-γ})``, ``γ = π Δm² r_0 / E``,
 in the effective two-state system (``\\sin^2θ = U_{eb}^2 / (U_{ea}^2 + U_{eb}^2)``, potential
 scaled by ``U_{ea}^2 + U_{eb}^2 = c_{13}^2``), with the local density scale height
-``r_0 = |n_e / (dn_e/dr)|`` at the resonance taken from `profile = (r, ne)` (r in R☉, nₑ in
-mol/cm³, ascending r). P_c = 0 if the resonance is not crossed (produced below the resonance
-density, or cos 2θ ≤ 0).
+``r_0 = |n_e / (dn_e/dr)|`` taken from `profile = (r, ne)` (r in R☉, nₑ in mol/cm³, ascending r)
+at the density ``|\\cos 2θ|\\, n_*`` (``n_* = Δm²/(2E A c_{13}^2)``, the density at which the potential
+equals the vacuum splitting), i.e. at the resonance for cos 2θ > 0. The formula also holds without
+a resonance (cos 2θ ≤ 0, θ > 45°; Petcov 1988, Friedland, Phys. Rev. Lett. 85, 936 (2000)), where
+the conversion is least adiabatic where the potential falls below the vacuum splitting (near
+maximal mixing, ``|\\cos 2θ|`` is replaced by 10⁻²; beyond the outermost tabulated density, the scale
+height of the outermost interval is used). P_c = 0 if the resonance is not crossed (cos 2θ > 0 and
+produced below the resonance density).
 """
 function solar_crossing_probability(dm2, Ua2, Ub2, E, ne_prod, profile)
     c2 = Ua2 + Ub2
     s2 = Ub2 / c2
     cos2θ = 1 - 2 * s2
     T = promote_type(typeof(dm2), typeof(s2), typeof(E))
-    (dm2 <= 0 || cos2θ <= 0) && return zero(T)
-    # resonance: 2E V c² = Δm² cos2θ with V = A nₑ (A·nₑ in eV for nₑ in mol/cm³, E in eV)
-    n_res = dm2 * cos2θ / (2 * E * 1e9 * A * c2)
-    ne_prod <= n_res && return zero(T)
+    dm2 <= 0 && return zero(T)
+    # 2E V c² = Δm² at n_*, with V = A nₑ (A·nₑ in eV for nₑ in mol/cm³, E in eV); resonance at n_* cos2θ
+    n_star = dm2 / (2 * E * 1e9 * A * c2)
+    cos2θ > 0 && ne_prod <= n_star * cos2θ && return zero(T)
+    n_res = n_star * max(abs(cos2θ), oftype(cos2θ, 1e-2))
     r, ne = profile.r, profile.ne
-    i = findfirst(x -> x < n_res, ne)   # first tabulated point beyond the resonance
-    i === nothing && return zero(T)
+    # first tabulated point beyond n_res (the resonance for cos2θ > 0), else the outermost interval
+    i = something(findfirst(x -> x < n_res, ne), length(ne))
     i = max(i, 2)
     # exponential interpolation between the bracketing points: local scale height
     r0 = (r[i] - r[i-1]) / log(ne[i-1] / ne[i]) * R_SUN_M

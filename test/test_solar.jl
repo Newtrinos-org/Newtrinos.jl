@@ -172,6 +172,13 @@ end
     @test sf.flux(:b8, p) ≈ 1.1 * sf.nominal.b8
     @test sum(sf.spectrum(:b8, E, p)) * step(E) ≈ 1.1 * sf.nominal.b8 rtol=1e-3
     @test sf.spectrum(:b8, [14.0], p)[1] > 1.1 * sf.spectrum(:b8, [14.0], sf.params)[1]
+    # ⁸B spectrum: Winter et al. 2006 (default) is harder than Bahcall et al. 1996, by about one σ of solar_b8_shape
+    sf_bahcall = Newtrinos.solar_flux.configure(Newtrinos.solar_flux.SolarFluxConfig(b8_spectrum=:bahcall))
+    mean_E(x, p) = (s = x.spectrum(:b8, E, p); sum(E .* s) / sum(s))
+    @test mean_E(sf, sf.params) ≈ 6.770 atol=0.001
+    @test mean_E(sf_bahcall, sf_bahcall.params) ≈ 6.735 atol=0.001
+    @test mean_E(sf, merge(sf.params, (solar_b8_shape = -1.0,))) ≈ mean_E(sf_bahcall, sf_bahcall.params) atol=0.002
+    @test_throws ArgumentError Newtrinos.solar_flux.configure(Newtrinos.solar_flux.SolarFluxConfig(b8_spectrum=:ortiz))
     # production regions: normalised, ⁸B more central than pp, central nₑ ≈ 100 N_A/cm³
     for c in Newtrinos.solar_flux.COMPONENTS
         @test sum(sf.production[c].w) ≈ 1
@@ -223,8 +230,8 @@ end
     @test xs.capture(:ga71, 0.8613, merge(p, (ga_xsec_sigma = 3.0,))) ≈ (82.61 + 0.613 * (103.1 - 82.61)) * 1e-46 rtol=1e-6
     @test xs.capture(:ga71, 0.8613, merge(p, (ga_xsec_sigma = -3.0,))) ≈ (62.45 + 0.613 * (75.05 - 62.45)) * 1e-46 rtol=1e-6
     @test_throws ArgumentError xs.capture(:h2o, 10.0, p)
-    # spectrum-averaged chlorine cross sections (Bahcall, Neutrino Astrophysics, Table 8.2) [1e-46 cm²]
-    sf = Newtrinos.solar_flux.configure()
+    # spectrum-averaged chlorine cross sections (Bahcall, Neutrino Astrophysics, Table 8.2) [1e-46 cm²], with Bahcall's ⁸B spectrum
+    sf = Newtrinos.solar_flux.configure(Newtrinos.solar_flux.SolarFluxConfig(b8_spectrum=:bahcall))
     Eall = range(0.0, 19.0, length=40000)
     avg_σ(c, target) = (s = sf.spectrum(c, Eall, sf.params); sum(s .* xs.capture.(target, Eall, Ref(p))) / sum(s) / 1e-46)
     @test avg_σ(:b8, :cl37) ≈ 1.14e4 rtol=0.02
@@ -268,12 +275,12 @@ end
     @test 62 < sum(r_ga) < 68
     @test r_cl.pp == 0
     @test r_ga.pp > r_ga.be7 > r_ga.b8
-    # without oscillations: Cl ≈ 7.4 SNU, Ga ≈ 126 SNU for B23 MB22-met
+    # without oscillations: Cl ≈ 7.6 SNU (7.4 with Bahcall's ⁸B spectrum), Ga ≈ 126 SNU for B23 MB22-met
     phys0 = merge(physics, (osc = Newtrinos.osc.configure(),))
     p0 = merge(p, (θ₁₂ = 0.0, θ₁₃ = 0.0))
     cl0 = Newtrinos.chlorine.configure(phys0)
     ga0 = Newtrinos.gallex_gno.configure(phys0)
-    @test sum(Newtrinos.chlorine.get_expected(p0, cl0.physics, cl0.assets)) ≈ 7.4 rtol=0.03
+    @test sum(Newtrinos.chlorine.get_expected(p0, cl0.physics, cl0.assets)) ≈ 7.6 rtol=0.03
     @test sum(Newtrinos.gallex_gno.get_expected(p0, ga0.physics, ga0.assets)) ≈ 126 rtol=0.03
     # joint likelihood is differentiable in the solar parameters and nuisances
     llh = Newtrinos.generate_likelihood((; cl, ga, sg))
