@@ -17,6 +17,7 @@ using Test
 
     @testset "analysis" begin
         include("test_helpers.jl")
+        include("test_chi2map.jl")
         include("test_analysis.jl")
         include("test_autodiff.jl")
         include("test_regression.jl")
