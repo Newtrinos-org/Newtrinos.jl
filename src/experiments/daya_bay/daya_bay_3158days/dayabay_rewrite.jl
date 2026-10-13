@@ -792,17 +792,25 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     #fine_binning_Enu = assets.fine_binning_Enu
     #fine_binning_Enu_c = assets.fine_binning_Enu_c
     fine_binning_Edep = assets.fine_binning_Edep
+    twice_fine_binning_Edep = collect(0.0:.025:12.)
+    twice_fine_binning_Edep_c = (twice_fine_binning_Edep[1:end-1] + twice_fine_binning_Edep[2:end]) / 2
+    twice_fine_binning_Edep_width = diff(twice_fine_binning_Edep)
     fine_binning_Edep_c = assets.fine_binning_Edep_c
     fine_bin_Edep_width = assets.fine_bin_Edep_width
     fine_binning_Enu = physics.xsec.Enu.(fine_binning_Edep)
     fine_binning_Enu_c = physics.xsec.Enu.(fine_binning_Edep_c)
+    twice_fine_binning_Enu = physics.xsec.Enu.(twice_fine_binning_Edep)
+    twice_fine_binning_Enu_c = physics.xsec.Enu.(twice_fine_binning_Edep_c)
+    twice_fine_binning_Enu_width = diff(twice_fine_binning_Enu)
     fine_bin_Enu_width = diff(fine_binning_Enu)
     
-    xsec_eval = xsec.(fine_binning_Enu_c)
+    #xsec_eval = xsec.(fine_binning_Enu_c)
+    xsec_eval = xsec.(twice_fine_binning_Enu_c)
+    #E_nu_GeV = fine_binning_Enu_c ./ 1e3
+    E_nu_GeV = twice_fine_binning_Enu_c ./ 1e3
 
-    E_nu_GeV = fine_binning_Enu_c ./ 1e3
-
-    NF = length(fine_binning_Enu) - 1
+    #NF = length(fine_binning_Enu) - 1
+    NF = length(twice_fine_binning_Enu) - 1
     NFc = length(fine_binning_Edep_c)
 
     ## create background model functions, taking parameter NamedTuple as arg
@@ -868,7 +876,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         # convert the cross section from e-41cm2 to m2 -> multiply by 1e-4
         flux_norm = 1e-45 * output.eff_livetime_seconds * n_p
 
-        integral_dEnu = fine_bin_Enu_width .* xsec_eval
+        integral_dEnu = twice_fine_binning_Enu_width .* xsec_eval
 
         # get the exposure-averaged per-AD-reactor thermal power
         rates = assets.reactor_nu_rates
@@ -941,33 +949,36 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
 
             P = osc.osc_prob(E_nu_GeV, L_km, params, anti=true)[:, :, 1, 1]
 
-            spec = zeros(T, NF)
+            interm_spec = zeros(T, NF)
             @inbounds for r in 1:6
                 fission_fractions = params[ffs_symbols[r]]
                 neq_scale = params[neq_symbols[r]]
-                flux_nom, flux_snf, correction = reactor_flux(fine_binning_Enu_c, params.reactor_thermal_power_scale[r], params.energy_per_fission, fission_fractions, params.spectrum_pulls, neq_scale, params.snf_scale[r], r)
-                @. spec += (spec_prefac_nom_neq[r] * flux_nom + spec_prefac_snf[r] * flux_snf) * P[:, r] * correction
+                flux_nom, flux_snf, correction = reactor_flux(twice_fine_binning_Enu_c, params.reactor_thermal_power_scale[r], params.energy_per_fission, fission_fractions, params.spectrum_pulls, neq_scale, params.snf_scale[r], r)
+                @. interm_spec += (spec_prefac_nom_neq[r] * flux_nom + spec_prefac_snf[r] * flux_snf) * P[:, r] * correction
                 #spec .+= reactor_flux(fine_binning_Enu_c, params.reactor_thermal_power_scale[r], params.energy_per_fission, fission_fractions, params.spectrum_pulls, neq_scale, params.snf_scale[r], r) .* invL2[r]
             end
             # multiply with xsec_eval and bin width for integral over neutrino energy
-            spec .*= integral_dEnu
-
-            spec_sum = sum(spec)
+            interm_spec .*= integral_dEnu
+            # sum two bins together to one
+            spec = T[]
+            for (l, h) in zip(interm_spec[1:2:end-1], interm_spec[2:2:end])
+                push!(spec, l+h)
+            end
             smeared_spectrum = iav_func(params.iav_offdiag_scale[ad_idx], spec)
 
-            # transform from Escint to Evis by lsnl and relative energy scale
-            E_vis = lsnl(fine_binning_Edep_c, params.lsnl_pull) .* fine_binning_Edep_c
-            E_vis_edges = lsnl(fine_binning_Edep, params.lsnl_pull) .* fine_binning_Edep
+            eff_eres = params[eff_eres_key]
+            # transform from Escint to Evis by lsnl and relative energy scale, apply E_scale = eff_eres[2] here
+            E_vis = lsnl(fine_binning_Edep_c, params.lsnl_pull) .* fine_binning_Edep_c .* eff_eres[2]
+            E_vis_edges = lsnl(fine_binning_Edep, params.lsnl_pull) .* fine_binning_Edep .* eff_eres[2]
 
             # get energy resolution 
             sigma_E = eres(E_vis, params.eres_a, params.eres_b, params.eres_c);
             
             # get relative efficiency and energy scale
-            eff_eres = params[eff_eres_key]
 
 
             #smeared_sum = sum(smeared_spectrum)
-            resolved_spectrum = smear(E_vis, smeared_spectrum, sigma_E, E_scale=eff_eres[2], width=20);
+            resolved_spectrum = smear(E_vis, smeared_spectrum, sigma_E, width=20);
             resolved_sum = sum(resolved_spectrum)
 
             """
@@ -1008,8 +1019,8 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     function forward_model(params)
         output = []
         for (c, p_AD) in enumerate(detector_list)
-            #push!(output, background_models[p_AD](params) .+ neutrino_models[p_AD](params))
-            push!(output, neutrino_models[p_AD](params))
+            push!(output, background_models[p_AD](params) .+ neutrino_models[p_AD](params))
+            #push!(output, neutrino_models[p_AD](params))
             #push!(output, background_models[p_AD](params))
             # break
         end
@@ -1078,7 +1089,7 @@ end
             ax = Axis(f[1, 1], yminorticksvisible=true, title="EH$(c)")#, yminorticks=IntervalsBetween(9), yscale=log10)
             plot!(ax, assets.coarse_binning_c, o./assets.coarse_bin_width, label="Observed", color=:black)
             stephist!(ax, assets.coarse_binning_c, weights=m./assets.coarse_bin_width, bins=assets.coarse_binning, label="Expected")
-            #barplot!(ax, assets.coarse_binning_c, (m .+ sqrt.(v))./assets.coarse_bin_width, width=assets.coarse_bin_width, gap=0, fillto= (m.- sqrt.(v))./assets.coarse_bin_width, alpha=0.5, label="Standard Deviation")
+            barplot!(ax, assets.coarse_binning_c, (m .+ sqrt.(v))./assets.coarse_bin_width, width=assets.coarse_bin_width, gap=0, fillto= (m.- sqrt.(v))./assets.coarse_bin_width, alpha=0.5, label="Standard Deviation")
             axislegend(ax, framevisible = false)
 
             ax.xticksvisible = false
@@ -1100,7 +1111,7 @@ end
 
             xlims!(ax2, minimum(assets.coarse_binning), maximum(assets.coarse_binning))
             xlims!(ax, minimum(assets.coarse_binning), maximum(assets.coarse_binning))
-            ylims!(ax, 1e1, 1e6)
+            #ylims!(ax, 1e1, 1e6)
             ## ylims!(ax2, 0.3, 1.0)
             
 
