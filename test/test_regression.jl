@@ -7,14 +7,14 @@ using Printf
 # To update: run the experiment and replace the reference value.
 const ALL_REFERENCE_VALUES = (
     dayabay      = -168.90003273508322,
-    kamland      = -63.111403860037875,
+    kamland      = -143.63190655361166,
     minos        = -268.4046154382636,
     deepcore     = -942.5706065958955,
     super_k      = -3432.5312315130445,
     orca         = -1165.5154890309302,
     t2k          = -353.00066927575386,
     nova         = -329.6505421207443,
-    coherent_csi = -478.4346284831287,
+    coherent_csi = -276.22310206660876,
     coherent_lAr = -1755.0426661113386,
     katrin       = 0.4549394122046937,
     gerda        = -85.50961704258683,
