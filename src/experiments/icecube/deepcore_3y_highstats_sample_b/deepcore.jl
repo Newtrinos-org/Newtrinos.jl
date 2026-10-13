@@ -22,6 +22,12 @@ using ..Newtrinos
     plot::Function
 end
 
+# Cross-section model of the MC (GENIE 2, no MEC; GENIE 2.12 is used) and target, for reweighting with
+# `physics.xsec.weights`; release `type`: 0 NC, 1 CC QE, 2 CC RES, 3 CC DIS
+const XSEC_GENERATOR = :GENIE2_12
+const XSEC_TARGET = :H2O
+const TYPE_PROCESS = Dict(0 => :DIS, 1 => :QE, 2 => :RES, 3 => :DIS)
+
 function default_physics()
     osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction=Newtrinos.osc.SI()))
     atm_flux = Newtrinos.atm_flux.configure(Newtrinos.atm_flux.AtmFluxConfig(nominal_model=Newtrinos.atm_flux.HKKM("spl-nu-20-01-000.d")))
@@ -108,7 +114,14 @@ function get_assets(physics; datadir = @__DIR__)
 
     flux = physics.atm_flux.nominal_flux(binning.e_fine, binning.cz_fine)
 
-    assets = (;mc, hyperplanes, flux, muons, observed=data.count, layers, paths, binning)
+    flavours = (nue = (:nue, false), nuebar = (:nue, true), numu = (:numu, false), numubar = (:numu, true), nutau = (:nutau, false), nutaubar = (:nutau, true))
+    xsec_weights = map(keys(mc), values(mc)) do ch, m
+        flavour, anti = flavours[ch]
+        ch => Newtrinos.xsec.event_weights(physics.xsec, m.true_energy, [t == 0 ? :NC : :CC for t in m.type]; flavour, anti,
+                                           target = XSEC_TARGET, generator = XSEC_GENERATOR, process = [TYPE_PROCESS[t] for t in m.type])
+    end |> NamedTuple
+
+    assets = (;mc, hyperplanes, flux, muons, observed=data.count, layers, paths, binning, xsec_weights)
 
 end
 
@@ -208,10 +221,10 @@ function apply_hyperplanes(hists, params, physics, hyperplanes)
     numus = hists[:numu] .+ hists[:numubar]
     nutaus = hists[:nutau] .+ hists[:nutaubar]
     (
-    (nues[:, :, :, 1] .+ numus[:, :, :, 1] .+ nutaus[:, :, :, 1]).* f_nc .* physics.xsec.scale(:Any, :NC, params) .+ 
+    (nues[:, :, :, 1] .+ numus[:, :, :, 1] .+ nutaus[:, :, :, 1]).* f_nc .+ 
     nues[:, :, :, 2] .* f_nue_cc .+ 
     numus[:, :, :, 2] .* f_numu_cc .+ 
-    nutaus[:, :, :, 2] .* f_nutau_cc .* physics.xsec.scale(:nutau, :CC, params)
+    nutaus[:, :, :, 2] .* f_nutau_cc
     )    
 end 
 
@@ -221,7 +234,7 @@ function get_expected(params, physics, assets)
 
     lifetime_seconds = params.deepcore_lifetime * 365. * 24. * 3600.
 
-    hists = NamedTuple(ch=>make_hist_per_channel(assets.mc[ch], osc_flux[ch], lifetime_seconds) for ch in keys(assets.mc))
+    hists = NamedTuple(ch=>make_hist_per_channel(assets.mc[ch], osc_flux[ch] .* assets.xsec_weights[ch](params), lifetime_seconds) for ch in keys(assets.mc))
     
     expected_nu = apply_hyperplanes(hists, params, physics, assets.hyperplanes)
 

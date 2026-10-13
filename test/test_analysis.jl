@@ -607,6 +607,23 @@ DensityInterface.logdensityof(::ArgumentErrorDensity, x) = throw(ArgumentError("
                 [@test result.values.llh[2, 4] > result.values.llh[i, j] for i in 1:3 for j in 1:7 if (i, j) != (2, 4)]
             end
 
+            @testset "profile with multiple starts" begin
+                # the nuisance b has a local optimum near b = -1 and the global one at b = +1
+                fwd(a, b) = MvNormal([a, 3 * (b^2 - 1), 0.3 * (b - 1)], I(3))
+                likelihood = likelihoodof(splat(fwd), [0.0, 0.0, 0.0])
+                priors = (a = Uniform(-1.0, 1.0), b = Uniform(-2.0, 2.0))
+                params = (a = 0.0, b = -0.9)
+                single = Newtrinos.profile(likelihood, priors, OrderedDict(:a => 3), params)
+                @test all(single.values.b .< 0)                       # stuck in the local optimum
+                mktempdir() do cache_dir
+                    multi = Newtrinos.profile(likelihood, priors, OrderedDict(:a => 3), params; cache_dir = cache_dir,
+                                              starts = [(;), (b = 1.5,), (a = 0.3,)])   # (a = 0.3,) only sets the scanned a: dropped
+                    @test all(multi.values.b .≈ 1.0)
+                    @test all(multi.values.llh .> single.values.llh)
+                    @test length(readdir(cache_dir)) == 2 * 3                # 2 distinct starts × 3 grid points
+                end
+            end
+
             @testset "profile with cached dir" begin 
                 fwd(a, b) = MvNormal([a, b], I(2))
                 likelihood = likelihoodof(splat(fwd), [1.0, 0.0])

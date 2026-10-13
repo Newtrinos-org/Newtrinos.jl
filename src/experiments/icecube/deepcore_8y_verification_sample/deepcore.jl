@@ -31,6 +31,12 @@ using Memoize
 using Printf
 using ..Newtrinos
 
+# Cross-section model of the MC (GENIE 2.12, no MEC) and target, for reweighting with
+# `physics.xsec.weights`; GENIE interaction codes of the release → processes
+const XSEC_GENERATOR = :GENIE2_12
+const XSEC_TARGET = :H2O
+const GENIE_CODE_PROCESS = Dict(0 => :QE, 1 => :RES, 2 => :DIS, 3 => :COH, -1 => :DIS)
+
 @kwdef struct DeepCore <: Newtrinos.Experiment
     physics::NamedTuple
     params::NamedTuple
@@ -149,7 +155,16 @@ function get_assets(physics; datadir = @__DIR__)
     
     flux = physics.atm_flux.nominal_flux(binning.e_fine, binning.cz_fine)
 
-    assets = (;mc, hypersurfaces, flux, muons, observed=data.count, layers, paths, binning)
+    # per-event cross-section weights (closures params -> weight or weights)
+    channel_info = (nu_nc = (:numu, false, :NC), nubar_nc = (:numu, true, :NC), nue_cc = (:nue, false, :CC), nuebar_cc = (:nue, true, :CC),
+                    numu_cc = (:numu, false, :CC), numubar_cc = (:numu, true, :CC), nutau_cc = (:nutau, false, :CC), nutaubar_cc = (:nutau, true, :CC))
+    xsec_weights = map(keys(mc), values(mc)) do ch, m
+        flavour, anti, current = channel_info[ch]
+        process = current === :NC ? :all : [GENIE_CODE_PROCESS[c] for c in m.interaction]
+        ch => physics.xsec.weights(m.true_energy; flavour, anti, current, target = XSEC_TARGET, generator = XSEC_GENERATOR, process)
+    end |> NamedTuple
+
+    assets = (;mc, hypersurfaces, flux, muons, observed=data.count, layers, paths, binning, xsec_weights)
 
 end
 
@@ -187,15 +202,24 @@ end
 # each MC event adds lifetime · weight · flux[true bin] to its reco bin. Gathering and filling in
 # one loop avoids per-event temporary arrays, which under ForwardDiff (Dual elements) dominate
 # allocations and GC time.
-function make_hist_per_channel(mc, flux_at, lifetime_seconds, size=(10,10,2))
+# `xw`: cross-section weight, one per event or one for all
+function make_hist_per_channel(mc, flux_at, lifetime_seconds, xw = 1.0, size=(10,10,2))
     w1 = lifetime_seconds * first(mc.weight)
-    hist = zeros(typeof(w1 * flux_at(first(mc.ef_idx), first(mc.cf_idx))), size)
+    hist = zeros(typeof(w1 * flux_at(first(mc.ef_idx), first(mc.cf_idx)) * _xw(xw, 1)), size)
     weight, ef, cf, e, c, pid = mc.weight, mc.ef_idx, mc.cf_idx, mc.e_idx, mc.c_idx, mc.p_idx
+    if xw isa Number
+        @inbounds for i in eachindex(weight)
+            hist[e[i], c[i], pid[i]] += lifetime_seconds * weight[i] * flux_at(ef[i], cf[i])
+        end
+        return hist .* xw
+    end
     @inbounds for i in eachindex(weight)
-        hist[e[i], c[i], pid[i]] += lifetime_seconds * weight[i] * flux_at(ef[i], cf[i])
+        hist[e[i], c[i], pid[i]] += lifetime_seconds * weight[i] * flux_at(ef[i], cf[i]) * xw[i]
     end
     hist
 end
+_xw(xw::Number, i) = xw
+_xw(xw::AbstractVector, i) = xw[i]
 
 
 # Oscillated fluxes on the fine true grid: `nu`/`nubar` indexed [E, cosθ, detected flavour], and the
@@ -254,10 +278,10 @@ function apply_hypersurfaces(hists, params, physics, assets)
     nutau_cc = hists[:nutau_cc] .+ hists[:nutaubar_cc]
             
     return (
-    nu_nc .* f_nu_nc_nue_cc .* physics.xsec.scale(:Any, :NC, params) .+ 
+    nu_nc .* f_nu_nc_nue_cc .+ 
     nue_cc .* f_nu_nc_nue_cc .+ 
     numu_cc .* f_numu_cc .+ 
-    nutau_cc .* f_nutau_cc .* physics.xsec.scale(:nutau, :CC, params)
+    nutau_cc .* f_nutau_cc
     )    
 end 
 
@@ -268,7 +292,7 @@ function get_expected(params, physics, assets)
     lifetime_seconds = params.deepcore_aeff_scale * 365. * 24. * 3600. * 7.5 * 1e-4 #(cm2 -> m2)
 
     f = osc_flux
-    H(ch, flux_at) = make_hist_per_channel(assets.mc[ch], flux_at, lifetime_seconds)
+    H(ch, flux_at) = make_hist_per_channel(assets.mc[ch], flux_at, lifetime_seconds, assets.xsec_weights[ch](params))
     # NC: each flavour set of the NC MC estimates the full rate, hence /3 (three-flavour only, see module note)
     hists = (nu_nc       = H(:nu_nc,       (e, c) -> f.nc[e, c] / 3),
              nubar_nc    = H(:nubar_nc,    (e, c) -> f.nc_bar[e, c] / 3),

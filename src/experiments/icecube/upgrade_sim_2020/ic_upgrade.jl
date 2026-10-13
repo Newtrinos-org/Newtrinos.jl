@@ -22,6 +22,12 @@ using ..Newtrinos
     plot::Function
 end
 
+# Cross-section model of the MC (GENIE 2.12, no MEC) and target, for reweighting with `physics.xsec.weights`;
+# GENIE interaction codes of the release → processes (current_type 1 = CC, 0 = NC)
+const XSEC_GENERATOR = :GENIE2_12
+const XSEC_TARGET = :H2O
+const GENIE_CODE_PROCESS = Dict(0 => :QE, 1 => :RES, 2 => :DIS, 3 => :COH, -1 => :DIS)
+
 function default_physics()
     osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction=Newtrinos.osc.SI(), eigen_method=Newtrinos.BargerEigen()))
     atm_flux = Newtrinos.atm_flux.configure(Newtrinos.atm_flux.AtmFluxConfig(nominal_model=Newtrinos.atm_flux.HKKM("spl-nu-20-01-000.d")))
@@ -119,7 +125,15 @@ function get_assets(physics; datadir = @__DIR__)
 
     #flux = physics.atm_flux.nominal_flux(binning.e_fine, binning.cz_fine)
 
-    assets = (;mc, layers, paths, binning)
+    flavours = (nue = (:nue, false), nuebar = (:nue, true), numu = (:numu, false), numubar = (:numu, true), nutau = (:nutau, false), nutaubar = (:nutau, true))
+    xsec_weights = map(keys(mc), values(mc)) do ch, m
+        flavour, anti = flavours[ch]
+        ch => Newtrinos.xsec.event_weights(physics.xsec, m.true_energy, [c == 1 ? :CC : :NC for c in m.current_type]; flavour, anti,
+                                           target = XSEC_TARGET, generator = XSEC_GENERATOR,
+                                           process = [GENIE_CODE_PROCESS[t] for t in m.interaction_type])
+    end |> NamedTuple
+
+    assets = (;mc, layers, paths, binning, xsec_weights)
 
 end
 
@@ -202,16 +216,16 @@ function get_expected(params, physics, assets)
 
     lifetime_seconds = params.ic_upgrade_lifetime * 365. * 24. * 3600.
 
-    hists = NamedTuple(ch=>make_hist_per_channel(assets.mc[ch], osc_flux[ch], lifetime_seconds, params, assets) for ch in keys(assets.mc))
+    hists = NamedTuple(ch=>make_hist_per_channel(assets.mc[ch], osc_flux[ch] .* assets.xsec_weights[ch](params), lifetime_seconds, params, assets) for ch in keys(assets.mc))
 
     nues = hists[:nue] .+ hists[:nuebar]
     numus = hists[:numu] .+ hists[:numubar]
     nutaus = hists[:nutau] .+ hists[:nutaubar]
     expected_nu = (
-    (nues[:, :, :, 1] .+ numus[:, :, :, 1] .+ nutaus[:, :, :, 1]).* physics.xsec.scale(:Any, :NC, params) .+ 
+    (nues[:, :, :, 1] .+ numus[:, :, :, 1] .+ nutaus[:, :, :, 1]) .+ 
     nues[:, :, :, 2]  .+ 
     numus[:, :, :, 2]  .+ 
-    nutaus[:, :, :, 2] .* physics.xsec.scale(:nutau, :CC, params)
+    nutaus[:, :, :, 2]
     )    
 
     # set minimum number of events per bin to 1 for Poisson not to crash

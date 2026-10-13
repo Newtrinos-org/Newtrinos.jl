@@ -20,6 +20,11 @@ using ..Newtrinos
     plot::Function
 end
 
+# Cross-section model of the MC and target, for reweighting with `physics.xsec.weights`: gSeaGen with
+# GENIE 3 (G18_02a assumed); sea water
+const XSEC_GENERATOR = :G18_02a_00_000
+const XSEC_TARGET = :H2O
+
 function default_physics()
     osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction=Newtrinos.osc.SI(), eigen_method=Newtrinos.BargerEigen()))
     atm_flux = Newtrinos.atm_flux.configure(Newtrinos.atm_flux.AtmFluxConfig(nominal_model=Newtrinos.atm_flux.HKKM("frj-ally-20-01-mtn-solmin.d")))
@@ -81,7 +86,16 @@ function get_assets(physics; datadir = @__DIR__)
     data_hist = permutedims(reshape(data.W, reco_shape[rs]), rs)
     muon_hist = permutedims(reshape(muons.W, reco_shape[rs]), rs);
 
-    assets = (;mc, muon_hist, observed=cut(data_hist), binning, true_shape, reco_shape, layers, paths)
+    # per-event cross-section weights at the true-energy bin centre (inclusive: no process information)
+    flavours = (nue = (:nue, false), nuebar = (:nue, true), numu = (:numu, false), numubar = (:numu, true), nutau = (:nutau, false), nutaubar = (:nutau, true))
+    xsec_weights = map(keys(mc), values(mc)) do ch, m
+        flavour, anti = flavours[ch]
+        w = Newtrinos.xsec.event_weights(physics.xsec, m.E_true_bin_center, [c == 1 ? :CC : :NC for c in m.IsCC]; flavour, anti,
+                                         target = XSEC_TARGET, generator = XSEC_GENERATOR)
+        ch => w
+    end |> NamedTuple
+
+    assets = (;mc, muon_hist, observed=cut(data_hist), binning, true_shape, reco_shape, layers, paths, xsec_weights)
 end
 
 function get_params()
@@ -112,15 +126,15 @@ end
 # standing for NC of all flavours) use the flavour-blind total active flux `p_flux_nc`.
 # Gathering and filling in one loop avoids per-event temporary arrays (~600k MC rows, 104 bytes per
 # element for Dual{12}), which otherwise dominate allocations and GC time under ForwardDiff.
-function make_hist_per_channel(mc, p_flux, p_flux_nc, j, lifetime_seconds, params, assets)
+function make_hist_per_channel(mc, p_flux, p_flux_nc, j, lifetime_seconds, params, assets, xw)
     he_factor = params.orca_norm_he - 1.
-    T = typeof(lifetime_seconds * first(mc.W) * first(p_flux) * (first(mc.he_mask) * he_factor + 1.0))
+    T = typeof(lifetime_seconds * first(mc.W) * first(p_flux) * (first(mc.he_mask) * he_factor + 1.0) * first(xw))
     hist = zeros(T, assets.reco_shape)
     W, ef, cf, he = mc.W, mc.E_true_bin, mc.Ct_true_bin, mc.he_mask
     er, cr, cls, cc = mc.E_reco_bin, mc.Ct_reco_bin, mc.AnaClass, mc.IsCC
     @inbounds for i in eachindex(W)
         f = cc[i] == 1 ? p_flux[ef[i], cf[i], j] : p_flux_nc[ef[i], cf[i]]
-        hist[er[i], cr[i], cls[i], cc[i] + 1] += lifetime_seconds * W[i] * f * (he[i] * he_factor + 1.0)
+        hist[er[i], cr[i], cls[i], cc[i] + 1] += lifetime_seconds * W[i] * f * (he[i] * he_factor + 1.0) * xw[i]
     end
     hist
 end
@@ -153,14 +167,14 @@ function get_expected(params, physics, assets)
     # NC is flavour-blind: total active flux after oscillation, Σ_β Φ_osc(β)
     nc_nu = dropdims(sum(osc_flux.nu, dims=3), dims=3)
     nc_nubar = dropdims(sum(osc_flux.nubar, dims=3), dims=3)
-    H(ch, f, f_nc, j) = make_hist_per_channel(assets.mc[ch], f, f_nc, j, lifetime_seconds, params, assets)
+    H(ch, f, f_nc, j) = make_hist_per_channel(assets.mc[ch], f, f_nc, j, lifetime_seconds, params, assets, assets.xsec_weights[ch](params))
     hists = (nue = H(:nue, osc_flux.nu, nc_nu, 1), nuebar = H(:nuebar, osc_flux.nubar, nc_nubar, 1),
              numu = H(:numu, osc_flux.nu, nc_nu, 2), numubar = H(:numubar, osc_flux.nubar, nc_nubar, 2),
              nutau = H(:nutau, osc_flux.nu, nc_nu, 3), nutaubar = H(:nutaubar, osc_flux.nubar, nc_nubar, 3))
 
-    hists_nc = sum(h[:, :, :, 1] for h in hists) * physics.xsec.scale(:any, :NC, params)
+    hists_nc = sum(h[:, :, :, 1] for h in hists)
 
-    hists_cc = hists.nue[:, :, :, 2] .+ hists.nuebar[:, :, :, 2] .+ hists.numu[:, :, :, 2] .+ hists.numubar[:, :, :, 2] .+ (hists.nutau[:, :, :, 2] .+ hists.nutaubar[:, :, :, 2]) * physics.xsec.scale(:nutau, :CC, params)
+    hists_cc = hists.nue[:, :, :, 2] .+ hists.nuebar[:, :, :, 2] .+ hists.numu[:, :, :, 2] .+ hists.numubar[:, :, :, 2] .+ (hists.nutau[:, :, :, 2] .+ hists.nutaubar[:, :, :, 2])
     expected = (assets.muon_hist * params.orca_norm_muons .+ hists_nc .+ hists_cc) * params.orca_norm_all
 
     # Poisson > 0

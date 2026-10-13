@@ -756,8 +756,16 @@ to override the parallelism strategy.
 # Returns
 A NamedTuple of result arrays as produced by [`assemble_profile_results`](@ref).
 """
-function _profile(likelihood, scanpoints, params, cache_dir; map_func=nothing, adsel=_profile_adsel(map_func))
-    do_work(i) = find_mle_cached(likelihood, scanpoints[i], deepcopy(params), cache_dir; adsel = adsel)
+function _profile(likelihood, scanpoints, params, cache_dir; map_func=nothing, adsel=_profile_adsel(map_func), starts=[(;)])
+    # one fit per start (start values override `params`), keep the one with the largest log posterior
+    function do_work(i)
+        # start values of parameters that are fixed at this grid point (scanned) do not matter: drop them
+        free(st) = NamedTuple(k => v for (k, v) in pairs(st) if !(scanpoints[i][k] isa ValueShapes.ConstValueDist))
+        sts = unique(free.(starts))
+        fits = [find_mle_cached(likelihood, scanpoints[i], merge(deepcopy(params), s), cache_dir; adsel = adsel) for s in sts]
+        lp = [isnan(f[2]) ? -Inf : f[2] for f in fits]
+        fits[argmax(lp)]
+    end
 
     if isnothing(map_func)
         # Default: threaded execution
@@ -797,12 +805,16 @@ Also collects meta data of the profile process and attaches it the returned obje
 - `adsel`: AD backend for the per-point fits. Defaults to `AutoForwardDiff()` for the threaded
   loop (the threads are busy with scan points, so a threaded AD backend would only contend), and
   to `AutoPolyesterForwardDiff()` otherwise.
+- `starts`: start-value overrides for multi-start fits, e.g.
+  `[(δCP = π/4,), (δCP = 3π/4,), (δCP = 5π/4,), (δCP = 7π/4,)]`: each grid point is fitted from every
+  start (merged into `params`) and the fit with the largest log posterior is kept. Needed when a
+  profiled parameter has several local optima (δCP, the θ₂₃ octant). Default: one start, `params`.
 
 # Returns
 A [`NewtrinosResult`](@ref) NewtrinosResult(axes, values, meta) 
 with the scan grid axes, per-point profiling results, and meta data.
 """
-function profile(likelihood, priors, vars_to_scan, params; cache_dir=nothing, map_func=nothing, adsel=_profile_adsel(map_func))
+function profile(likelihood, priors, vars_to_scan, params; cache_dir=nothing, map_func=nothing, adsel=_profile_adsel(map_func), starts=[(;)])
     t1 = time()
     # check if there is actually any variable to be profiled over, or if they are all just Numbers
     if all([isa(priors[var], Number) for var in setdiff(keys(priors), keys(vars_to_scan))])
@@ -817,9 +829,9 @@ function profile(likelihood, priors, vars_to_scan, params; cache_dir=nothing, ma
             mkdir(cache_dir)
         end
     end
-    res = _profile(likelihood, scanpoints, params, cache_dir; map_func=map_func, adsel=adsel)
+    res = _profile(likelihood, scanpoints, params, cache_dir; map_func=map_func, adsel=adsel, starts=starts)
     t2 = time()
-    meta = Dict("task"=> "profile", "priors"=>priors, "vars_to_scan"=>vars_to_scan, "params"=>params, "exec_time"=>t2-t1, "cache_dir"=>cache_dir)
+    meta = Dict("task"=> "profile", "priors"=>priors, "vars_to_scan"=>vars_to_scan, "params"=>params, "starts"=>starts, "exec_time"=>t2-t1, "cache_dir"=>cache_dir)
     add_meta!(meta)
     axes = NamedTuple{tuple(keys(vars_to_scan)...)}(values)
     result = NewtrinosResult(axes=axes, values=res, meta=meta)
