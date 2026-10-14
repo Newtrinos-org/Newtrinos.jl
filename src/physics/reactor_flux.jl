@@ -232,16 +232,6 @@ function extract_reactor_spectra(datadir = datadir)
     foreach(x -> push!(spec_U238, x[2]), file["U238"][1:end])
     close(file)
 
-    # TODO uncertainties
-    corr_Pu239 = Float64[]
-    corr_Pu241 = Float64[]
-    corr_U238 = Float64[]
-    corr_U235 = Float64[]
-    uncorr_Pu239 = Float64[]
-    uncorr_Pu241 = Float64[]
-    uncorr_U238 = Float64[]
-    uncorr_U235 = Float64[]
-
     #neq correction
     file = h5open(joinpath(datadir, "dayabay_data/nonequilibrium_correction.hdf5"))
 
@@ -359,8 +349,6 @@ function get_flux(cfg::DayaBayFlux; datadir = datadir)
     GJ_to_MeV = 1e9 / elementary_charge * 1e-6 # reactor thermal power in GW, energy per fission in MeV
     # all spectra in MeV, hence get rid of the GJ
 
-    flux_const = nominal_thermal_power * GJ_to_MeV
-
 
     # prelim flux shape correction
     spec_edges = convert(Array{Float64, 1}, readdlm(joinpath(datadir, "dayabay_data/parameters/reactor_antineutrino_spectrum_edges.tsv"))[2:end])
@@ -416,8 +404,8 @@ function get_flux(cfg::DayaBayFlux; datadir = datadir)
     # use default params for the snf contribution
     default_params = get_params(cfg, datadir=datadir)
     # get fissions per second for all reactors at nominal values
-    fissions_per_second_nom = flux_const / sum([fractions[iso] * default_params.energy_per_fission[i] for (i, iso) in enumerate(names)])
-    neutrinos_per_second_nom = fissions_per_second_nom * sum([nu_per_fission[iso] * fractions[iso] for (i, iso) in enumerate(names)])
+    fissions_per_second_nom = GJ_to_MeV / sum([fractions[iso] * default_params.energy_per_fission[i] for (i, iso) in enumerate(names)])
+    #neutrinos_per_second_nom = fissions_per_second_nom * sum([nu_per_fission[iso] * fractions[iso] for (i, iso) in enumerate(names)])
     #println(neutrinos_per_second_nom)
 
     function correction(E, pulls)
@@ -429,7 +417,7 @@ function get_flux(cfg::DayaBayFlux; datadir = datadir)
     end
 
     function reactor_flux(E, thermal_power_scale, energy_per_fission, fission_fractions_scale, pulls, neq_scale, snf_scale, reac_idx)
-        flux = flux_const * thermal_power_scale * sum([
+        flux = GJ_to_MeV * thermal_power_scale * sum([
             (1.0 .+ neq_scale[i] .* neq_rel_corr[iso].(E)) .*
             nu_per_fission[iso] .* fission_fractions_scale[i] .* fractions[iso] .* isotope_shapes[iso].(E) for (i, iso) in enumerate(names)]
             ) / sum(

@@ -28,7 +28,7 @@ priors = Newtrinos.get_priors(experiments)
 @reset priors.Δm²₂₁ = p.Δm²₂₁
 
 result = Newtrinos.find_mle(likelihood, distprod(;priors...), p)
-FileIO.save("test_output/test_rewrite_full_finer_binning.jld2", Dict("logllh"=> result[1], "logposterior"=>result[2], "mle"=>result[3]))
+FileIO.save("test_output/test_rewrite_full_replaced_livetime.jld2", Dict("logllh"=> result[1], "logposterior"=>result[2], "mle"=>result[3]))
 
 """
 result = Newtrinos.profile(likelihood, priors, vars_to_scan, p, cache_dir="test")

@@ -687,8 +687,8 @@ function get_assets(datadir = @__DIR__)
     energy_per_fission = reactor_config.params.energy_per_fission
     fractions = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions.yaml"), dicttype=OrderedDict{String,Any})["parameters"]["fission_fractions"]
     fractions = NamedTuple((Symbol(key),value) for (key,value) in fractions)
-    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/antineutrinos_per_fission_huber_mueller.yaml"))
 
+    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/antineutrinos_per_fission_huber_mueller.yaml"))
     nu_per_f = file["parameters"]["antineutrinos_per_fission"]
     nu_per_fission = NamedTuple((Symbol(key), value) for (key, value) in nu_per_f)
     # P_th_av = # nu per second * (sum_iso fission_fraction * energy per fission) / (sum_iso fission_fraction * nu per fission)
@@ -699,6 +699,7 @@ function get_assets(datadir = @__DIR__)
     GJ_to_MeV = 1e9 / elementary_charge * 1e-6 # reactor thermal power in GW, energy per fission in MeV
 
 
+    #multipliy: rate -> thermal power, divide: thermal power -> rate
     nom_conversion_factor = sum([energy_per_fission[i] * fractions[iso] for (i, iso) in enumerate(keys(fractions))]) / sum([fractions[iso] * nu_per_fission[iso] for (i, iso) in enumerate(keys(fractions))]) / GJ_to_MeV
 
     
@@ -820,29 +821,37 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     neutrino_models = OrderedDict()
 
     for (idx, p_AD) in enumerate(detector_list)
+        #println(idx, ", ", p_AD)
         period = retrieve_period(p_AD)
         AD = retrieve_AD(p_AD)
         EH = retrieve_EH(p_AD)
+
+        #println("period: ", period)
+        #println("AD: ", AD)
+        #println("EH: ", EH)
         output = extract_for_AD_period(AD, period)
         bg_dict = output.bg_dict
 
         ad_idx = findfirst(df_exp[!, "AD"] .== "AD$(AD)")
+        #println("ad_idx: ", ad_idx)
         L = collect(df_exp[ad_idx, [:R1, :R2, :R3, :R4, :R5, :R6]])
-        L_km = L / 1e3
+        #println("L: ", L)
+        L_km = L ./ 1e3
         L2 = 4 * pi .* L.^2;
         n_p = n_protons["AD$(AD)"]
 
         lt = output.eff_livetime_days
-        accidentals = bg_dict["accidentals"]
         
         ffs_symbols = [Symbol("fission_fractions_scale_R$(i)") for i=1:6]
         neq_symbols = [Symbol("neq_scale_R$(i)") for i=1:6]
-
+        
+        accidentals = bg_dict["accidentals"]
         amc = bg_dict["amc"]
         lihe = bg_dict["lithium_helium"]
         fast_n = bg_dict["fast_neutrons"]
         alpha_n = bg_dict["alpha_neutron"]
         period_EH_idx = findfirst(x-> x == "$(period)AD_$(EH)", assets.period_EH_list)
+        #println("period_EH_idx: ", period_EH_idx)
         @assert period_EH_idx !== nothing
 
         acc_base = lt * accidentals.rate .* accidentals.shape
@@ -867,21 +876,11 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
             #return @. acc_base * _acc
         end
         background_models[p_AD] = background_counts
-  
-
-        
-
-        eff_eres_key = Symbol("eff_eres_AD$(AD)")
-        invL2 = inv.(L2)
-        # convert the cross section from e-41cm2 to m2 -> multiply by 1e-4
-        flux_norm = 1e-45 * output.eff_livetime_seconds * n_p
-
-        integral_dEnu = twice_fine_binning_Enu_width .* xsec_eval
 
         # get the exposure-averaged per-AD-reactor thermal power
         rates = assets.reactor_nu_rates
-        av_thermal_power_scale = zeros(6)
-
+        #av_thermal_power_scale = zeros(6)
+        P_th_seconds = zeros(6)
         for r in 1:6
             nu_per_s = rates["R$(r)"].rates
             n_AD = rates["R$(r)"].n_AD
@@ -889,15 +888,28 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
             # check that we are in the correct period
             @assert all(n_AD[output.day .+ 1] .== period)
 
-            exposure_weighted_nu_per_s = sum(nu_per_s[output.day .+ 1] .* output.eff_livetime) ./ sum(output.eff_livetime)
-            av_thermal_power_GW = exposure_weighted_nu_per_s * assets.nom_conversion_factor
-            av_thermal_power_scale[r] = av_thermal_power_GW / assets.nominal_thermal_power
+            #convert rates with nominal parameters to daily thermal power
+            P_th_daily = nu_per_s .* assets.nom_conversion_factor
+            P_th_seconds[r] = sum(P_th_daily[output.day .+ 1] .* output.eff_livetime)
+
+            #exposure_weighted_nu_per_s = sum(nu_per_s[output.day .+ 1] .* output.eff_livetime) ./ sum(output.eff_livetime)
+            #exposure_weighted_nu_per_s = mean(nu_per_s[output.day .+ 1])
+            #av_thermal_power_GW = exposure_weighted_nu_per_s * assets.nom_conversion_factor
+            #av_thermal_power_scale[r] = av_thermal_power_GW / assets.nominal_thermal_power
         end
+
+        eff_eres_key = Symbol("eff_eres_AD$(AD)")
+        invL2 = inv.(L2)
+        # convert the cross section from e-41cm2 to m2 -> multiply by 1e-4
+        # flux_norm = 1e-45 * output.eff_livetime_seconds * n_p
+        flux_norm = 1e-45 * n_p .* P_th_seconds .* invL2
+        integral_dEnu = twice_fine_binning_Enu_width .* xsec_eval
 
         # println(av_thermal_power_scale)
 
-        spec_prefac_nom_neq = av_thermal_power_scale .* invL2 .* flux_norm
-        spec_prefac_snf = flux_norm .* invL2
+        # TODO fix scale of neq to parameter-dependent
+        #spec_prefac_nom_neq = av_thermal_power_scale .* invL2 .* flux_norm
+        spec_prefac_snf = 1e-45 * n_p * sum(output.eff_livetime_seconds) .* invL2
         function neutrino_counts(params)
             # value type promoted over all parameter inputs, so intermediate
             # arrays stay dual even when only a subset of the parameters is dual
@@ -953,8 +965,15 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
             @inbounds for r in 1:6
                 fission_fractions = params[ffs_symbols[r]]
                 neq_scale = params[neq_symbols[r]]
-                flux_nom, flux_snf, correction = reactor_flux(twice_fine_binning_Enu_c, params.reactor_thermal_power_scale[r], params.energy_per_fission, fission_fractions, params.spectrum_pulls, neq_scale, params.snf_scale[r], r)
-                @. interm_spec += (spec_prefac_nom_neq[r] * flux_nom + spec_prefac_snf[r] * flux_snf) * P[:, r] * correction
+                flux_nominal, flux_snf, correction = reactor_flux(twice_fine_binning_Enu_c, params.reactor_thermal_power_scale[r], params.energy_per_fission, fission_fractions, params.spectrum_pulls, neq_scale, params.snf_scale[r], r)
+                # scale nominal flux and neq correction with sum(daily thermal power * daily eff livetime)
+                # snf is independent of the actual thermal power (as it is from spent fuel, duh) and is scaled by the eff livetime,
+                # its nominal rates are computed within the reactor flux module
+                ## for now only nominal?
+                @. interm_spec += (flux_norm[r] * flux_nominal + spec_prefac_snf[r] * flux_snf) * P[:, r] * correction
+                
+                # @. interm_spec += (spec_prefac_nom_neq[r] * flux_nom) * P[:, r] * correction
+                #@. interm_spec += (spec_prefac_nom_neq[r] * flux_nom + spec_prefac_snf[r] * flux_snf) * P[:, r] * correction
                 #spec .+= reactor_flux(fine_binning_Enu_c, params.reactor_thermal_power_scale[r], params.energy_per_fission, fission_fractions, params.spectrum_pulls, neq_scale, params.snf_scale[r], r) .* invL2[r]
             end
             # multiply with xsec_eval and bin width for integral over neutrino energy
@@ -978,7 +997,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
 
 
             #smeared_sum = sum(smeared_spectrum)
-            resolved_spectrum = smear(E_vis, smeared_spectrum, sigma_E, width=20);
+            resolved_spectrum = smear(E_vis, smeared_spectrum, sigma_E; width=20);
             resolved_sum = sum(resolved_spectrum)
 
             """
