@@ -875,7 +875,17 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
             #@return (acc = _acc .* acc_base, amc = _amc .* amc_base, lihe = _lihe .* lihe_base, fast_n = _fast_n .* fast_n_base, alpha_n = _alpha_n .* alpha_n)
             #return @. acc_base * _acc
         end
-        background_models[p_AD] = background_counts
+        if !debug
+            background_models[p_AD] = background_counts
+        else
+            background_models[p_AD] = (
+                alpha_n=alpha_n_base,
+                amc=amc_base,
+                fast_n=fast_n_base,
+                lihe=lihe_base,
+                acc=acc_base
+            )
+        end
 
         # get the exposure-averaged per-AD-reactor thermal power
         rates = assets.reactor_nu_rates
@@ -1034,6 +1044,9 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         # break
     
     end
+    if debug
+        return (neutrino_models, background_models)
+    end
 
     function forward_model(params)
         output = []
@@ -1048,11 +1061,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         distprod(Poisson.(expected))
     end
 
-    if !debug
-        return forward_model
-    else
-        return (neutrino_models, background_models)
-    end
+    return forward_model
 
 end
 
@@ -1061,8 +1070,26 @@ end
 
     function plot(params, data=assets.observed)
 
-        m = mean(get_forward_model(physics, assets)(params))
-        v = var(get_forward_model(physics, assets)(params))
+        _m = mean(get_forward_model(physics, assets)(params))
+        _v = var(get_forward_model(physics, assets)(params))
+
+        signal, _bg = get_forward_model(physics, assets, debug=true)
+
+        colors = [
+            :green,
+            :magenta,
+            :grey,
+            :yellow,
+            :blue,
+        ]
+
+        bg_type = (
+            :alpha_n,
+            :amc,
+            :fast_n,
+            :lihe,
+            :acc,
+        )
         
         detector_list = assets.detector_list
         # number of analysis bins
@@ -1083,9 +1110,19 @@ end
         _mean = [EH1_mean, EH2_mean, EH3_mean]
         _var = [EH1_var, EH2_var, EH3_var]
         obs = [EH1_obs, EH2_obs, EH3_obs]
-
-
+        
+        
         for (c, p_AD) in enumerate(detector_list)
+            period = retrieve_period(p_AD)
+            AD = retrieve_AD(p_AD)
+            EH = retrieve_EH(p_AD)
+            bg_dict = extract_for_AD_period(AD, period).bg_dict
+            accidentals = bg_dict["accidentals"]
+            amc = bg_dict["amc"]
+            lihe = bg_dict["lithium_helium"]
+            fast_n = bg_dict["fast_neutrons"]
+            alpha_n = bg_dict["alpha_neutron"]
+            """
             EH = Newtrinos.dayabay_rewrite.retrieve_EH(p_AD)
             if EH == 1
                 EH1_obs .+= data[(c-1) * n_ana_binning + 1:c*n_ana_binning]
@@ -1100,14 +1137,37 @@ end
                 EH3_mean .+= m[(c-1) * n_ana_binning + 1:c*n_ana_binning]
                 EH3_var .+= v[(c-1) * n_ana_binning + 1:c*n_ana_binning]
             end
+            """
 
-        end
-    
-        for (c, (m, v, o)) in enumerate(zip(_mean, _var, obs))
+        #end
+        #for (c, (m, v, o)) in enumerate(zip(_mean, _var, obs))
+            idx = (c-1) * n_ana_binning + 1 : c * n_ana_binning
+            o = data[idx]
+            v = _v[idx]
+            m = _m[idx]
             f = Figure()
-            ax = Axis(f[1, 1], yminorticksvisible=true, title="EH$(c)")#, yminorticks=IntervalsBetween(9), yscale=log10)
+            ax = Axis(f[1, 1], yminorticksvisible=true, title="$(period)AD, AD$(AD)", yminorticks=IntervalsBetween(9), yscale=log10)
             plot!(ax, assets.coarse_binning_c, o./assets.coarse_bin_width, label="Observed", color=:black)
             stephist!(ax, assets.coarse_binning_c, weights=m./assets.coarse_bin_width, bins=assets.coarse_binning, label="Expected")
+            prev = zeros(length(assets.coarse_binning_c))
+
+
+            #plot background
+            period_EH_idx = findfirst(x-> x == "$(period)AD_$(EH)", assets.period_EH_list)
+            _acc = params.acc_scale[c]
+            _amc = 1.0 + amc.uncertainty * params.amc_unc_scale
+            _lihe = 1.0 + lihe.uncertainty * params.lihe_unc_scale[period_EH_idx]
+            _fast_n = 1.0 + fast_n.uncertainty * params.fast_n_unc_scale[period_EH_idx]
+            _alpha_n = params.alpha_n_rate[c]
+            
+            scales = (acc=_acc, amc=_amc, lihe=_lihe, fast_n=_fast_n, alpha_n=_alpha_n)
+            bg_model = _bg[p_AD]
+            prev = ones(length(assets.coarse_binning_c)) * 1e-10
+            for (c, key) in enumerate(bg_type)
+                m_bg = scales[key] .* bg_model[key]
+                barplot!(ax, assets.coarse_binning_c, (m_bg .+ prev)./assets.coarse_bin_width, width=assets.coarse_bin_width, label=string(key), color=colors[c], gap=0, fillto=prev./assets.coarse_bin_width)
+                prev .+= m_bg
+            end
             barplot!(ax, assets.coarse_binning_c, (m .+ sqrt.(v))./assets.coarse_bin_width, width=assets.coarse_bin_width, gap=0, fillto= (m.- sqrt.(v))./assets.coarse_bin_width, alpha=0.5, label="Standard Deviation")
             axislegend(ax, framevisible = false)
 
@@ -1130,11 +1190,11 @@ end
 
             xlims!(ax2, minimum(assets.coarse_binning), maximum(assets.coarse_binning))
             xlims!(ax, minimum(assets.coarse_binning), maximum(assets.coarse_binning))
-            #ylims!(ax, 1e1, 1e6)
+            ylims!(ax, 1e0, 1e4)
             ## ylims!(ax2, 0.3, 1.0)
             
 
-            save("EH_$(c).png", f)
+            save("$(period)ADAD$(AD).png", f)
             
         end
     end
