@@ -1,0 +1,32 @@
+# written by generate.jl: best fit of `t2k` alone in its default setup; [params] are read by
+# Newtrinos.get_params(...; start = :best_fit) as start values, [meta] is for information only
+[meta]
+date = "2026-10-15"
+experiment = "t2k"
+log_likelihood = -341.7152303469641
+log_posterior = -294.0038199825825
+newtrinos_commit = "3c346d7"
+ordering = "IO"
+
+    [meta.oscillation]
+    "Δm²₂₁" = 8.999973063970961e-5
+    "Δm²₃₁" = -0.0024685611784810426
+    "δCP" = 5.033682994009451
+    "θ₁₂" = 0.7849351961945417
+    "θ₁₃" = 0.16135827601837638
+    "θ₂₃" = 0.7680099009879361
+
+[params]
+t2k_cc1pi_norm = 1.0182281528430233
+t2k_energy_scale = 0.9997297776246414
+t2k_fhc1re1de_norm = 1.0691537982860466
+t2k_fhc1re_norm = 0.9973402159384885
+t2k_fhc1rmu_norm = 0.985129995935675
+t2k_flux_xsec_norm = 0.9853727515110858
+t2k_nc_norm = 1.0682968061556086
+t2k_nonqe_norm = 0.9767375353805279
+t2k_nue_xsec_ratio_nu = 1.0010120290945952
+t2k_nue_xsec_ratio_nubar = 0.9992751143600975
+t2k_rhc1re_norm = 0.9977709569409698
+t2k_rhc1rmu_norm = 0.9982428347791753
+t2k_rhc_norm = 0.9960339233220727

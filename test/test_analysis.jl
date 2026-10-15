@@ -125,6 +125,22 @@ DensityInterface.logdensityof(::ArgumentErrorDensity, x) = throw(ArgumentError("
         @test wrapper.physics === mock_exp.physics
     end
 
+    @testset "get_params(...; start = :best_fit)" begin
+        mock_exp = MockExperiment(MockPhysics((mu = 5.0,), (mu = Uniform(0.0, 10.0),)), (scale = 1.0,), (scale = Uniform(0.5, 2.0),),
+                                  (observed = [5.0],), p -> MvNormal([p.mu * p.scale], I(1)), (p, data = nothing) -> nothing)
+        # no stored best fit: nominal values
+        @test Newtrinos.get_params(mock_exp; start = :best_fit) == Newtrinos.get_params(mock_exp)
+        @test_throws ArgumentError Newtrinos.get_params(mock_exp; start = :other)
+        # stored best fit: only the experiment's own parameters change, physics parameters (oscillation) keep nominal
+        t2k = Newtrinos.t2k.configure()
+        nominal = Newtrinos.get_params((t2k = t2k,)); best = Newtrinos.get_params((t2k = t2k,); start = :best_fit)
+        stored = Newtrinos.stored_best_fit(t2k)
+        @test !isempty(stored)
+        @test keys(best) == keys(nominal)
+        @test all(best[k] == (k in keys(t2k.params) ? stored[k] : nominal[k]) for k in keys(nominal))
+        @test any(best[k] != nominal[k] for k in keys(t2k.params))
+    end
+
     @testset "get_params and get_priors" begin
         # Physics object
         osc = Newtrinos.osc.configure()

@@ -1,0 +1,26 @@
+# written by generate.jl: best fit of `deepcore_8y` alone in its default setup; [params] are read by
+# Newtrinos.get_params(...; start = :best_fit) as start values, [meta] is for information only
+[meta]
+date = "2026-10-15"
+experiment = "deepcore_8y"
+log_likelihood = -723.1944311676276
+log_posterior = -703.5478645899133
+newtrinos_commit = "3c346d7"
+ordering = "NO"
+
+    [meta.oscillation]
+    "Δm²₂₁" = 6.642484193053386e-5
+    "Δm²₃₁" = 0.00267417173440313
+    "δCP" = 2.829340682022066
+    "θ₁₂" = 0.7850327363143992
+    "θ₁₃" = 0.29404343492917095
+    "θ₂₃" = 0.7915537790022495
+
+[params]
+deepcore_aeff_scale = 0.8515266372245555
+deepcore_atm_muon_scale = 1.2090649105649693
+deepcore_ice_absorption = 0.9695497300641661
+deepcore_ice_scattering = 0.9931841851879935
+deepcore_opt_eff_overall = 1.0576035071477434
+deepcore_rel_eff_p0 = -0.21003131254894103
+deepcore_rel_eff_p1 = -0.045994521828187696

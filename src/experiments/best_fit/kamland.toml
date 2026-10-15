@@ -1,0 +1,26 @@
+# written by generate.jl: best fit of `kamland` alone in its default setup; [params] are read by
+# Newtrinos.get_params(...; start = :best_fit) as start values, [meta] is for information only
+[meta]
+date = "2026-10-15"
+experiment = "kamland"
+log_likelihood = -141.4839022306872
+log_posterior = -131.5350087947353
+newtrinos_commit = "3c346d7"
+ordering = "NO"
+
+    [meta.oscillation]
+    "Δm²₂₁" = 7.530926443109754e-5
+    "Δm²₃₁" = 0.0025277521907616147
+    "δCP" = 1.5707963267949112
+    "θ₁₂" = 0.5896173910011451
+    "θ₁₃" = 0.18190528262708405
+    "θ₂₃" = 0.7353144528166602
+
+[params]
+kamland_alpha_n = 0.7532339081054552
+kamland_energy_scale = 0.8319046104947119
+kamland_flux_scale = 0.0005274740200872139
+kamland_flux_scale_late = 0.37103273399939096
+kamland_geo_th = 0.18982068719641265
+kamland_geo_u = 1.3333778720758978
+kamland_li9 = 0.03214317680133161

@@ -1,0 +1,25 @@
+# written by generate.jl: best fit of `orca` alone in its default setup; [params] are read by
+# Newtrinos.get_params(...; start = :best_fit) as start values, [meta] is for information only
+[meta]
+date = "2026-10-15"
+experiment = "orca"
+log_likelihood = -1141.8743991018896
+log_posterior = -1125.478228240077
+newtrinos_commit = "3c346d7"
+ordering = "NO"
+
+    [meta.oscillation]
+    "Δm²₂₁" = 8.592359516557334e-5
+    "Δm²₃₁" = 0.002328096477312344
+    "δCP" = 5.810545232870674
+    "θ₁₂" = 0.4211603564208735
+    "θ₁₃" = 0.3
+    "θ₂₃" = 0.8151875746981463
+
+[params]
+orca_energy_scale = 1.0047664710993953
+orca_norm_all = 1.0677384280098297
+orca_norm_he = 1.6548551826289155
+orca_norm_hpt = 0.9166538024595711
+orca_norm_muons = 0.4989600924605623
+orca_norm_showers = 0.9006217939921702
