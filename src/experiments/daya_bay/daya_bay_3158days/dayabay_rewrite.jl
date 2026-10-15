@@ -432,6 +432,7 @@ function get_params(datadir = @__DIR__)
     dict = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/detector_lsnl.yaml"))
     lsnl_scale_nom = dict["parameters"]["lsnl_scale_a"][1]
     lsnl_pull = lsnl_scale_nom .* ones(4)
+    global_norm = 0.4
 
 
     params = (;
@@ -452,7 +453,8 @@ function get_params(datadir = @__DIR__)
         eff_eres_AD33,
         eff_eres_AD34,
         lsnl_pull,
-        iav_offdiag_scale
+        iav_offdiag_scale,
+        global_norm,
     )
     return params
 end
@@ -563,6 +565,8 @@ function get_priors(datadir = @__DIR__)
     lsnl_scale_unc = dict["parameters"]["lsnl_scale_a"][2]
     lsnl_pull = Distributions.MvNormal(lsnl_scale_nom .* ones(4), lsnl_scale_unc^2 .* ones(4))
 
+    global_norm = Uniform(0., 2.)
+
 
     priors = (
         amc_unc_scale=amc_unc_scale,  # done
@@ -583,6 +587,7 @@ function get_priors(datadir = @__DIR__)
         eff_eres_AD34=eff_eres_AD34,
         lsnl_pull,
         iav_offdiag_scale=iav_offdiag_scale,   # done
+        global_norm,
     )
 end
 
@@ -642,7 +647,11 @@ function get_assets(datadir = @__DIR__)
     for p_AD in detector_list
         AD = retrieve_AD(p_AD)
         period = retrieve_period(p_AD)
+        #if !(p_AD == "7ADAD32")
+        #    push!(observed, zeros(Int64, 26))
+        #else
         push!(observed, get_observed_counts(AD, period))
+        #end
         # break
     end
     
@@ -869,6 +878,9 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
             _fast_n = 1.0 + fast_n.uncertainty * params.fast_n_unc_scale[period_EH_idx]
             _alpha_n = params.alpha_n_rate[idx]
 
+            #if !(p_AD == "7ADAD32")
+            #    return ones(eltype(params.alpha_n_rate), 26)
+            #end
             return @. acc_base * _acc + amc_base * _amc + lihe_base * _lihe + fast_n_base * _fast_n + alpha_n_base * _alpha_n
             #return @. alpha_n_base * _alpha_n
 
@@ -979,8 +991,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
                 # scale nominal flux and neq correction with sum(daily thermal power * daily eff livetime)
                 # snf is independent of the actual thermal power (as it is from spent fuel, duh) and is scaled by the eff livetime,
                 # its nominal rates are computed within the reactor flux module
-                ## for now only nominal?
-                @. interm_spec += (flux_norm[r] * flux_nominal + spec_prefac_snf[r] * flux_snf) * P[:, r] * correction
+                @. interm_spec += (flux_norm[r] * flux_nominal + spec_prefac_snf[r] * flux_snf) * P[:, r] * (1 + correction)
                 
                 # @. interm_spec += (spec_prefac_nom_neq[r] * flux_nom) * P[:, r] * correction
                 #@. interm_spec += (spec_prefac_nom_neq[r] * flux_nom + spec_prefac_snf[r] * flux_snf) * P[:, r] * correction
@@ -1036,9 +1047,12 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
                 end
                 coarse_counts[j] = s
             end
-           
-            eff_eres[1] .* coarse_counts .* assets.efficiency
+            #if !(p_AD == "7ADAD32")
+            #    return ones(T, 26)
+            #end            
+            eff_eres[1] .* coarse_counts .* assets.efficiency * params.global_norm
         end
+
 
         neutrino_models[p_AD] = neutrino_counts
         # break
@@ -1068,12 +1082,12 @@ end
   
  function get_plot(physics, assets)
 
-    function plot(params, data=assets.observed)
+    function plot(params, data=assets.observed; saveto="test_output")
 
         _m = mean(get_forward_model(physics, assets)(params))
         _v = var(get_forward_model(physics, assets)(params))
 
-        signal, _bg = get_forward_model(physics, assets, debug=true)
+        _signal, _bg = get_forward_model(physics, assets, debug=true)
 
         colors = [
             :green,
@@ -1107,6 +1121,30 @@ end
         EH2_var = zeros(n_ana_binning)
         EH3_var = zeros(n_ana_binning)
 
+        EH1_bg = (
+            amc=zeros(n_ana_binning),
+            alpha_n=zeros(n_ana_binning),
+            acc=zeros(n_ana_binning),
+            fast_n=zeros(n_ana_binning),
+            lihe=zeros(n_ana_binning)
+        )
+
+        EH2_bg = (
+            amc=zeros(n_ana_binning),
+            alpha_n=zeros(n_ana_binning),
+            acc=zeros(n_ana_binning),
+            fast_n=zeros(n_ana_binning),
+            lihe=zeros(n_ana_binning)
+        )
+
+        EH3_bg = (
+            amc=zeros(n_ana_binning),
+            alpha_n=zeros(n_ana_binning),
+            acc=zeros(n_ana_binning),
+            fast_n=zeros(n_ana_binning),
+            lihe=zeros(n_ana_binning)
+        )
+
         _mean = [EH1_mean, EH2_mean, EH3_mean]
         _var = [EH1_var, EH2_var, EH3_var]
         obs = [EH1_obs, EH2_obs, EH3_obs]
@@ -1122,22 +1160,22 @@ end
             lihe = bg_dict["lithium_helium"]
             fast_n = bg_dict["fast_neutrons"]
             alpha_n = bg_dict["alpha_neutron"]
-            """
+
             EH = Newtrinos.dayabay_rewrite.retrieve_EH(p_AD)
             if EH == 1
                 EH1_obs .+= data[(c-1) * n_ana_binning + 1:c*n_ana_binning]
-                EH1_mean .+= m[(c-1) * n_ana_binning + 1:c*n_ana_binning]
-                EH1_var .+= v[(c-1) * n_ana_binning + 1:c*n_ana_binning]
+                EH1_mean .+= _m[(c-1) * n_ana_binning + 1:c*n_ana_binning]
+                EH1_var .+= _v[(c-1) * n_ana_binning + 1:c*n_ana_binning]
             elseif EH == 2
                 EH2_obs .+= data[(c-1) * n_ana_binning + 1:c*n_ana_binning]
-                EH2_mean .+= m[(c-1) * n_ana_binning + 1:c*n_ana_binning]
-                EH2_var .+= v[(c-1) * n_ana_binning + 1:c*n_ana_binning]
+                EH2_mean .+= _m[(c-1) * n_ana_binning + 1:c*n_ana_binning]
+                EH2_var .+= _v[(c-1) * n_ana_binning + 1:c*n_ana_binning]
             elseif EH ==3
                 EH3_obs .+= data[(c-1) * n_ana_binning + 1:c*n_ana_binning]
-                EH3_mean .+= m[(c-1) * n_ana_binning + 1:c*n_ana_binning]
-                EH3_var .+= v[(c-1) * n_ana_binning + 1:c*n_ana_binning]
+                EH3_mean .+= _m[(c-1) * n_ana_binning + 1:c*n_ana_binning]
+                EH3_var .+= _v[(c-1) * n_ana_binning + 1:c*n_ana_binning]
             end
-            """
+
 
         #end
         #for (c, (m, v, o)) in enumerate(zip(_mean, _var, obs))
@@ -1165,6 +1203,13 @@ end
             prev = ones(length(assets.coarse_binning_c)) * 1e-10
             for (c, key) in enumerate(bg_type)
                 m_bg = scales[key] .* bg_model[key]
+                if EH == 1
+                    EH1_bg[key] .+= m_bg
+                elseif EH == 2
+                    EH2_bg[key] .+= m_bg
+                elseif EH == 3
+                    EH3_bg[key] .+= m_bg
+                end
                 barplot!(ax, assets.coarse_binning_c, (m_bg .+ prev)./assets.coarse_bin_width, width=assets.coarse_bin_width, label=string(key), color=colors[c], gap=0, fillto=prev./assets.coarse_bin_width)
                 prev .+= m_bg
             end
@@ -1177,9 +1222,9 @@ end
 
             ax.ylabel="Counts/MeV"
 
-            plot!(ax2, assets.coarse_binning_c, o ./ m, color=:black, label="Observed")
-            hlines!(ax2, 1, label="Expected")
-            barplot!(ax2, assets.coarse_binning_c, 1 .+ sqrt.(v) ./ m, width=assets.coarse_bin_width, gap=0, fillto= 1 .- sqrt.(v)./m, alpha=0.5, label="Standard Deviation")
+            plot!(ax2, assets.coarse_binning_c, o ./ m .-1, color=:black, label="Observed")
+            hlines!(ax2, 0, label="Expected")
+            barplot!(ax2, assets.coarse_binning_c, sqrt.(v) ./ m, width=assets.coarse_bin_width, gap=0, fillto= .- sqrt.(v)./m, alpha=0.5, label="Standard Deviation")
 
 
             rowgap!(f.layout, 1, 0)
@@ -1194,7 +1239,51 @@ end
             ## ylims!(ax2, 0.3, 1.0)
             
 
-            save("$(period)ADAD$(AD).png", f)
+            save(joinpath(saveto, "$(period)ADAD$(AD).png"), f)
+            
+        end
+
+        # println(EH1_bg)
+        for (c, (m, v, o, bg_d)) in enumerate(zip(_mean, _var, obs, [EH1_bg, EH2_bg, EH3_bg]))
+            f = Figure()
+            ax = Axis(f[1, 1], yminorticksvisible=true, title="EH$(c)", yminorticks=IntervalsBetween(9), yscale=log10)
+            plot!(ax, assets.coarse_binning_c, o./assets.coarse_bin_width, label="Observed", color=:black)
+            stephist!(ax, assets.coarse_binning_c, weights=m./assets.coarse_bin_width, bins=assets.coarse_binning, label="Expected")
+            barplot!(ax, assets.coarse_binning_c, (m .+ sqrt.(v))./assets.coarse_bin_width, width=assets.coarse_bin_width, gap=0, fillto= (m.- sqrt.(v))./assets.coarse_bin_width, alpha=0.5, label="Standard Deviation")
+            prev = ones(n_ana_binning) * 1e-10
+            for (c, key) in enumerate(bg_type)
+                m_bg = bg_d[key]
+                barplot!(ax, assets.coarse_binning_c, (m_bg .+ prev)./assets.coarse_bin_width, width=assets.coarse_bin_width, label=string(key), color=colors[c], gap=0, fillto=prev./assets.coarse_bin_width)
+                prev .+= m_bg
+            end
+            axislegend(ax, framevisible = false)
+
+            ax.xticksvisible = false
+            ax.xticklabelsvisible = false
+            ax2 = Axis(f[2, 1])
+
+            ax.ylabel="Counts/MeV"
+
+            plot!(ax2, assets.coarse_binning_c, o ./ m .-1, color=:black, label="Observed")
+            hlines!(ax2, 0, label="Expected")
+            barplot!(ax2, assets.coarse_binning_c, sqrt.(v) ./ m, width=assets.coarse_bin_width, gap=0, fillto= .- sqrt.(v)./m, alpha=0.5, label="Standard Deviation")
+
+
+
+
+            rowgap!(f.layout, 1, 0)
+            rowsize!(f.layout, 1, Relative(3/4))
+
+            ax2.xlabel="Eₚ (MeV)"
+            ax2.ylabel="Counts/Expected"
+
+            xlims!(ax2, minimum(assets.coarse_binning), maximum(assets.coarse_binning))
+            xlims!(ax, minimum(assets.coarse_binning), maximum(assets.coarse_binning))
+            ylims!(ax, 1e1, 1e6)
+            ## ylims!(ax2, 0.3, 1.0)
+            
+
+            save(joinpath(saveto, "EH_$(c).png"), f)
             
         end
     end
