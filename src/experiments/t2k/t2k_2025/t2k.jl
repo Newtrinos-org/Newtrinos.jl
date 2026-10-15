@@ -24,9 +24,10 @@ released oscillated/unoscillated pairs and mode breakdowns (`calibrate_response.
 
 - μ-like (FHC/RHC 1Rμ, FHC νμCC1π⁺): unoscillated CC split into modes A/B, `Σₖ Uₖ ⟨P_μμ⟩ₖ + NC`, with a
   fixed per-bin correction (a few %) such that the released oscillated spectrum is exact at the reference.
-- e-like (FHC/RHC 1Re, FHC 1Re1de): the appearance signal at the reference point,
-  `osc − NC − (unosc − NC) ⟨P_ee⟩`, is reweighted by `⟨P_μe(θ)⟩ / ⟨P_μe(θ_ref)⟩`; in RHC a wrong-sign νμ → νe
-  contribution is included. Intrinsic beam νe oscillate with P_ee; NC is unoscillated.
+- e-like (FHC/RHC 1Re, FHC 1Re1de): the unoscillated CC events are intrinsic beam νe and misidentified νμ CC,
+  split with T2K's selection tables (`E_BACKGROUND`); the appearance signal at the reference point,
+  `osc − NC − beam νe ⟨P_ee⟩ − νμ CC ⟨P_μμ⟩`, is reweighted by `⟨P_μe(θ)⟩ / ⟨P_μe(θ_ref)⟩`; in RHC a wrong-sign
+  νμ → νe contribution is included. Beam νe oscillate with P_ee, misidentified νμ CC with P_μμ; NC is unoscillated.
 
 Matter effects use a constant density (L = 295 km, ρ = 2.6 g/cm³). The e-like samples are fitted in
 E_rec only (T2K fits p–θ), and there are no systematic templates, so the official result is not
@@ -93,6 +94,18 @@ Ratio of unoscillated wrong-sign νμ to right-sign ν̄μ CC events in the RHC 
 T2K's predicted RHC 1Re rates for δCP = −π/2, 0, π/2, π (arXiv:2303.03222, Tab. 'oa:events') to 0.1 events.
 """
 const RHC_WRONG_SIGN_RATIO = 0.20
+
+"""
+Intrinsic beam νe CC and misidentified νμ CC events in the e-like samples, oscillated at T2K's reference point
+(PRD 103, 112008 (2021), Tabs. V and VI, last selection stage; 14.94 (16.35) × 10²⁰ POT), scaled to this exposure
+(19.7 (16.3) × 10²⁰ POT). The released unoscillated spectra contain both; the misidentified νμ CC (≈ 3.7, 1.2 and 1.5
+unoscillated events) largely disappear with P_μμ and must not be treated as beam νe.
+"""
+const E_BACKGROUND = (
+    fhc1re    = (beam_nue = 8.79 * 19.7 / 14.94, numu_cc = 0.27 * 19.7 / 14.94),
+    rhc1re    = (beam_nue = 3.70 * 16.3 / 16.35, numu_cc = 0.13 * 16.3 / 16.35),
+    fhc1re1de = (beam_nue = 0.93 * 19.7 / 14.94, numu_cc = 0.16 * 19.7 / 14.94),
+)
 
 # binning of the νμCC1π⁺ data (arXiv:2506.05889, Fig. 1): 0.1 GeV up to 3 GeV, then 0.5 GeV
 const CC1PI_EDGES = vcat(collect(0.5:0.1:3.0), [3.5, 4.0])
@@ -305,17 +318,22 @@ function get_assets(physics; file = datafile, response = RESPONSE, ws_ratio = RH
             sc = sc .* ifelse.(o_model .> 0, (s.A .+ s.B) ./ max.(o_model, 1e-12), 1.0)
             k => (; kind = :mu, cfg.anti, s.edges, s.target, s.observed, WA, WB, UA = uA .* sc, UB = uB .* sc, s.nc, s.osc, s.unosc, s.A, s.B)
         else
-            # appearance signal at the reference point; split into modes by the oscillated CC breakdown
-            bkg_cc = max.(s.unosc .- s.nc, 0.0)
+            # unoscillated CC background split into beam νe (unoscillated) and misidentified νμ CC (oscillated at the
+            # reference point), both with the shape of the released unoscillated CC spectrum
+            cc = max.(s.unosc .- s.nc, 0.0)
             pee = WA * main.ee
-            sig = max.(s.osc .- s.nc .- bkg_cc .* pee, 0.0)
+            bg = E_BACKGROUND[k]
+            beam = cc .* min(bg.beam_nue / sum(cc .* pee), 1.0)
+            numu = bg.numu_cc .* cc ./ sum(cc)
+            # appearance signal at the reference point; split into modes by the oscillated CC breakdown
+            sig = max.(s.osc .- s.nc .- beam .* pee .- numu, 0.0)
             fA = ifelse.(s.A .+ s.B .> 0, s.A ./ max.(s.A .+ s.B, 1e-12), 1.0)
             ref = (A = (me = WA * main.me, me_ws = WA * other.me, ee = WA * main.ee),
-                   B = (me = WB * main.me, me_ws = WB * other.me, ee = WB * main.ee))
+                   B = (me = WB * main.me, me_ws = WB * other.me, ee = WB * main.ee, mm = WB * main.mm))
             # wrong-sign share of the RHC signal at the reference point
             ws = cfg.anti ? (ws_ratio .* ref.A.me_ws) ./ (ref.A.me .+ ws_ratio .* ref.A.me_ws) : zeros(length(sig))
             k => (; kind = :e, cfg.anti, s.edges, s.target, s.observed, WA, WB, sigA = sig .* fA, sigB = sig .* (1 .- fA),
-                  ws, bkg_cc, s.nc, ref, s.osc, s.unosc)
+                  ws, beam, numu, s.nc, ref, s.osc, s.unosc)
         end
     end |> NamedTuple
     observed = map(s -> s.observed, built)
@@ -395,7 +413,9 @@ function sample_expected(k, s, P, params, xw)
                           s.ws .* _ratio(nd_ratio(s.WA, other.me, w.eA_ws, w.μA_ws), s.ref.A.me_ws))
         sigB = s.sigB .* ((1 .- s.ws) .* _ratio(nd_ratio(s.WB, main.me, w.eB, w.μB), s.ref.B.me) .+
                           s.ws .* _ratio(nd_ratio(s.WB, other.me, w.eB_ws, w.μB_ws), s.ref.B.me_ws))
-        norm .* (xs .* (sigA .+ nqe .* sigB) .+ s.bkg_cc .* nd_ratio(s.WA, main.ee, w.eA, w.μA)) .+ nc
+        # misidentified νμ CC: mostly non-QE, reweighted with the mode-B response
+        numu = s.numu .* _ratio(nd_ratio(s.WB, main.mm, w.μB, w.μB), s.ref.B.mm)
+        norm .* (xs .* (sigA .+ nqe .* sigB) .+ s.beam .* nd_ratio(s.WA, main.ee, w.eA, w.μA) .+ numu) .+ nc
     end
     s.target === s.edges ? λ : rebin(s.edges, λ, s.target)
 end
