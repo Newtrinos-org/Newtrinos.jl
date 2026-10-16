@@ -927,6 +927,22 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     E_nu_GeV = E_nu_mesh ./ 1e3
     NF = length(E_nu_mesh)
     lsnl_mask = fine_binning_Edep[1:end-1] .>= lsnl_min_energy - 1e-9
+
+    # the reactor fluxes on the integration mesh depend only on the reactor parameters: computed once per evaluation
+    # and shared by all AD-periods; (main × correction + neq, snf) per reactor
+    mesh_flux = physics.flux.flux_on_mesh(E_nu_mesh)
+    ffs_symbols = [Symbol("fission_fractions_scale_R$(i)") for i=1:6]
+    neq_symbols = [Symbol("neq_scale_R$(i)") for i=1:6]
+    function reactor_fluxes(params)
+        map(1:6) do r
+            main, neq, snf, correction = mesh_flux(params.reactor_thermal_power_scale[r], params.energy_per_fission,
+                params[ffs_symbols[r]], params.spectrum_pulls, params[neq_symbols[r]], params.snf_scale[r], r)
+            (main .* correction .+ neq, snf)
+        end
+    end
+    # survival probabilities per AD (shared by its periods)
+    baselines_km = Dict(ad => collect(df_exp[findfirst(df_exp[!, "AD"] .== ad), [:R1, :R2, :R3, :R4, :R5, :R6]]) ./ 1e3 for ad in unique(df_exp[!, "AD"]))
+    survival_probabilities(params) = Dict(ad => osc.osc_prob(E_nu_GeV, L, params, anti=true)[:, :, 1, 1] for (ad, L) in baselines_km)
     final_rebin_idx = rebin_index(fine_binning_Edep, coarse_binning)
 
     ## create background model functions, taking parameter NamedTuple as arg
@@ -956,9 +972,6 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         n_p = n_protons["AD$(AD)"]
 
         lt = output.eff_livetime_days
-        
-        ffs_symbols = [Symbol("fission_fractions_scale_R$(i)") for i=1:6]
-        neq_symbols = [Symbol("neq_scale_R$(i)") for i=1:6]
         
         accidentals = bg_dict["accidentals"]
         amc = bg_dict["amc"]
@@ -1037,7 +1050,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         # TODO fix scale of neq to parameter-dependent
         #spec_prefac_nom_neq = av_thermal_power_scale .* invL2 .* flux_norm
         spec_prefac_snf = 1e-45 * n_p * sum(output.eff_livetime_seconds) .* invL2
-        function neutrino_counts(params)
+        function neutrino_counts(params, fluxes, P)
             # value type promoted over all parameter inputs, so intermediate
             # arrays stay dual even when only a subset of the parameters is dual
             T = promote_type(
@@ -1083,25 +1096,12 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
                 eltype(params.Δm²₃₁),
                 eltype(params.δCP),
             )
-            epf = params.energy_per_fission
-            pulls = params.spectrum_pulls
-
-            P = osc.osc_prob(E_nu_GeV, L_km, params, anti=true)[:, :, 1, 1]
-
             interm_spec = zeros(T, NF)
             @inbounds for r in 1:6
-                fission_fractions = params[ffs_symbols[r]]
-                neq_scale = params[neq_symbols[r]]
-                flux_main, flux_neq, flux_snf, correction = reactor_flux(E_nu_mesh, params.reactor_thermal_power_scale[r], params.energy_per_fission, fission_fractions, params.spectrum_pulls, neq_scale, params.snf_scale[r], r)
-                # scale nominal flux and neq correction with sum(daily thermal power * daily eff livetime)
-                # snf is independent of the actual thermal power (as it is from spent fuel, duh) and is scaled by the eff livetime,
-                # its nominal rates are computed within the reactor flux module
-                # the free spectrum correction applies to the main flux only (as in the official model)
-                @. interm_spec += (flux_norm[r] * (flux_main * correction + flux_neq) + spec_prefac_snf[r] * flux_snf) * P[:, r]
-                
-                # @. interm_spec += (spec_prefac_nom_neq[r] * flux_nom) * P[:, r] * correction
-                #@. interm_spec += (spec_prefac_nom_neq[r] * flux_nom + spec_prefac_snf[r] * flux_snf) * P[:, r] * correction
-                #spec .+= reactor_flux(fine_binning_Enu_c, params.reactor_thermal_power_scale[r], params.energy_per_fission, fission_fractions, params.spectrum_pulls, neq_scale, params.snf_scale[r], r) .* invL2[r]
+                # nominal flux and neq correction scale with sum(daily thermal power * daily eff livetime); the SNF is
+                # independent of the actual thermal power (spent fuel) and scales with the eff livetime
+                flux_r, snf_r = fluxes[r]
+                @. interm_spec += (flux_norm[r] * flux_r + spec_prefac_snf[r] * snf_r) * P[:, r]
             end
             # integrate over each Edep bin: multiply with cross section × Jacobian × quadrature weights and sum
             interm_spec .*= integral_weights
@@ -1125,6 +1125,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         end
 
 
+        neutrino_counts(params) = neutrino_counts(params, reactor_fluxes(params), survival_probabilities(params)["AD$(AD)"])
         neutrino_models[p_AD] = neutrino_counts
         # break
     
@@ -1134,9 +1135,11 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     end
 
     function forward_model(params)
+        fluxes = reactor_fluxes(params)
+        P = survival_probabilities(params)
         output = []
         for (c, p_AD) in enumerate(detector_list)
-            push!(output, background_models[p_AD](params) .+ neutrino_models[p_AD](params))
+            push!(output, background_models[p_AD](params) .+ neutrino_models[p_AD](params, fluxes, P["AD$(retrieve_AD(p_AD))"]))
             #push!(output, neutrino_models[p_AD](params))
             #push!(output, background_models[p_AD](params))
             # break
