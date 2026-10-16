@@ -69,23 +69,7 @@ mask_6 =     [true,   true,   true,   false,  true,   true,   true,   false]
 mask_8 =     [true,   true,   true,   true,   true,   true,   true,   true]
 mask_7 =     [false,  true,   true,   true,   true,   true,   true,   true]
 
-baselines = YAML.load_file(joinpath(@__DIR__, "dayabay_data/parameters/baselines.yaml"))
-reactors = ["R$(i)" for i in 1:6]
-baselines["parameters"]["baseline"]
-
-distances = OrderedDict()
-distances["AD"] = full_setup
-for reac in reactors
-    distances[reac] = [baselines["parameters"]["baseline"][ad][reac] for ad in full_setup]
-end
-
-distances["6AD"] = mask_6
-distances["8AD"] = mask_8
-distances["7AD"] = mask_7
-
-df_exp = DataFrame(distances)
-
-
+# (the data-release files are read only in configure(), so the package loads without dayabay_data/)
 detectors_6AD = full_setup[mask_6]
 detectors_8AD = full_setup[mask_8]
 detectors_7AD = full_setup[mask_7]
