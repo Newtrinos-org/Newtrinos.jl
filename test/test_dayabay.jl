@@ -75,6 +75,17 @@ using Newtrinos
         @test count(==(1), idx) == 12 && count(==(2), idx) == 5 && count(==(3), idx) == 209 && count(==(0), idx) == 14
     end
 
+    @testset "survival probability" begin
+        # closed form used for standard three-flavour vacuum oscillations == generic osc_prob
+        E = collect(range(1.8e-3, 12e-3, length = 500)); L = [0.36, 0.5, 0.9, 1.3, 1.6, 1.9]
+        for (cfg, dm31) in ((Newtrinos.osc.OscillationConfig(), 2.53e-3),
+                            (Newtrinos.osc.OscillationConfig(flavour = Newtrinos.osc.ThreeFlavour(ordering = :IO)), -2.45e-3))
+            osc = Newtrinos.osc.configure(cfg)
+            p = merge(Newtrinos.osc.get_params(cfg), (θ₁₃ = 0.15, Δm²₃₁ = dm31))
+            @test isapprox(Newtrinos.dayabay_rewrite.nue_survival(E, L, p), osc.osc_prob(E, L, p, anti = true)[:, :, 1, 1]; atol = 1e-12)
+        end
+    end
+
     assets = db.assets
     params = Newtrinos.get_params((;db))
     @testset "assets" begin

@@ -878,6 +878,21 @@ end
 """
 
 
+"""
+    nue_survival(E, L, params)
+
+Vacuum three-flavour survival probability P(ν̄e → ν̄e) = 1 - 4 Σᵢ<ⱼ |Uₑᵢ|²|Uₑⱼ|² sin²(Δm²ⱼᵢ L / 4E) for energies `E` [GeV]
+(rows) and baselines `L` [km] (columns), with the phase convention of `Newtrinos.osc` (`F_units`).
+"""
+function nue_survival(E, L, params)
+    s12², s13² = sin(params.θ₁₂)^2, sin(params.θ₁₃)^2
+    ue1, ue2, ue3 = (1 - s12²) * (1 - s13²), s12² * (1 - s13²), s13²
+    dm21, dm31 = params.Δm²₂₁, params.Δm²₃₁
+    dm32 = dm31 - dm21
+    k = Newtrinos.osc.F_units / 2
+    @. 1 - 4 * (ue1 * ue2 * sin(k * dm21 * L' / E)^2 + ue1 * ue3 * sin(k * dm31 * L' / E)^2 + ue2 * ue3 * sin(k * dm32 * L' / E)^2)
+end
+
 function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     df_exp = assets.df_exp
     detector_list = assets.detector_list
@@ -942,7 +957,15 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     end
     # survival probabilities per AD (shared by its periods)
     baselines_km = Dict(ad => collect(df_exp[findfirst(df_exp[!, "AD"] .== ad), [:R1, :R2, :R3, :R4, :R5, :R6]]) ./ 1e3 for ad in unique(df_exp[!, "AD"]))
-    survival_probabilities(params) = Dict(ad => osc.osc_prob(E_nu_GeV, L, params, anti=true)[:, :, 1, 1] for (ad, L) in baselines_km)
+    # for standard three-flavour vacuum oscillations the closed form of P(ν̄e → ν̄e) is used (identical to osc_prob,
+    # but much cheaper with dual numbers); any other oscillation model goes through osc_prob
+    oc = osc.cfg
+    standard_osc = oc.flavour isa Newtrinos.osc.ThreeFlavour && oc.interaction isa Newtrinos.osc.Vacuum &&
+                   oc.propagation isa Newtrinos.osc.Basic && oc.states isa Newtrinos.osc.All
+    function survival_probabilities(params)
+        standard_osc || return Dict(ad => osc.osc_prob(E_nu_GeV, L, params, anti=true)[:, :, 1, 1] for (ad, L) in baselines_km)
+        Dict(ad => nue_survival(E_nu_GeV, L, params) for (ad, L) in baselines_km)
+    end
     final_rebin_idx = rebin_index(fine_binning_Edep, coarse_binning)
 
     ## create background model functions, taking parameter NamedTuple as arg
