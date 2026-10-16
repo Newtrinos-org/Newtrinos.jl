@@ -29,7 +29,7 @@ end
 
 function default_physics()
     osc = Newtrinos.osc.configure()
-    xsec = Newtrinos.ibd_xsec.configure()
+    xsec = Newtrinos.ibd_xsec.configure(Newtrinos.ibd_xsec.VogelBeacomO1())
     flux = Newtrinos.reactor_flux.configure()
     (; osc, xsec, flux)
 end
@@ -225,22 +225,31 @@ end
 IAV smearing applier.
 `(f)(scale)` returns the scaled dense IAV matrix;
 `(f)(scale, spec)` applies it to a spectrum from the r.h.s. without materializing the matrix.
+As in the official model (`RenormalizeDiag`, mode "offdiag"), the off-diagonal elements are scaled and each column is
+then renormalised to unit sum, so the IAV uncertainty changes the shape but not the number of events.
 """
 struct IAVApplier
     iav::Matrix{Float64}
     offdiag::Matrix{Float64}
     diag::Vector{Float64}
+    offdiag_colsum::Vector{Float64}
 end
+
+# column sums of the scaled matrix (empty columns are left as they are)
+_iav_colsum(f::IAVApplier, offdiag_scale) = @. ifelse(f.diag + f.offdiag_colsum == 0, one(offdiag_scale), f.diag + offdiag_scale * f.offdiag_colsum)
 
 function (f::IAVApplier)(offdiag_scale)
     m = offdiag_scale * f.offdiag
     @inbounds for i in 1:length(f.diag)
         m[i, i] += f.diag[i]
     end
-    m
+    m ./ transpose(_iav_colsum(f, offdiag_scale))
 end
 
-(f::IAVApplier)(offdiag_scale, spec) = f.diag .* spec .+ offdiag_scale * (f.offdiag * spec)
+function (f::IAVApplier)(offdiag_scale, spec)
+    s = spec ./ _iav_colsum(f, offdiag_scale)
+    f.diag .* s .+ offdiag_scale * (f.offdiag * s)
+end
 
 
 function get_iav_matrix(datadir = @__DIR__)
@@ -249,7 +258,8 @@ function get_iav_matrix(datadir = @__DIR__)
     iav = transpose(file["iav_matrix"][])
     close(file)
 
-    IAVApplier(iav, iav .- Diagonal(iav), diag(iav))
+    offdiag = iav .- Diagonal(iav)
+    IAVApplier(iav, offdiag, diag(iav), vec(sum(offdiag, dims = 1)))
 end
 
 function read_lsnl_correction(datadir = @__DIR__)
@@ -288,58 +298,149 @@ function read_lsnl_correction(datadir = @__DIR__)
 
 end
 
-function get_lsnl_correction(datadir = @__DIR__)
-    lsnl = read_lsnl_correction(datadir)
-    #interp = Interpolator(lsnl.E, lsnl.f_nom, extrapolate=true)
-    #func(E) = isnan(interp(E)) ? 0.0 : interp(E)
-    pull1 = linear_interpolation(lsnl.E, lsnl.rel_0, extrapolation_bc=Flat())
-    pull2 = linear_interpolation(lsnl.E, lsnl.rel_1, extrapolation_bc=Flat())
-    pull3 = linear_interpolation(lsnl.E, lsnl.rel_2, extrapolation_bc=Flat())
-    pull4 = linear_interpolation(lsnl.E, lsnl.rel_3, extrapolation_bc=Flat())
-    nom = linear_interpolation(lsnl.E, lsnl.f_nom, extrapolation_bc=Flat())
+"""
+    not_a_knot_spline(x, y, xnew)
 
-    function _lsnl(E, pull)
-        return @. nom(E) + pull[1] * pull1(E) + pull[2] * pull2(E) + pull[3] * pull3(E) + pull[4] * pull4(E)
+Cubic spline through `(x, y)` with not-a-knot end conditions (as scipy's `interp1d(kind="cubic")`), evaluated at `xnew`
+(within the range of `x`).
+"""
+function not_a_knot_spline(x::Vector{Float64}, y::Vector{Float64}, xnew::AbstractVector{Float64})
+    n = length(x)
+    h = diff(x)
+    # second derivatives M: interior continuity of the first derivative, not-a-knot at both ends
+    A = zeros(n, n)
+    b = zeros(n)
+    A[1, 1], A[1, 2], A[1, 3] = h[2], -(h[1] + h[2]), h[1]
+    for i in 2:n-1
+        A[i, i-1], A[i, i], A[i, i+1] = h[i-1], 2 * (h[i-1] + h[i]), h[i]
+        b[i] = 6 * ((y[i+1] - y[i]) / h[i] - (y[i] - y[i-1]) / h[i-1])
+    end
+    A[n, n-2], A[n, n-1], A[n, n] = h[n-1], -(h[n-2] + h[n-1]), h[n-2]
+    M = A \ b
+    map(xnew) do t
+        k = clamp(searchsortedlast(x, t), 1, n - 1)
+        a, c = x[k+1] - t, t - x[k]
+        (M[k] * a^3 + M[k+1] * c^3) / (6h[k]) + (y[k] / h[k] - M[k] * h[k] / 6) * a + (y[k+1] / h[k] - M[k+1] * h[k] / 6) * c
     end
 end
+
+"""
+    refine_lsnl(E, f; refine_times = 4, newmin = 0.5, newmax = 12.1)
+
+LSNL curve processing of the official model (`refine_lsnl_data`): the relative curve f = Evis/Escint is converted to the
+absolute Evis(Escint), interpolated with a cubic spline on a `refine_times` finer grid and extrapolated linearly (with
+the outermost fine segments) to [`newmin`, `newmax`]. Returns the fine Escint grid and Evis on it.
+"""
+function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}; refine_times = 4, newmin = 0.5, newmax = 12.1)
+    xfine = collect(range(E[1], E[end], length = (length(E) - 1) * refine_times + 1))
+    yfine = not_a_knot_spline(E, f .* E, xfine)
+    step = xfine[2] - xfine[1]
+    xleft = collect(newmin:step:xfine[1]-step*1e-9)
+    stepright = xfine[end] - xfine[end-1]
+    xright = collect(xfine[end]:stepright:newmax+stepright*1e-6)[2:end]
+    sl = (yfine[2] - yfine[1]) / (xfine[2] - xfine[1])
+    sr = (yfine[end] - yfine[end-1]) / (xfine[end] - xfine[end-1])
+    yleft = @. yfine[1] + sl * (xleft - xfine[1])
+    yright = @. yfine[end] + sr * (xright - xfine[end])
+    vcat(xleft, xfine, xright), vcat(yleft, yfine, yright)
+end
+
+"""
+    get_lsnl_correction(datadir)
+
+LSNL as in the official model: the nominal and the four nuisance curves are refined and extrapolated with
+`refine_lsnl`; returns `(E, pull) -> Evis`, the absolute visible energy for deposited (scintillator) energies `E`,
+Evis = nominal(E) + Σᵢ pullᵢ (curveᵢ(E) - nominal(E)). The curves are linear between the refined points and are
+defined on [0.5, 12.1] MeV (events below are dropped in the forward model, as in the official model).
+"""
+function get_lsnl_correction(datadir = @__DIR__)
+    lsnl = read_lsnl_correction(datadir)
+    x, nom = refine_lsnl(lsnl.E, lsnl.f_nom)
+    curves = [refine_lsnl(lsnl.E, lsnl.f_nom .+ rel)[2] .- nom for rel in (lsnl.rel_0, lsnl.rel_1, lsnl.rel_2, lsnl.rel_3)]
+    nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
+    pull_itps = [linear_interpolation(x, c, extrapolation_bc = Line()) for c in curves]
+
+    function _lsnl(E, pull)
+        return @. nom_itp(E) + pull[1] * pull_itps[1](E) + pull[2] * pull_itps[2](E) + pull[3] * pull_itps[3](E) + pull[4] * pull_itps[4](E)
+    end
+end
+
+const lsnl_min_energy = 0.5    # MeV, lower end of the refined LSNL curves
 
 
 function eres(E, a, b, c)
     sigma_E = @. sqrt(a^2 * E^2 + b^2 * E + c^2)
 end
 
-function smear(E_arr_smear_local, smear_arr_in, sigma_arr; width=10, E_scale=1.0, E_bias=0.0)
+"""
+    project_to_bins(image_edges, counts, target_edges)
 
-    l = length(smear_arr_in)
-    T_acc = promote_type(eltype(E_arr_smear_local), eltype(sigma_arr), eltype(smear_arr_in), typeof(E_scale))
-    out = zeros(T_acc, l)
-
-    for i in 1:l
-
-        e_center = E_arr_smear_local[i] * E_scale + E_bias
-
-        norm_val = zero(T_acc)
-        sum_val = zero(T_acc)
-
-        j_min_loop = max(1, i - width)
-        j_max_loop = min(l, i + width)
-
-        for j in j_min_loop:j_max_loop
-            coeff = (1 / sigma_arr[j]) * exp(-0.5 * ((e_center - E_arr_smear_local[j]) / sigma_arr[j])^2)
-            norm_val += coeff
-            sum_val += coeff * smear_arr_in[j]
+Energy scale distortion as a count-conserving bin projection (official `AxisDistortionMatrixPointwise`): the events of
+source bin j, assumed uniform within it, are mapped to [image_edges[j], image_edges[j+1]] (monotonic distortion) and
+shared among the `target_edges` bins in proportion to the overlap. Events mapped outside the target range are lost.
+"""
+function project_to_bins(image_edges, counts, target_edges)
+    T = promote_type(eltype(image_edges), eltype(counts))
+    out = zeros(T, length(target_edges) - 1)
+    nt = length(target_edges) - 1
+    @inbounds for j in eachindex(counts)
+        A, B = image_edges[j], image_edges[j+1]
+        B > A || continue
+        k0 = max(searchsortedlast(target_edges, A), 1)
+        k1 = min(searchsortedlast(target_edges, B), nt)
+        for k in k0:k1
+            overlap = min(B, target_edges[k+1]) - max(A, target_edges[k])
+            overlap > 0 && (out[k] += counts[j] * overlap / (B - A))
         end
-
-        if norm_val > 1e-10
-            out[i] = sum_val / norm_val
-        end
-
     end
-    return out
+    out
 end
 
+"""
+    smear_bin_centres(counts, σ, edges; nσ = 8)
 
+Energy resolution as in the official model (`HistSmearNormalMatrixBC`): the events of each bin i are smeared with a
+Gaussian of width σ[i] around its centre, evaluated at the centres of the bins of the same binning (times the bin
+width).
+"""
+function smear_bin_centres(counts, σ, edges; nσ = 8)
+    T = promote_type(eltype(counts), eltype(σ))
+    c = (edges[1:end-1] .+ edges[2:end]) ./ 2
+    out = zeros(T, length(c))
+    @inbounds for i in eachindex(counts, σ)
+        iszero(counts[i]) && continue
+        lo = searchsortedfirst(c, c[i] - nσ * σ[i])
+        hi = searchsortedlast(c, c[i] + nσ * σ[i])
+        norm = counts[i] / (sqrt(2π) * σ[i])
+        for j in lo:hi
+            out[j] += norm * (edges[j+1] - edges[j]) * exp(-0.5 * ((c[j] - c[i]) / σ[i])^2)
+        end
+    end
+    out
+end
 
+"""
+    rebin_index(fine_edges, coarse_edges)
+
+Index of the coarse bin each fine bin falls into (0 outside); the coarse edges must be a subset of the fine ones.
+"""
+function rebin_index(fine_edges, coarse_edges)
+    @assert all(any(isapprox.(fine_edges, e; atol = 1e-9)) for e in coarse_edges) "coarse edges are not on the fine grid"
+    idx = zeros(Int, length(fine_edges) - 1)
+    for i in eachindex(idx)
+        k = searchsortedlast(coarse_edges, fine_edges[i] + 1e-9)
+        1 <= k < length(coarse_edges) && (idx[i] = k)
+    end
+    idx
+end
+
+function rebin(counts, idx, n)
+    out = zeros(eltype(counts), n)
+    @inbounds for i in eachindex(counts, idx)
+        idx[i] > 0 && (out[idx[i]] += counts[i])
+    end
+    out
+end
 
 function get_proton_number(datadir = @__DIR__)
     data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/detector_n_protons_nominal.yaml"))
@@ -432,7 +533,6 @@ function get_params(datadir = @__DIR__)
     dict = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/detector_lsnl.yaml"))
     lsnl_scale_nom = dict["parameters"]["lsnl_scale_a"][1]
     lsnl_pull = lsnl_scale_nom .* ones(4)
-    global_norm = 0.4
 
 
     params = (;
@@ -454,7 +554,6 @@ function get_params(datadir = @__DIR__)
         eff_eres_AD34,
         lsnl_pull,
         iav_offdiag_scale,
-        global_norm,
     )
     return params
 end
@@ -565,7 +664,6 @@ function get_priors(datadir = @__DIR__)
     lsnl_scale_unc = dict["parameters"]["lsnl_scale_a"][2]
     lsnl_pull = Distributions.MvNormal(lsnl_scale_nom .* ones(4), lsnl_scale_unc^2 .* ones(4))
 
-    global_norm = Uniform(0., 2.)
 
 
     priors = (
@@ -587,7 +685,6 @@ function get_priors(datadir = @__DIR__)
         eff_eres_AD34=eff_eres_AD34,
         lsnl_pull,
         iav_offdiag_scale=iav_offdiag_scale,   # done
-        global_norm,
     )
 end
 
@@ -802,26 +899,35 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     #fine_binning_Enu = assets.fine_binning_Enu
     #fine_binning_Enu_c = assets.fine_binning_Enu_c
     fine_binning_Edep = assets.fine_binning_Edep
-    twice_fine_binning_Edep = collect(0.0:.025:12.)
-    twice_fine_binning_Edep_c = (twice_fine_binning_Edep[1:end-1] + twice_fine_binning_Edep[2:end]) / 2
-    twice_fine_binning_Edep_width = diff(twice_fine_binning_Edep)
     fine_binning_Edep_c = assets.fine_binning_Edep_c
-    fine_bin_Edep_width = assets.fine_bin_Edep_width
-    fine_binning_Enu = physics.xsec.Enu.(fine_binning_Edep)
-    fine_binning_Enu_c = physics.xsec.Enu.(fine_binning_Edep_c)
-    twice_fine_binning_Enu = physics.xsec.Enu.(twice_fine_binning_Edep)
-    twice_fine_binning_Enu_c = physics.xsec.Enu.(twice_fine_binning_Edep_c)
-    twice_fine_binning_Enu_width = diff(twice_fine_binning_Enu)
-    fine_bin_Enu_width = diff(fine_binning_Enu)
-    
-    #xsec_eval = xsec.(fine_binning_Enu_c)
-    xsec_eval = xsec.(twice_fine_binning_Enu_c)
-    #E_nu_GeV = fine_binning_Enu_c ./ 1e3
-    E_nu_GeV = twice_fine_binning_Enu_c ./ 1e3
 
-    #NF = length(fine_binning_Enu) - 1
-    NF = length(twice_fine_binning_Enu) - 1
+    # IBD integration as in the official model: in each deposited energy bin a two-fold Gauss-Legendre quadrature
+    # over Edep (order 5) and the positron angle cosθ ∈ [-1, 1] (order 3), with exact kinematics Eν(Edep, cosθ),
+    # the first order cross section dσ/dcosθ and the Jacobian dEν/dEdep
+    gl5 = ([-0.9061798459386640, -0.5384693101056831, 0.0, 0.5384693101056831, 0.9061798459386640],
+           [0.2369268850561891, 0.4786286704993665, 0.5688888888888889, 0.4786286704993665, 0.2369268850561891])
+    gl3 = ([-0.7745966692414834, 0.0, 0.7745966692414834], [0.5555555555555556, 0.8888888888888888, 0.5555555555555556])
+    NQ = length(gl5[1]) * length(gl3[1])
     NFc = length(fine_binning_Edep_c)
+    E_nu_mesh = zeros(NQ, NFc)
+    integral_weights = zeros(NQ, NFc)
+    for i in 1:NFc
+        lo, hi = fine_binning_Edep[i], fine_binning_Edep[i+1]
+        q = 0
+        for (ξ, wE) in zip(gl5...), (c, wc) in zip(gl3...)
+            q += 1
+            Edep = (lo + hi) / 2 + (hi - lo) / 2 * ξ
+            Enu = physics.xsec.Enu(Edep, c)
+            E_nu_mesh[q, i] = Enu
+            integral_weights[q, i] = (hi - lo) / 2 * wE * wc * xsec(Enu, c) * physics.xsec.jacobian(Enu, Edep, c)
+        end
+    end
+    E_nu_mesh = vec(E_nu_mesh)
+    integral_weights = vec(integral_weights)
+    E_nu_GeV = E_nu_mesh ./ 1e3
+    NF = length(E_nu_mesh)
+    lsnl_mask = fine_binning_Edep[1:end-1] .>= lsnl_min_energy - 1e-9
+    final_rebin_idx = rebin_index(fine_binning_Edep, coarse_binning)
 
     ## create background model functions, taking parameter NamedTuple as arg
     background_models = OrderedDict()
@@ -925,7 +1031,6 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         # convert the cross section from e-41cm2 to m2 -> multiply by 1e-4
         # flux_norm = 1e-45 * output.eff_livetime_seconds * n_p
         flux_norm = 1e-45 * n_p .* P_th_seconds .* invL2
-        integral_dEnu = twice_fine_binning_Enu_width .* xsec_eval
 
         # println(av_thermal_power_scale)
 
@@ -987,70 +1092,36 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
             @inbounds for r in 1:6
                 fission_fractions = params[ffs_symbols[r]]
                 neq_scale = params[neq_symbols[r]]
-                flux_nominal, flux_snf, correction = reactor_flux(twice_fine_binning_Enu_c, params.reactor_thermal_power_scale[r], params.energy_per_fission, fission_fractions, params.spectrum_pulls, neq_scale, params.snf_scale[r], r)
+                flux_main, flux_neq, flux_snf, correction = reactor_flux(E_nu_mesh, params.reactor_thermal_power_scale[r], params.energy_per_fission, fission_fractions, params.spectrum_pulls, neq_scale, params.snf_scale[r], r)
                 # scale nominal flux and neq correction with sum(daily thermal power * daily eff livetime)
                 # snf is independent of the actual thermal power (as it is from spent fuel, duh) and is scaled by the eff livetime,
                 # its nominal rates are computed within the reactor flux module
-                @. interm_spec += (flux_norm[r] * flux_nominal + spec_prefac_snf[r] * flux_snf) * P[:, r] * (1 + correction)
+                # the free spectrum correction applies to the main flux only (as in the official model)
+                @. interm_spec += (flux_norm[r] * (flux_main * correction + flux_neq) + spec_prefac_snf[r] * flux_snf) * P[:, r]
                 
                 # @. interm_spec += (spec_prefac_nom_neq[r] * flux_nom) * P[:, r] * correction
                 #@. interm_spec += (spec_prefac_nom_neq[r] * flux_nom + spec_prefac_snf[r] * flux_snf) * P[:, r] * correction
                 #spec .+= reactor_flux(fine_binning_Enu_c, params.reactor_thermal_power_scale[r], params.energy_per_fission, fission_fractions, params.spectrum_pulls, neq_scale, params.snf_scale[r], r) .* invL2[r]
             end
-            # multiply with xsec_eval and bin width for integral over neutrino energy
-            interm_spec .*= integral_dEnu
-            # sum two bins together to one
-            spec = T[]
-            for (l, h) in zip(interm_spec[1:2:end-1], interm_spec[2:2:end])
-                push!(spec, l+h)
-            end
+            # integrate over each Edep bin: multiply with cross section × Jacobian × quadrature weights and sum
+            interm_spec .*= integral_weights
+            spec = vec(sum(reshape(interm_spec, NQ, NFc), dims = 1))
             smeared_spectrum = iav_func(params.iav_offdiag_scale[ad_idx], spec)
 
             eff_eres = params[eff_eres_key]
-            # transform from Escint to Evis by lsnl and relative energy scale, apply E_scale = eff_eres[2] here
-            E_vis = lsnl(fine_binning_Edep_c, params.lsnl_pull) .* fine_binning_Edep_c .* eff_eres[2]
-            E_vis_edges = lsnl(fine_binning_Edep, params.lsnl_pull) .* fine_binning_Edep .* eff_eres[2]
+            # LSNL and the relative energy scale (eff_eres[2]) as one count-conserving distortion of the Escint bins onto
+            # the Evis bins (same 50 keV binning); bins below the LSNL curve range are dropped (as in the official model)
+            E_vis_edges = lsnl(fine_binning_Edep, params.lsnl_pull) .* eff_eres[2]
+            evis_spectrum = project_to_bins(E_vis_edges, smeared_spectrum .* lsnl_mask, fine_binning_Edep)
 
-            # get energy resolution 
-            sigma_E = eres(E_vis, params.eres_a, params.eres_b, params.eres_c);
-            
-            # get relative efficiency and energy scale
-
-
-            #smeared_sum = sum(smeared_spectrum)
-            resolved_spectrum = smear(E_vis, smeared_spectrum, sigma_E; width=20);
-            resolved_sum = sum(resolved_spectrum)
-
-            """
-            if idx == 1
-                println(smeared_sum)
-                println(resolved_sum)
-                println(smeared_sum / resolved_sum)
-            end
-            """
-            # Divide by bin width to get approximate pdf for integration over arbitrary bins
-            spectrum_pdf = resolved_spectrum ./ diff(E_vis_edges)
-
-            # exact integration of the piecewise-constant pdf over the coarse bins
-            NC = length(coarse_binning) - 1
-            coarse_counts = zeros(T, NC)
-            # loop over coarse bins
-            @inbounds for (j, (l, h)) in enumerate(zip(coarse_binning[1:end-1], coarse_binning[2:end]))
-                s = zero(T)
-                jlo = clamp(searchsortedlast(E_vis_edges, l), 1, NFc)
-                jhi = clamp(searchsortedfirst(E_vis_edges, h) - 1, jlo, NFc)
-                @inbounds for j2 in jlo:jhi
-                    ov = min(h, E_vis_edges[j2 + 1]) - max(l, E_vis_edges[j2])
-                    if ov > zero(T)
-                        s += spectrum_pdf[j2] * ov
-                    end
-                end
-                coarse_counts[j] = s
-            end
+            # energy resolution from the Evis bin centres onto the Erec bins (same binning), then rebin to the final bins
+            sigma_E = eres(fine_binning_Edep_c, params.eres_a, params.eres_b, params.eres_c)
+            erec_spectrum = smear_bin_centres(evis_spectrum, sigma_E, fine_binning_Edep)
+            coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(coarse_binning) - 1)
             #if !(p_AD == "7ADAD32")
             #    return ones(T, 26)
             #end            
-            eff_eres[1] .* coarse_counts .* assets.efficiency * params.global_norm
+            eff_eres[1] .* coarse_counts .* assets.efficiency
         end
 
 
