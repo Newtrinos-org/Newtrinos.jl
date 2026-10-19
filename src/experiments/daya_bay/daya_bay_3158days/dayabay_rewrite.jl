@@ -181,7 +181,6 @@ function extract_for_AD_period(AD::Int, period::Int, datadir = @__DIR__)
     foreach(x -> x[:n_det] == period ? push!(acc_rate, x[:rate_accidentals]) : 0, data["AD$(AD)"][1:end])
     foreach(x -> x[:n_det] == period ? push!(livetime, x[:livetime]) : 0, data["AD$(AD)"][1:end])
     foreach(x -> x[:n_det] == period ? push!(day, x[:day]) : 0, data["AD$(AD)"][1:end])
-    #foreach(x -> x[:n_det] == 6 ? push!(lt, x[:livetime]) : 0, data["AD11"][1:end])
 
     close(data)
 
