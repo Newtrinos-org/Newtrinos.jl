@@ -120,4 +120,19 @@ all_cases= [(Cid, λid_expected), (C1, λ1_expected), (C2, λ2_expected), (C3, �
         @test ForwardDiff.partials.(FD.values, 1) ≈ abs2.(ForwardDiff.value.(real.(FD.vectors[1, :])) .+ im .* ForwardDiff.value.(imag.(FD.vectors[1, :]))) atol=1e-12
     end
 
+    @testset "parallel kernel rows (θ₁₃ = 0 in matter)" begin
+        # With θ₁₃ = 0, (0, s₂₃, c₂₃) is an exact eigenvector and rows 2 and 3 of (C - λI) are
+        # parallel for its eigenvalue; the rows 2&3 cross product is then pure round-off.
+        osc = Newtrinos.osc.configure()
+        p = merge(osc.params, (θ₁₃ = 0.0, Δm²₂₁ = 5.6e-5))
+        U, h = osc.matrices(p)
+        H = U * Diagonal(h) * U'
+        for ve in (0.0, 1e-5, 3e-4, 1e-2)
+            C = Hermitian(H + SMatrix{3,3}(Diagonal([ve, 0.0, 0.0])))
+            F = Newtrinos.fast_eigen(C)
+            @test F.vectors' * F.vectors ≈ I atol=1e-10
+            @test F.vectors * Diagonal(F.values) * F.vectors' ≈ Matrix(C) atol=1e-12
+        end
+    end
+
 end

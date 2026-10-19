@@ -110,19 +110,45 @@ const NUE_PERIPHERAL_RANGE = (1.0, 4.5)
     plot::Function
 end
 
+"""
+Cross-section model of the released predictions and the target, for reweighting with `physics.xsec.weights`:
+GENIE 3.0.6 N18_10j_02_11a with the NOvA tune, approximated by G18_10a_02_11a; liquid scintillator ≈ CH₂.
+"""
+const XSEC_GENERATOR = :G18_10a_02_11a
+const XSEC_TARGET = :CH2
+
+"""
+Default physics: no shared cross-section model (`xsec.Nominal`); the module's own parameters describe the
+cross-section uncertainties, as in the publication.
+"""
 function default_physics()
     osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction = Newtrinos.osc.SI(),
                                                                   eigen_method = Newtrinos.BargerEigen()))
-    (; osc)
+    xsec = Newtrinos.xsec.configure(Newtrinos.xsec.Nominal())
+    (; osc, xsec)
 end
 
+"""
+    configure(physics = default_physics(); calibration = :ref2024)
+
+With a cross-section model in `physics.xsec` (e.g. `xsec.CorrelatedXsec` for global fits), the
+predictions are reweighted with it (inclusive in true energy), constrained by the near detector: per
+reconstructed bin the unoscillated νμ (ν̄μ) CC rate is kept, so the weights act through the true-energy
+distribution within the bin and through νe/νμ (ντ/νμ) differences. If that model has a νe/νμ ratio
+parameter, the module's own `nova_nue_xsec_ratio_*` are fixed to 1.
+"""
 function configure(physics = default_physics(); calibration::Symbol = :ref2024)
-    physics = (; physics.osc)
+    xsec = haskey(physics, :xsec) ? physics.xsec : Newtrinos.xsec.configure(Newtrinos.xsec.Nominal())
+    physics = (; physics.osc, xsec)
     assets = get_assets(physics; calibration)
+    priors = get_priors()
+    if haskey(xsec.params, :xsec_nue_numu_ratio)
+        priors = merge(priors, (nova_nue_xsec_ratio_nu = 1.0, nova_nue_xsec_ratio_nubar = 1.0))
+    end
     return NOvA(
         physics = physics,
         params = get_params(),
-        priors = get_priors(),
+        priors = priors,
         assets = assets,
         forward_model = get_forward_model(physics, assets),
         plot = get_plot(physics, assets),
@@ -262,7 +288,10 @@ function get_assets(physics; file = datafile, calibration::Symbol = :ref2024)
 
     observed = merge(map(s -> s.observed, numu), (nue_fhc = nue.fhc.observed, nue_rhc = nue.rhc.observed, nue_lowe_fhc = nue.lowe_fhc.observed))
     dlnE = log(Et[2] / Et[1])
-    (; Et, dlnE, layers, paths, numu, nue, observed, calibration)
+    w(flavour, anti) = physics.xsec.weights(Et; flavour, anti, current = :CC, target = XSEC_TARGET, generator = XSEC_GENERATOR)
+    xsec_weights = (nu = (μ = w(:numu, false), e = w(:nue, false), τ = w(:nutau, false)),
+                    nubar = (μ = w(:numu, true), e = w(:nue, true), τ = w(:nutau, true)))
+    (; Et, dlnE, layers, paths, numu, nue, observed, calibration, xsec_weights)
 end
 
 # ---------------------------------------------------------------------------------------------
@@ -299,10 +328,24 @@ function scale_energy(P::AbstractVector, dlnE, s)
 end
 scale_energy(P::NamedTuple, dlnE, s) = map(p -> scale_energy(p, dlnE, s), P)
 
-"Bin-averaged probabilities for a νe sample; `anti` selects the beam mode (signal = ν̄ for RHC)"
-function averaged_channels(W, P, anti)
+# W ⟨P w⟩ per reconstructed bin (W rows are normalised), and the ND-constrained ⟨P w⟩ / ⟨w_μ⟩
+wavg(W, P, w::Number) = (W * P) .* w
+wavg(W, P, w::AbstractVector) = W * (P .* w)
+wmean(W, w::Number) = w
+wmean(W, w::AbstractVector) = W * w
+nd_ratio(W, P, w, wμ) = wavg(W, P, w) ./ max.(wmean(W, wμ), 1e-12)
+
+"""
+Bin-averaged probabilities for a νe sample; `anti` selects the beam mode (signal = ν̄ for RHC). With
+cross-section weights `xw` (per ν/ν̄: μ, e, τ), each channel is weighted with its detected flavour,
+relative to the νμ weight of its parent beam (near-detector constraint).
+"""
+function averaged_channels(W, P, anti, xw = nothing)
     main, other = anti ? (P.nubar, P.nu) : (P.nu, P.nubar)
-    (signal = W * main.me, wrong_sign = W * other.me, beam_nue = W * main.ee, numu_cc = W * main.mm, tau_cc = W * main.mt)
+    isnothing(xw) && return (signal = W * main.me, wrong_sign = W * other.me, beam_nue = W * main.ee, numu_cc = W * main.mm, tau_cc = W * main.mt)
+    m, o = anti ? (xw.nubar, xw.nu) : (xw.nu, xw.nubar)
+    (signal = nd_ratio(W, main.me, m.e, m.μ), wrong_sign = nd_ratio(W, other.me, o.e, o.μ), beam_nue = nd_ratio(W, main.ee, m.e, m.μ),
+     numu_cc = W * main.mm, tau_cc = nd_ratio(W, main.mt, m.τ, m.μ))
 end
 
 _ratio(a, b) = ifelse.(b .> 0, a ./ max.(b, 1e-12), one.(a))
@@ -316,10 +359,11 @@ function nue_expected(s, Pavg, params, signal_norm)
     sig .+ params.nova_nue_bkg_norm .* bkg .+ s.cosmic
 end
 
-numu_expected(s, Pmm, norm) = norm .* s.signal_noosc .* (s.W * Pmm) .+ s.beam_bkg .+ s.cosmic
+numu_expected(s, Pmm, norm, wμ = 1.0) = norm .* s.signal_noosc .* nd_ratio(s.W, Pmm, wμ, wμ) .+ s.beam_bkg .+ s.cosmic
 
 function get_expected(params, physics, assets)
     P = channel_probabilities(physics, assets.Et, assets.paths, assets.layers, params)
+    xw = map(t -> map(f -> f(params), t), assets.xsec_weights)
     δμ = params.nova_muon_energy_scale - 1
     had = (fhc = params.nova_hadronic_energy_scale,
            rhc = params.nova_hadronic_energy_scale * params.nova_rhc_hadronic_energy_scale)
@@ -327,15 +371,15 @@ function get_expected(params, physics, assets)
                              rhc_q1 = true, rhc_q2 = true, rhc_q3 = true, rhc_q4 = true)) do s, anti
         scale = 1 + (1 - s.f_had) * δμ + s.f_had * ((anti ? had.rhc : had.fhc) - 1)
         Pmm = scale_energy(anti ? P.nubar.mm : P.nu.mm, assets.dlnE, scale)
-        numu_expected(s, Pmm, params.nova_numu_norm * (anti ? params.nova_rhc_norm : one(params.nova_rhc_norm)))
+        numu_expected(s, Pmm, params.nova_numu_norm * (anti ? params.nova_rhc_norm : one(params.nova_rhc_norm)), (anti ? xw.nubar : xw.nu).μ)
     end
     P_fhc = scale_energy(P, assets.dlnE, had.fhc)
     P_rhc = scale_energy(P, assets.dlnE, had.rhc)
     sig_fhc = params.nova_nue_signal_norm * params.nova_nue_xsec_ratio_nu
     sig_rhc = params.nova_nue_signal_norm * params.nova_nue_xsec_ratio_nubar * params.nova_rhc_norm
-    nue_fhc = nue_expected(assets.nue.fhc, averaged_channels(assets.nue.fhc.W, P_fhc, false), params, sig_fhc)
-    nue_rhc = nue_expected(assets.nue.rhc, averaged_channels(assets.nue.rhc.W, P_rhc, true), params, sig_rhc)
-    nue_lowe_fhc = nue_expected(assets.nue.lowe_fhc, averaged_channels(assets.nue.lowe_fhc.W, P_fhc, false), params, sig_fhc)
+    nue_fhc = nue_expected(assets.nue.fhc, averaged_channels(assets.nue.fhc.W, P_fhc, false, xw), params, sig_fhc)
+    nue_rhc = nue_expected(assets.nue.rhc, averaged_channels(assets.nue.rhc.W, P_rhc, true, xw), params, sig_rhc)
+    nue_lowe_fhc = nue_expected(assets.nue.lowe_fhc, averaged_channels(assets.nue.lowe_fhc.W, P_fhc, false, xw), params, sig_fhc)
     merge(numu, (; nue_fhc, nue_rhc, nue_lowe_fhc))
 end
 

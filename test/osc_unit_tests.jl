@@ -590,10 +590,10 @@ using StaticArrays
             @test !(r_basic ≈ r_damp)
         end
 
-        # Spray needs matter propagation (interaction=SI) through real Earth layers/paths,
-        # since its dL/dh production-height correction reads layers.radius[1:2] as the
-        # atmosphere/next-layer boundary — unlike Basic/Damping/Decoherent it has no plain
-        # vacuum (E, L) method.
+        # Spray needs matter propagation (interaction=SI) through layers/paths; its dL/dh
+        # production-height correction reads layers.radius[1:2] as the atmosphere/next-layer
+        # boundary when there is more than one layer — unlike Basic/Damping/Decoherent it has
+        # no plain vacuum (E, L) method.
         @testset "Spray propagation" begin
             earth = Newtrinos.earth_layers.configure()
             layers = earth.compute_layers()
@@ -630,6 +630,12 @@ using StaticArrays
                 # non-trivial smearing actually changes the result vs. the un-averaged case
                 @test !(result_default ≈ result_basic)
             end
+
+            # a single constant-density layer without atmosphere (accelerator baseline): no production-height spread
+            lay1 = Newtrinos.osc.StructArray{Newtrinos.Layer}(([6371.0], [1.4], [1.4]))
+            path1 = Newtrinos.osc.VectorOfVectors{Newtrinos.Path}([[Newtrinos.Path(810.0, 1)]])
+            cfg_1 = Newtrinos.osc.OscillationConfig(interaction = Newtrinos.osc.SI(), propagation = Newtrinos.osc.Spray(σ_E = 1e-6, σ_h = 1.0))
+            @test Newtrinos.osc.get_osc_prob(cfg_1)(E, path1, lay1, params) ≈ Newtrinos.osc.get_osc_prob(cfg_basic)(E, path1, lay1, params) atol = 1e-6
         end
 
     end

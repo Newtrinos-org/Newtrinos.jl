@@ -4,3 +4,4 @@
 /CEvNS_Paper/
 .DS_Store
 texput.log
+__pycache__/

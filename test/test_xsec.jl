@@ -4,6 +4,7 @@ using DataFrames
 import CSV
 using Test
 using Newtrinos
+using ForwardDiff
 
 @testset "Cross Sections" begin
 
@@ -169,6 +170,98 @@ using Newtrinos
         energies = reshape(Matrix(xsec[!, [1, 5, 9]]), (45))
         xsection = reshape(Matrix(xsec[!, [2, 6, 10]]), (45))
         @test isapprox(xsection, ibd.xsec.(energies))
+    end
+
+    @testset "weights interface: Nominal and SimpleScaling" begin
+        E = [1.0, 10.0]
+        xs = Newtrinos.xsec.configure(Newtrinos.xsec.Nominal())
+        @test isempty(xs.params)
+        @test xs.weights(E; flavour=:numu, anti=false, current=:CC, target=:H2O, generator=:NEUT5_4_0)(xs.params) == 1.0
+        xs = Newtrinos.xsec.configure()
+        kw = (anti=false, target=:H2O, generator=:GENIE2_12)
+        p = (nc_norm=1.3, nutau_cc_norm=0.7)
+        @test xs.weights(E; flavour=:numu, current=:NC, kw...)(p) == 1.3
+        @test xs.weights(E; flavour=:nutau, current=:CC, kw...)(p) == 0.7
+        @test xs.weights(E; flavour=:numu, current=:CC, kw...)(p) == 1.0
+        w = Newtrinos.xsec.event_weights(xs, [1.0, 2.0, 3.0], [:CC, :NC, :CC]; flavour=:nutau, kw...)(p)
+        @test w == [0.7, 1.3, 0.7]
+    end
+
+    @testset "H2O_PCA weights are relative to its nominal" begin
+        xs = Newtrinos.xsec.configure(Newtrinos.xsec.H2O_PCA())
+        E = [0.5, 2.0, 20.0]
+        w = xs.weights(E; flavour=:numu, anti=false, current=:CC, target=:H2O, generator=:NEUT5_4_0)
+        @test w(xs.params) ≈ ones(3)
+        @test w(merge(xs.params, (xsec_ccdis_norm = 1.1,)))[3] > 1.05
+    end
+
+    @testset "generator cross sections" begin
+        X = Newtrinos.xsec
+        tab = X.load_table()
+        at(v, e) = X.at_energies(tab.E, v, [e])[1]
+        # νμ CC σ/E per nucleon at high energy (PDG: ≈ 0.68e-38 cm²/GeV), ν̄μ about half
+        for gen in (:G18_10a_02_11a, :G18_02a_00_000, :GENIE2_12)
+            @test 0.64 < at(sum(X.generator_sigma(gen, :H2O, :numu, false, :CC)), 50.0) < 0.72
+            @test 0.30 < at(sum(X.generator_sigma(gen, :Fe, :numu, true, :CC)), 50.0) < 0.36
+        end
+        # ντ CC threshold (≈ 3.5 GeV on free nucleons, slightly lower on nuclei through Fermi motion)
+        στ(gen, e) = at(sum(X.generator_sigma(gen, :H2O, :nutau, false, :CC)), e)
+        σμ(gen, e) = at(sum(X.generator_sigma(gen, :H2O, :numu, false, :CC)), e)
+        for gen in (:G18_10a_02_11a, :NEUT5_4_0)
+            @test στ(gen, 2.5) < 1e-4
+            @test στ(gen, 3.0) < 0.01 * σμ(gen, 3.0)
+            @test 0.3 < στ(gen, 20.0) / σμ(gen, 20.0) < 0.5
+        end
+        # GENIE 2.12 default has no MEC
+        @test all(iszero, X.generator_sigma(:GENIE2_12, :O, :numu, false, :CC).MEC)
+        @test_throws ArgumentError X.generator_sigma(:NEUT5_4_0, :Fe, :numu, false, :CC)
+        @test_throws ArgumentError X.generator_sigma(:nonexistent, :H2O, :numu, false, :CC)
+        # Llewellyn Smith: σ grows with M_A, ν > ν̄
+        @test X.llewellyn_smith(1.0, 1.1) > X.llewellyn_smith(1.0, 1.0)
+        @test X.llewellyn_smith(1.0, 1.0) > X.llewellyn_smith(1.0, 1.0; anti=true)
+    end
+
+    @testset "CorrelatedXsec" begin
+        X = Newtrinos.xsec
+        xs = X.configure(X.CorrelatedXsec())
+        p = xs.params
+        for key in keys(p)
+            @test Distributions.insupport(xs.priors[key], p[key])
+        end
+        E = [0.3, 1.0, 3.0, 10.0, 100.0]
+        kw = (flavour=:numu, anti=false, target=:H2O)
+        # unit weights for the reference generator, inclusive and per process
+        @test xs.weights(E; current=:CC, generator=:tune_mean, kw...)(p) ≈ ones(5)
+        @test xs.weights(E; current=:NC, generator=:tune_mean, kw...)(p) ≈ ones(5)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, process=:RES, kw...)(p) ≈ ones(5)
+        # knobs act on their process only
+        q = merge(p, (xsec_dis_norm = 1.1,))
+        @test xs.weights(E; current=:CC, generator=:tune_mean, process=:DIS, kw...)(q) ≈ fill(1.1, 5)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, process=:QE, kw...)(q) ≈ ones(5)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, kw...)(merge(p, (xsec_ma_qe = 1.0,)))[3] > 1.0
+        # ν̄ ratios do not act on neutrinos; the DIS one acts on ν̄ DIS only
+        @test xs.weights(E; current=:CC, generator=:tune_mean, kw...)(merge(p, (xsec_nubar_ratio = 1.1, xsec_nubar_dis_ratio = 1.1))) ≈ ones(5)
+        kwb = (flavour=:numu, anti=true, target=:H2O)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, process=:DIS, kwb...)(merge(p, (xsec_nubar_dis_ratio = 1.1,))) ≈ fill(1.1, 5)
+        @test xs.weights(E; current=:CC, generator=:tune_mean, process=:QE, kwb...)(merge(p, (xsec_nubar_dis_ratio = 1.1,))) ≈ ones(5)
+        # the nominal is the mean of the tunes
+        tab = Newtrinos.xsec.load_table()
+        @test sum(Newtrinos.xsec.generator_sigma(:tune_mean, :C, :numu, false, :CC)) ≈
+              sum(sum(Newtrinos.xsec.generator_sigma(Symbol(t), :C, :numu, false, :CC)) for t in tab.tunes) ./ length(tab.tunes)
+        # one shared parameter moves different targets together
+        q = merge(p, (xsec_pc1 = 1.0,))
+        wO = xs.weights(E; current=:CC, generator=:tune_mean, kw...)(q)
+        wC = xs.weights(E; current=:CC, generator=:tune_mean, flavour=:numu, anti=false, target=:CH2)(q)
+        @test sign(wO[1] - 1) == sign(wC[1] - 1)
+        # per-event weights equal the per-process ones; MEC goes with QE for a generator without MEC
+        we = xs.weights(E; current=:CC, generator=:GENIE2_12, process=[:QE, :RES, :DIS, :DIS, :DIS], kw...)(p)
+        @test we[2] ≈ xs.weights(E[2:2]; current=:CC, generator=:GENIE2_12, process=:RES, kw...)(p)[1]
+        @test we[1] ≈ xs.weights(E[1:1]; current=:CC, generator=:GENIE2_12, process=:QE, kw...)(p)[1]
+        # ForwardDiff through the weights
+        f(x) = sum(xs.weights(E; current=:CC, generator=:NEUT5_4_0, kw...)(merge(p, (xsec_pc1 = x[1], xsec_ma_qe = x[2]))))
+        g = ForwardDiff.gradient(f, [0.1, 0.2])
+        @test all(isfinite, g) && any(!iszero, g)
+        @test_throws ArgumentError xs.scale(:numu, :CC, p)
     end
 
 end

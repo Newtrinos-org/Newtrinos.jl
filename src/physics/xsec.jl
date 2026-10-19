@@ -14,14 +14,28 @@ using ..Newtrinos
 Abstract type for neutrino cross-section models.
 
 Each subtype defines how cross-section normalization factors are applied to event rates.
+All models provide `weights` (see [`get_weights`](@ref)), so that an experiment written against
+`physics.xsec.weights` runs with any model and the model is chosen when configuring the physics.
 Subtypes:
+- [`Nominal`](@ref): no cross-section systematics (unit weights, no parameters), for experiments whose
+  own module carries the cross-section uncertainties of the publication.
 - [`SimpleScaling`](@ref): global normalization for NC and ``\\nu_\\tau`` CC channels.
 - [`Differential_H2O`](@ref): per-interaction-mode differential scaling for water
   Cherenkov detectors.
 - [`H2O_PCA`](@ref): GENIE-tune-based per-channel PCA shape and normalization
   systematics for water Cherenkov detectors.
+- [`CorrelatedXsec`](@ref): one shared, correlated parameter set for all experiments (targets,
+  flavours, processes), reweighting each experiment from its simulation's generator to a common
+  reference model; for global fits.
 """
 abstract type XsecModel end
+
+"""
+    Nominal <: XsecModel
+
+No cross-section systematics: unit weights and no parameters.
+"""
+struct Nominal <: XsecModel end
 
 """
     SimpleScaling <: XsecModel
@@ -110,6 +124,8 @@ Configured cross-section physics module, returned by [`configure`](@ref).
   per-event reweighting closure, when supported by `cfg`; `nothing` otherwise.
 - `grid_weights::Union{Function, Nothing}`: optional precomputed fast-path
   per-energy-grid reweighting closure, when supported by `cfg`; `nothing` otherwise.
+- `weights::Function`: the common reweighting interface of all models, see [`get_weights`](@ref).
+- `sigma::Union{Function, Nothing}`: absolute σ/E with uncertainties, when supported by `cfg`.
 """
 @kwdef struct Xsec <: Newtrinos.Physics
     cfg::XsecModel
@@ -120,6 +136,8 @@ Configured cross-section physics module, returned by [`configure`](@ref).
     scale_event::Union{Function, Nothing} = nothing  # per-event reweighting with GENIE interaction codes
     event_weights::Union{Function, Nothing} = nothing # fast path: precompute(E,codes,flav,ia,anti) -> (params)->weights
     grid_weights::Union{Function, Nothing} = nothing  # fast path: precompute(E_grid,flav,ia,anti) -> (params)->weights
+    weights::Function
+    sigma::Union{Function, Nothing} = nothing
 end
 
 
@@ -151,6 +169,7 @@ xsec_physics = Newtrinos.xsec.configure(Differential_H2O())
 ```
 """
 function configure(cfg::XsecModel=SimpleScaling())
+    weights = get_weights(cfg)
     Xsec(
         cfg=cfg,
         params = get_params(cfg),
@@ -159,7 +178,9 @@ function configure(cfg::XsecModel=SimpleScaling())
         dσdE = get_dσdE(cfg),
         scale_event = get_scale_event(cfg),
         event_weights = get_event_weights(cfg),
-        grid_weights = get_grid_weights(cfg)
+        grid_weights = get_grid_weights(cfg),
+        weights = weights,
+        sigma = cfg isa CorrelatedXsec ? get_sigma(cfg, weights) : get_sigma(cfg),
         )
 end
 
@@ -167,6 +188,26 @@ get_dσdE(::XsecModel) = nothing
 get_scale_event(::XsecModel) = nothing
 get_event_weights(::XsecModel) = nothing
 get_grid_weights(::XsecModel) = nothing
+get_sigma(::XsecModel) = nothing
+
+get_params(::Nominal) = (;)
+get_priors(::Nominal) = (;)
+get_scale(::Nominal) = (args...) -> 1.0
+get_weights(::Nominal) = (E; kwargs...) -> (params -> 1.0)
+
+"""
+    get_weights(cfg::SimpleScaling)
+
+`weights(E; flavour, anti, current, ...)` returns `params -> nc_norm` for NC, `params -> nutau_cc_norm`
+for ντ CC and `params -> 1` otherwise (scalars; target, generator and process are ignored).
+"""
+function get_weights(cfg::SimpleScaling)
+    function weights(E; flavour::Symbol, anti::Bool = false, current::Symbol, kwargs...)
+        current === :NC && return params -> params.nc_norm
+        flavour === :nutau && return params -> params.nutau_cc_norm
+        return params -> one(params.nc_norm)
+    end
+end
 
 """
     get_params(cfg::XsecModel) -> NamedTuple
@@ -588,676 +629,216 @@ function compute_shape_pca(nom, alt_curves, E_grid, E_pca_mask, taper)
     return make_itp(pc_full, E_grid), norm_sigma
 end
 
-function get_scale(cfg::H2O_PCA)
+const H2O_CC_CHANNELS = ("CC1p1h", "CC2p2h", "CC1pi", "CCDIS", "CCother")
+const H2O_FLAV_KEYS = ("nue", "nuebar", "numu", "numubar")
+const H2O_NORM = (CC2p2h = :xsec_cc2p2h_norm, CC1pi = :xsec_cc1pi_norm, CCDIS = :xsec_ccdis_norm, CCother = :xsec_ccother_norm)
+const H2O_SHAPE = (CC1p1h = :xsec_cc1p1h_shape, CC2p2h = :xsec_cc2p2h_shape, CC1pi = :xsec_cc1pi_shape,
+                   CCDIS = :xsec_ccdis_shape, CCother = :xsec_ccother_shape)
+const H2O_NUBAR = (CC1p1h = :xsec_cc1p1h_nubar_ratio, CC2p2h = :xsec_cc2p2h_nubar_ratio, CC1pi = :xsec_cc1pi_nubar_ratio,
+                   CCDIS = :xsec_ccdis_nubar_ratio, CCother = :xsec_ccother_nubar_ratio)
+# GENIE interaction codes (DeepCore data release convention) → channel; NC events are passed with interaction = :NC
+const H2O_GENIE_CODE = Dict(0 => "CC1p1h", 1 => "CC1pi", 2 => "CCDIS", 3 => "CCother", -1 => "CCother")
+
+"Normalisation-conserving ratio factor: `2r/(1+r)` for the scaled side, `2/(1+r)` for the other"
+ratio_factor(r, scaled::Bool) = scaled ? 2r / (1 + r) : 2 / (1 + r)
+
+"""
+Tables shared by all H2O_PCA closures (computed once per closure): the energy grid, the leading
+shape PC per channel (and NC per ν/ν̄), the nominal σ/E and channel fractions per flavour, and the
+nominal/MC-generator ratios per channel and the MC total CC for reweighting simulations.
+"""
+function _h2o_pca_setup(cfg::H2O_PCA)
     E_grid, wester_xsec, all_xsec = _load_genie_data()
-
     nominal_key = string(cfg.nominal)
-    genie_tunes = ["G18_10a", "G21_11a", "G18_02a"]
-    cc_channels = ("CC1p1h", "CC2p2h", "CC1pi", "CCDIS", "CCother")
-    all_channels = (cc_channels..., "NC")
+    mc_key = string(cfg.mc_nominal)
 
-    # Wester CSV data only valid up to ~26 GeV. Above that, extend using GENIE
-    # G18_10a shape scaled to match Wester at the boundary (no discontinuity).
+    # NEUT (Wester) curves are only valid up to ~26 GeV and are continued with the GENIE G18_10a shape;
+    # shape corrections fade out between 20 and 30 GeV, where the curves are extrapolated
     i_neut_last = findlast(E_grid .<= 26.0)
-
-    # Precompute nominal channel fractions per flavor (for CC reweight)
-    flav_keys = ("nue", "nuebar", "numu", "numubar")
-    nom_frac_itps = Dict{String, NamedTuple}()
-    for fk in flav_keys
-        total_cc = sum(get_curve(wester_xsec, all_xsec, nominal_key, fk, ch, i_neut_last) for ch in cc_channels)
-        fracs = NamedTuple{Symbol.(cc_channels)}(begin
-            f = get_curve(wester_xsec, all_xsec, nominal_key, fk, ch, i_neut_last) ./ total_cc
-            f[isnan.(f) .| isinf.(f)] .= 0.0
-            make_itp(f, E_grid)
-        end for ch in cc_channels)
-        nom_frac_itps[fk] = fracs
-    end
-
-    # Per interaction process: compute shape PCA from tune spread
-    # Combine nue + nuebar (ν + ν̄) for robust shape estimate
-    # The shape PC is a fractional deviation, applied identically to all flavors
-    #
-    # Wester CSV data only extends to ~28 GeV. Above that, extrapolated values
-    # create artificial shape differences. Taper shape corrections to zero above
-    # the valid range using a smooth fade-out window.
-    E_valid_max = 30.0   # Wester data ends at ~28 GeV
-    E_fade_start = 20.0  # start tapering shape correction here
-    taper = [E_grid[i] < E_fade_start ? 1.0 :
-             E_grid[i] > E_valid_max ? 0.0 :
-             (1.0 - (E_grid[i] - E_fade_start) / (E_valid_max - E_fade_start))
-             for i in 1:length(E_grid)]
-
-    alt_keys = [t for t in genie_tunes if t != nominal_key]
-    if nominal_key != "NEUT5_4_0"
-        push!(alt_keys, "NEUT5_4_0")
-    end
-    n_alt = length(alt_keys)
-
-    # Only use E range where all sources have real data for shape PCA
+    E_valid_max, E_fade_start = 30.0, 20.0
+    taper = [E < E_fade_start ? 1.0 : E > E_valid_max ? 0.0 : 1.0 - (E - E_fade_start) / (E_valid_max - E_fade_start) for E in E_grid]
     E_pca_mask = E_grid .<= E_valid_max
 
-    process_shape_itps = Dict{String, Any}()
-    process_norm_sigmas = Dict{String, Float64}()
+    alt_keys = [t for t in ("G18_10a", "G21_11a", "G18_02a") if t != nominal_key]
+    nominal_key != "NEUT5_4_0" && push!(alt_keys, "NEUT5_4_0")
+    curve(key, fk, ch) = get_curve(wester_xsec, all_xsec, key, fk, ch, i_neut_last)
 
-    for ch in all_channels
+    # shape PCs: per channel from the ν+ν̄ average; NC separately for ν and ν̄
+    shape = Dict{String, Any}()
+    norm_sigma = Dict{String, Float64}()
+    for ch in (H2O_CC_CHANNELS..., "NC")
         nom = get_ch_curve(wester_xsec, all_xsec, nominal_key, ch, i_neut_last)
         alts = [get_ch_curve(wester_xsec, all_xsec, k, ch, i_neut_last) for k in alt_keys]
-        itp, ns = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
-        process_shape_itps[ch] = itp
-        process_norm_sigmas[ch] = ns
+        shape[ch], norm_sigma[ch] = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
+    end
+    for (label, fk) in (("NC_nu", "nue"), ("NC_nubar", "nuebar"))
+        shape[label], _ = compute_shape_pca(curve(nominal_key, fk, "NC"), [curve(k, fk, "NC") for k in alt_keys], E_grid, E_pca_mask, taper)
     end
 
-    # NC: ν and ν̄ have different shapes — compute separate NC shape PCs
-    for (label, flav) in [("NC_nu", "nue"), ("NC_nubar", "nuebar")]
-        nom = get_curve(wester_xsec, all_xsec, nominal_key, flav, "NC", i_neut_last)
-        alts = [get_curve(wester_xsec, all_xsec, k, flav, "NC", i_neut_last) for k in alt_keys]
-        itp, _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
-        process_shape_itps[label] = itp
-    end
+    σ_nom = Dict(fk => Dict(ch => make_itp(curve(nominal_key, fk, ch), E_grid) for ch in (H2O_CC_CHANNELS..., "NC")) for fk in H2O_FLAV_KEYS)
+    frac = Dict(fk => begin
+        total = sum(curve(nominal_key, fk, ch) for ch in H2O_CC_CHANNELS)
+        Dict(ch => (f = curve(nominal_key, fk, ch) ./ total; f[isnan.(f) .| isinf.(f)] .= 0.0; make_itp(f, E_grid)) for ch in H2O_CC_CHANNELS)
+    end for fk in H2O_FLAV_KEYS)
+    # σ_nominal / σ_mc per channel (1 where the MC has none)
+    ratio = Dict(ch => Dict(fk => begin
+        nom, mc = curve(nominal_key, fk, ch), curve(mc_key, fk, ch)
+        make_itp(map(i -> mc[i] > 0 ? nom[i] / mc[i] : 1.0, eachindex(nom)), E_grid)
+    end for fk in H2O_FLAV_KEYS) for ch in (H2O_CC_CHANNELS..., "NC"))
+    # MC total CC without 2p2h (the reweighted simulations have no 2p2h)
+    mc_total_cc = Dict(fk => make_itp(max.(sum(curve(mc_key, fk, ch) for ch in H2O_CC_CHANNELS if ch != "CC2p2h"), 1e-30), E_grid)
+                       for fk in H2O_FLAV_KEYS)
 
-    @info "H2O_PCA xsec configured" nominal=cfg.nominal mc_nominal=cfg.mc_nominal norm_sigmas=process_norm_sigmas
+    (; norm_sigma, shape, σ_nom, frac, ratio, mc_total_cc)
+end
 
-    # Parameter → channel mapping
-    norm_syms = (
-        CC2p2h = :xsec_cc2p2h_norm,
-        CC1pi  = :xsec_cc1pi_norm,
-        CCDIS  = :xsec_ccdis_norm,
-        CCother = :xsec_ccother_norm,
-    )
-    shape_syms = (
-        CC1p1h = :xsec_cc1p1h_shape,
-        CC2p2h = :xsec_cc2p2h_shape,
-        CC1pi  = :xsec_cc1pi_shape,
-        CCDIS  = :xsec_ccdis_shape,
-        CCother = :xsec_ccother_shape,
-    )
-    nubar_ratio_syms = (
-        CC1p1h = :xsec_cc1p1h_nubar_ratio,
-        CC2p2h = :xsec_cc2p2h_nubar_ratio,
-        CC1pi  = :xsec_cc1pi_nubar_ratio,
-        CCDIS  = :xsec_ccdis_nubar_ratio,
-        CCother = :xsec_ccother_nubar_ratio,
-    )
+h2o_qe_norm(E, params) = ifelse.(E .< 1.33, params.xsec_cc1p1h_subgev_norm, params.xsec_cc1p1h_multigev_norm)
 
+"""
+Reweighted contribution of one CC channel: `max(0, base × norm × (1 + ε shape)) × ν̄/ν factor`
+(× νe/νμ factor for CC1p1h); `base` is the channel's fraction, σ/E or σ ratio, `shape` its PC at E.
+"""
+function h2o_cc_channel(ch, base, shape, E, flav, anti, params)
+    T = promote_type(eltype(base), typeof(params.xsec_nc_norm))
+    norm = ch == "CC1p1h" ? h2o_qe_norm(E, params) : getproperty(params, H2O_NORM[Symbol(ch)])
+    w = max.(zero(T), base .* norm .* (one(T) .+ getproperty(params, H2O_SHAPE[Symbol(ch)]) .* shape)) .*
+        ratio_factor(getproperty(params, H2O_NUBAR[Symbol(ch)]), anti)
+    ch == "CC1p1h" ? w .* ratio_factor(params.xsec_cc1p1h_nue_numu_ratio, flav == :nue) : w
+end
+
+"Reweighted NC: `max(0, base × nc_norm × (1 + ε shape)) × ν̄/ν factor`"
+function h2o_nc(base, shape, anti, params)
+    T = promote_type(eltype(base), typeof(params.xsec_nc_norm))
+    max.(zero(T), base .* params.xsec_nc_norm .* (one(T) .+ params.xsec_nc_shape .* shape)) .* ratio_factor(params.xsec_nc_nubar_ratio, anti)
+end
+
+h2o_nutau(w, flav, params) = flav == :nutau ? w .* params.xsec_nutau_cc_norm : w
+h2o_nc_shape(t, anti) = anti ? t.shape["NC_nubar"] : t.shape["NC_nu"]
+
+function get_scale(cfg::H2O_PCA)
+    t = _h2o_pca_setup(cfg)
+    @info "H2O_PCA xsec configured" nominal=cfg.nominal mc_nominal=cfg.mc_nominal norm_sigmas=t.norm_sigma
+    # CC: Σ_ch f_ch(E) × norm_ch × (1 + ε_ch PC_ch(E)) with the nominal channel fractions f_ch; NC: nc_norm × shape
     function scale(E::AbstractArray, flav::Symbol, interaction::Symbol, anti::Bool, params::NamedTuple)
-        T = promote_type(eltype(E), typeof(params.xsec_nc_norm))
-
-        if interaction == :NC
-            # NC reweight: norm × (1 + ε × shape_PC(E)), clamped ≥ 0
-            # shape_PC differs for ν vs ν̄; nubar_ratio scales ν̄ relative to ν
-            nc_shape = anti ? process_shape_itps["NC_nubar"] : process_shape_itps["NC_nu"]
-            w = max.(zero(T), params.xsec_nc_norm .* (one(T) .+ params.xsec_nc_shape .* nc_shape.(E)))
-            # Normalization-conserving nu/nubar ratio: at r=1, factor=1 for both
-            r_nc = params.xsec_nc_nubar_ratio
-            return anti ? w .* (2 * r_nc / (1 + r_nc)) : w .* (2 / (1 + r_nc))
-        end
-
+        interaction == :NC && return h2o_nc(one(eltype(E)), h2o_nc_shape(t, anti).(E), anti, params)
         fk = get_flavor_key(flav, anti)
-        fracs = nom_frac_itps[fk]
-
-        # CC reweight = Σ_ch f_ch(E) × ch_norm × [nubar_ratio if ν̄] × (1 + ε_ch × shape_PC_ch(E))
-        # Each channel contribution clamped ≥ 0 before summing
-        result = zeros(T, length(E))
-        for ch in cc_channels
-            f_ch = getfield(fracs, Symbol(ch)).(E)
-            ch_norm = ch == "CC1p1h" ? ifelse.(E .< 1.33, params.xsec_cc1p1h_subgev_norm, params.xsec_cc1p1h_multigev_norm) : getfield(params, getfield(norm_syms, Symbol(ch)))
-            ch_eps = getfield(params, getfield(shape_syms, Symbol(ch)))
-            ch_shape = process_shape_itps[ch]
-            ch_w = max.(zero(T), f_ch .* ch_norm .* (one(T) .+ ch_eps .* ch_shape.(E)))
-            # Normalization-conserving nu/nubar ratio: scale both sides symmetrically
-            r = getfield(params, getfield(nubar_ratio_syms, Symbol(ch)))
-            if anti
-                ch_w = ch_w .* (2 * r / (1 + r))
-            else
-                ch_w = ch_w .* (2 / (1 + r))
-            end
-            # Normalization-conserving νe/νμ ratio for CCQE
-            if ch == "CC1p1h"
-                r_fl = params.xsec_cc1p1h_nue_numu_ratio
-                if flav == :nue
-                    ch_w = ch_w .* (2 * r_fl / (1 + r_fl))
-                else
-                    ch_w = ch_w .* (2 / (1 + r_fl))
-                end
-            end
-            result .+= ch_w
-        end
-
-        if flav == :nutau
-            return result .* params.xsec_nutau_cc_norm
-        end
-        return result
+        h2o_nutau(sum(h2o_cc_channel(ch, t.frac[fk][ch].(E), t.shape[ch].(E), E, flav, anti, params) for ch in H2O_CC_CHANNELS), flav, params)
     end
 end
 
 function get_dσdE(cfg::H2O_PCA)
-    E_grid, wester_xsec, all_xsec = _load_genie_data()
-
-    nominal_key = string(cfg.nominal)
-    cc_channels = ("CC1p1h", "CC2p2h", "CC1pi", "CCDIS", "CCother")
-
-    # Extend Wester above valid range using GENIE shape (same as get_scale)
-    i_neut_last = findlast(E_grid .<= 26.0)
-
-    # Precompute absolute σ/E interpolations per channel per flavor
-    flav_keys = ("nue", "nuebar", "numu", "numubar")
-    nom_xsec_itps = Dict{String, NamedTuple}()
-    for fk in flav_keys
-        xsecs = NamedTuple{Symbol.(cc_channels)}(make_itp(get_curve(wester_xsec, all_xsec, nominal_key, fk, ch, i_neut_last), E_grid) for ch in cc_channels)
-        nom_xsec_itps[fk] = xsecs
-    end
-
-    # NC σ/E per flavor
-    nc_itps = Dict{String, Any}()
-    for fk in flav_keys
-        nc_itps[fk] = make_itp(get_curve(wester_xsec, all_xsec, nominal_key, fk, "NC", i_neut_last), E_grid)
-    end
-
-    # Reuse shape PCA and sym mappings from get_scale (computed at configure time)
-    # We need to recompute here since get_scale's closures aren't accessible
-    E_valid_max = 30.0
-    E_fade_start = 20.0
-    taper = [E_grid[i] < E_fade_start ? 1.0 :
-             E_grid[i] > E_valid_max ? 0.0 :
-             (1.0 - (E_grid[i] - E_fade_start) / (E_valid_max - E_fade_start))
-             for i in 1:length(E_grid)]
-
-    genie_tunes = ["G18_10a", "G21_11a", "G18_02a"]
-    alt_keys = [t for t in genie_tunes if t != nominal_key]
-    if nominal_key != "NEUT5_4_0"; push!(alt_keys, "NEUT5_4_0"); end
-
-    E_pca_mask = E_grid .<= E_valid_max
-
-    process_shape_itps = Dict{String, Any}()
-    all_channels = (cc_channels..., "NC")
-    for ch in all_channels
-        nom = get_ch_curve(wester_xsec, all_xsec, nominal_key, ch, i_neut_last)
-        alts = [get_ch_curve(wester_xsec, all_xsec, k, ch, i_neut_last) for k in alt_keys]
-        process_shape_itps[ch], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
-    end
-    for (label, flav) in [("NC_nu", "nue"), ("NC_nubar", "nuebar")]
-        nom = get_curve(wester_xsec, all_xsec, nominal_key, flav, "NC", i_neut_last)
-        alts = [get_curve(wester_xsec, all_xsec, k, flav, "NC", i_neut_last) for k in alt_keys]
-        process_shape_itps[label], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
-    end
-
-    norm_syms = (CC2p2h=:xsec_cc2p2h_norm, CC1pi=:xsec_cc1pi_norm, CCDIS=:xsec_ccdis_norm, CCother=:xsec_ccother_norm)
-    shape_syms = (CC1p1h=:xsec_cc1p1h_shape, CC2p2h=:xsec_cc2p2h_shape, CC1pi=:xsec_cc1pi_shape, CCDIS=:xsec_ccdis_shape, CCother=:xsec_ccother_shape)
-    nubar_ratio_syms = (CC1p1h=:xsec_cc1p1h_nubar_ratio, CC2p2h=:xsec_cc2p2h_nubar_ratio, CC1pi=:xsec_cc1pi_nubar_ratio, CCDIS=:xsec_ccdis_nubar_ratio, CCother=:xsec_ccother_nubar_ratio)
-
+    t = _h2o_pca_setup(cfg)
+    # absolute σ/E: the nominal curves reweighted as in `scale`
     function dσdE(E::AbstractArray, flav::Symbol, interaction::Symbol, anti::Bool, params::NamedTuple)
-        T = promote_type(eltype(E), typeof(params.xsec_nc_norm))
-
-        if interaction == :NC
-            fk = get_flavor_key(flav, anti)
-            nc_shape = anti ? process_shape_itps["NC_nubar"] : process_shape_itps["NC_nu"]
-            w = max.(zero(T), nc_itps[fk].(E) .* params.xsec_nc_norm .* (one(T) .+ params.xsec_nc_shape .* nc_shape.(E)))
-            r_nc = params.xsec_nc_nubar_ratio
-            return anti ? w .* (2 * r_nc / (1 + r_nc)) : w .* (2 / (1 + r_nc))
-        end
-
         fk = get_flavor_key(flav, anti)
-        xsecs = nom_xsec_itps[fk]
-
-        result = zeros(T, length(E))
-        for ch in cc_channels
-            σ_ch = getfield(xsecs, Symbol(ch)).(E)
-            ch_norm = ch == "CC1p1h" ? ifelse.(E .< 1.33, params.xsec_cc1p1h_subgev_norm, params.xsec_cc1p1h_multigev_norm) : getfield(params, getfield(norm_syms, Symbol(ch)))
-            ch_eps = getfield(params, getfield(shape_syms, Symbol(ch)))
-            ch_shape = process_shape_itps[ch]
-            ch_w = max.(zero(T), σ_ch .* ch_norm .* (one(T) .+ ch_eps .* ch_shape.(E)))
-            r = getfield(params, getfield(nubar_ratio_syms, Symbol(ch)))
-            if anti
-                ch_w = ch_w .* (2 * r / (1 + r))
-            else
-                ch_w = ch_w .* (2 / (1 + r))
-            end
-            if ch == "CC1p1h"
-                r_fl = params.xsec_cc1p1h_nue_numu_ratio
-                if flav == :nue
-                    ch_w = ch_w .* (2 * r_fl / (1 + r_fl))
-                else
-                    ch_w = ch_w .* (2 / (1 + r_fl))
-                end
-            end
-            result .+= ch_w
-        end
-
-        if flav == :nutau
-            return result .* params.xsec_nutau_cc_norm
-        end
-        return result
+        interaction == :NC && return h2o_nc(t.σ_nom[fk]["NC"].(E), h2o_nc_shape(t, anti).(E), anti, params)
+        h2o_nutau(sum(h2o_cc_channel(ch, t.σ_nom[fk][ch].(E), t.shape[ch].(E), E, flav, anti, params) for ch in H2O_CC_CHANNELS), flav, params)
     end
+end
+
+# Per-event reweighting of a simulation (`mc_nominal`) with GENIE interaction codes: an event of channel ch
+# gets σ_nominal,ch / σ_mc,ch × norm × shape × ratios (at nominal parameters σ_nominal/σ_mc, which moves the
+# MC to the nominal model). The simulations have no 2p2h, so CC2p2h is not reweighted here.
+function h2o_event_tables(t, E, codes, flav, anti)
+    fk = get_flavor_key(flav, anti)
+    ch_of = [H2O_GENIE_CODE[c] for c in vec(codes)]
+    Ev = vec(E)
+    map(("CC1p1h", "CC1pi", "CCDIS", "CCother")) do ch
+        m = ch_of .== ch
+        ch => (base = ifelse.(m, t.ratio[ch][fk].(Ev), 0.0), shape = ifelse.(m, t.shape[ch].(Ev), 0.0))
+    end
+end
+
+function h2o_event_eval(t, tabs, E, flav, anti, params)
+    h2o_nutau(sum(h2o_cc_channel(ch, tab.base, tab.shape, E, flav, anti, params) for (ch, tab) in tabs), flav, params)
 end
 
 function get_scale_event(cfg::H2O_PCA)
-    # Per-event reweighting using GENIE interaction codes.
-    # Returns a weight w_i = σ_nominal(E_i, ch_i) / σ_mc_nominal(E_i, ch_i) × norm × shape × nubar_ratio × ...
-    # At nominal parameters (all norms=1, shapes=0, ratios=1), weight = σ_nominal / σ_mc_nominal,
-    # which reweights the MC from mc_nominal to nominal — ensuring consistent cross-section
-    # treatment across experiments in a global fit (e.g. DeepCore G00_00a → NEUT5_4_0).
-    #
-    # GENIE interaction code mapping (DeepCore data release convention):
-    #   0 → CC1p1h (QE)
-    #   1 → CC1pi  (resonance)
-    #   2 → CCDIS
-    #   3 or -1 → CCother (coherent or other)
-    #   NC: passed via interaction=:NC, genie_codes ignored
-    E_grid, wester_xsec, all_xsec = _load_genie_data()
-
-    nominal_key    = string(cfg.nominal)
-    mc_nominal_key = string(cfg.mc_nominal)
-
-    cc_channels = ("CC1p1h", "CC1pi", "CCDIS", "CCother")
-    flav_keys   = ("nue", "nuebar", "numu", "numubar")
-
-    i_neut_last  = findlast(E_grid .<= 26.0)
-
-    # Shape PCA (same as get_scale — recomputed here for independent closure)
-    E_valid_max  = 30.0
-    E_fade_start = 20.0
-    taper = [E_grid[i] < E_fade_start ? 1.0 :
-             E_grid[i] > E_valid_max  ? 0.0 :
-             (1.0 - (E_grid[i] - E_fade_start) / (E_valid_max - E_fade_start))
-             for i in 1:length(E_grid)]
-    E_pca_mask = E_grid .<= E_valid_max
-
-    genie_tunes = ["G18_10a", "G21_11a", "G18_02a"]
-    alt_keys = [t for t in genie_tunes if t != nominal_key]
-    if nominal_key != "NEUT5_4_0"; push!(alt_keys, "NEUT5_4_0"); end
-
-    shape_itps = Dict{String, Any}()
-    for ch in (cc_channels..., "NC")
-        nom  = get_ch_curve(wester_xsec, all_xsec, nominal_key, ch, i_neut_last)
-        alts = [get_ch_curve(wester_xsec, all_xsec, k, ch, i_neut_last) for k in alt_keys]
-        shape_itps[ch], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
-    end
-    for (label, flav) in [("NC_nu", "nue"), ("NC_nubar", "nuebar")]
-        nom  = get_curve(wester_xsec, all_xsec, nominal_key, flav, "NC", i_neut_last)
-        alts = [get_curve(wester_xsec, all_xsec, k, flav, "NC", i_neut_last) for k in alt_keys]
-        shape_itps[label], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
-    end
-
-    # Precompute σ_nominal / σ_mc_nominal ratio interpolations per channel per flavor.
-    # At nominal parameters this ratio is the baseline reweight from mc_nominal to nominal.
-    # When nominal == mc_nominal all ratios are 1.0 (no baseline shift).
-    ratio_itps = Dict{String, Dict{String, Any}}()
-    for ch in (cc_channels..., "NC")
-        ratio_itps[ch] = Dict{String, Any}()
-        for fk in flav_keys
-            nom    = get_curve(wester_xsec, all_xsec, nominal_key,    fk, ch, i_neut_last)
-            mc_nom = get_curve(wester_xsec, all_xsec, mc_nominal_key, fk, ch, i_neut_last)
-            ratio  = similar(nom)
-            for i in eachindex(nom)
-                if mc_nom[i] > 0
-                    ratio[i] = nom[i] / mc_nom[i]
-                else
-                    ratio[i] = 1.0  # both zero or mc zero → fallback to no reweight
-                end
-            end
-            ratio_itps[ch][fk] = make_itp(ratio, E_grid)
-        end
-    end
-
+    t = _h2o_pca_setup(cfg)
     @info "H2O_PCA scale_event configured" nominal=cfg.nominal mc_nominal=cfg.mc_nominal
-
-    # Parameter → channel symbol mappings (same as get_scale)
-    norm_syms = (
-        CC1pi   = :xsec_cc1pi_norm,
-        CCDIS   = :xsec_ccdis_norm,
-        CCother = :xsec_ccother_norm,
-    )
-    shape_syms = (
-        CC1p1h  = :xsec_cc1p1h_shape,
-        CC1pi   = :xsec_cc1pi_shape,
-        CCDIS   = :xsec_ccdis_shape,
-        CCother = :xsec_ccother_shape,
-    )
-    nubar_syms = (
-        CC1p1h  = :xsec_cc1p1h_nubar_ratio,
-        CC1pi   = :xsec_cc1pi_nubar_ratio,
-        CCDIS   = :xsec_ccdis_nubar_ratio,
-        CCother = :xsec_ccother_nubar_ratio,
-    )
-
     function scale_event(E::AbstractArray, genie_codes, flav::Symbol, interaction::Symbol, anti::Bool, params::NamedTuple)
-        T  = promote_type(eltype(E), typeof(params.xsec_nc_norm))
         fk = get_flavor_key(flav, anti)
-        result = zeros(T, length(E))
-
-        if interaction == :NC
-            nc_shape_itp = anti ? shape_itps["NC_nubar"] : shape_itps["NC_nu"]
-            ratio_nc     = ratio_itps["NC"][fk]
-            r_nc = params.xsec_nc_nubar_ratio
-            for i in eachindex(E)
-                e       = E[i]
-                baseline = ratio_nc(e)
-                w = max(zero(T), baseline * params.xsec_nc_norm * (one(T) + params.xsec_nc_shape * nc_shape_itp(e)))
-                result[i] = anti ? w * (2 * r_nc / (1 + r_nc)) : w * (2 / (1 + r_nc))
-            end
-        else  # CC
-            r_fl = params.xsec_cc1p1h_nue_numu_ratio
-            for i in eachindex(E)
-                e    = E[i]
-                code = genie_codes[i]
-
-                local w::T
-                if code == 0  # QE → CC1p1h
-                    ch_norm  = e < 1.33 ? params.xsec_cc1p1h_subgev_norm : params.xsec_cc1p1h_multigev_norm
-                    baseline = ratio_itps["CC1p1h"][fk](e)
-                    w = max(zero(T), baseline * ch_norm * (one(T) + params.xsec_cc1p1h_shape * shape_itps["CC1p1h"](e)))
-                    r = params.xsec_cc1p1h_nubar_ratio
-                    w = anti ? w * (2 * r / (1 + r)) : w * (2 / (1 + r))
-                    w = flav == :nue ? w * (2 * r_fl / (1 + r_fl)) : w * (2 / (1 + r_fl))
-                elseif code == 1  # RES → CC1pi
-                    baseline = ratio_itps["CC1pi"][fk](e)
-                    w = max(zero(T), baseline * params.xsec_cc1pi_norm * (one(T) + params.xsec_cc1pi_shape * shape_itps["CC1pi"](e)))
-                    r = params.xsec_cc1pi_nubar_ratio
-                    w = anti ? w * (2 * r / (1 + r)) : w * (2 / (1 + r))
-                elseif code == 2  # DIS → CCDIS
-                    baseline = ratio_itps["CCDIS"][fk](e)
-                    w = max(zero(T), baseline * params.xsec_ccdis_norm * (one(T) + params.xsec_ccdis_shape * shape_itps["CCDIS"](e)))
-                    r = params.xsec_ccdis_nubar_ratio
-                    w = anti ? w * (2 * r / (1 + r)) : w * (2 / (1 + r))
-                else  # coherent (3) or other (-1) → CCother
-                    baseline = ratio_itps["CCother"][fk](e)
-                    w = max(zero(T), baseline * params.xsec_ccother_norm * (one(T) + params.xsec_ccother_shape * shape_itps["CCother"](e)))
-                    r = params.xsec_ccother_nubar_ratio
-                    w = anti ? w * (2 * r / (1 + r)) : w * (2 / (1 + r))
-                end
-
-                if flav == :nutau
-                    w = w * params.xsec_nutau_cc_norm
-                end
-                result[i] = w
-            end
-        end
-
-        return result
+        interaction == :NC && return h2o_nc(t.ratio["NC"][fk].(vec(E)), h2o_nc_shape(t, anti).(vec(E)), anti, params)
+        h2o_event_eval(t, h2o_event_tables(t, E, genie_codes, flav, anti), vec(E), flav, anti, params)
     end
 end
 
-# Fast precomputed path for H2O_PCA per-event reweighting.
-# Called once at configure time; returns (E, codes, flav, interaction, anti) -> (params -> weights).
-# All interpolations happen during precomputation — eval time is purely vectorized arithmetic.
+# Fast path of `scale_event`: the per-event tables are precomputed, evaluation is vectorised arithmetic.
 function get_event_weights(cfg::H2O_PCA)
-    E_grid, wester_xsec, all_xsec = _load_genie_data()
-
-    nominal_key    = string(cfg.nominal)
-    mc_nominal_key = string(cfg.mc_nominal)
-
-    cc_channels = ("CC1p1h", "CC1pi", "CCDIS", "CCother")
-    flav_keys   = ("nue", "nuebar", "numu", "numubar")
-
-    i_neut_last = findlast(E_grid .<= 26.0)
-
-    # Shape PCA (same setup as get_scale_event)
-    E_valid_max  = 30.0
-    E_fade_start = 20.0
-    taper = [E_grid[i] < E_fade_start ? 1.0 :
-             E_grid[i] > E_valid_max  ? 0.0 :
-             (1.0 - (E_grid[i] - E_fade_start) / (E_valid_max - E_fade_start))
-             for i in 1:length(E_grid)]
-    E_pca_mask = E_grid .<= E_valid_max
-
-    genie_tunes = ["G18_10a", "G21_11a", "G18_02a"]
-    alt_keys = [t for t in genie_tunes if t != nominal_key]
-    if nominal_key != "NEUT5_4_0"; push!(alt_keys, "NEUT5_4_0"); end
-
-    shape_itps = Dict{String, Any}()
-    for ch in (cc_channels..., "NC")
-        nom  = get_ch_curve(wester_xsec, all_xsec, nominal_key, ch, i_neut_last)
-        alts = [get_ch_curve(wester_xsec, all_xsec, k, ch, i_neut_last) for k in alt_keys]
-        shape_itps[ch], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
-    end
-    for (label, flav) in [("NC_nu", "nue"), ("NC_nubar", "nuebar")]
-        nom  = get_curve(wester_xsec, all_xsec, nominal_key, flav, "NC", i_neut_last)
-        alts = [get_curve(wester_xsec, all_xsec, k, flav, "NC", i_neut_last) for k in alt_keys]
-        shape_itps[label], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
-    end
-
-    # σ_nominal / σ_mc_nominal ratio interpolations
-    ratio_itps = Dict{String, Dict{String, Any}}()
-    for ch in (cc_channels..., "NC")
-        ratio_itps[ch] = Dict{String, Any}()
-        for fk in flav_keys
-            nom = get_curve(wester_xsec, all_xsec, nominal_key, fk, ch, i_neut_last); mc_nom = get_curve(wester_xsec, all_xsec, mc_nominal_key, fk, ch, i_neut_last)
-            ratio = map(i -> mc_nom[i] > 0 ? nom[i] / mc_nom[i] : 1.0, eachindex(nom))
-            ratio_itps[ch][fk] = make_itp(ratio, E_grid)
-        end
-    end
-
-    # Returns fast eval closure (params) -> weight vector for a given MC component.
+    t = _h2o_pca_setup(cfg)
     function event_weights(E, genie_codes, flav::Symbol, interaction::Symbol, anti::Bool)
-        fk   = get_flavor_key(flav, anti)
-        n    = length(E)
-        Evec = vec(E); cvec = vec(genie_codes)
-
+        fk = get_flavor_key(flav, anti)
+        Ev = collect(vec(E))
         if interaction == :NC
-            baseline  = ratio_itps["NC"][fk].(Evec)
-            nc_sh_itp = anti ? shape_itps["NC_nubar"] : shape_itps["NC_nu"]
-            shape_val = nc_sh_itp.(Evec)
-            _anti     = anti
-            return function eval_nc(params)
-                T  = typeof(params.xsec_nc_norm)
-                r  = params.xsec_nc_nubar_ratio
-                nf = _anti ? 2r/(1+r) : 2/(1+r)
-                return max.(zero(T), baseline .* params.xsec_nc_norm .*
-                       (one(T) .+ params.xsec_nc_shape .* shape_val)) .* nf
-            end
-        else
-            # Precompute per-event, per-channel arrays (non-channel events stay 0.0)
-            b_subgev   = zeros(n); b_multigev = zeros(n); s_1p1h = zeros(n)
-            b_1pi      = zeros(n); s_1pi      = zeros(n)
-            b_dis      = zeros(n); s_dis      = zeros(n)
-            b_other    = zeros(n); s_other    = zeros(n)
-
-            for i in 1:n
-                e = Evec[i]; code = cvec[i]
-                if code == 0
-                    b = ratio_itps["CC1p1h"][fk](e); s = shape_itps["CC1p1h"](e)
-                    if e < 1.33; b_subgev[i] = b; else; b_multigev[i] = b; end
-                    s_1p1h[i] = s
-                elseif code == 1
-                    b_1pi[i] = ratio_itps["CC1pi"][fk](e); s_1pi[i] = shape_itps["CC1pi"](e)
-                elseif code == 2
-                    b_dis[i] = ratio_itps["CCDIS"][fk](e);  s_dis[i] = shape_itps["CCDIS"](e)
-                else
-                    b_other[i] = ratio_itps["CCother"][fk](e); s_other[i] = shape_itps["CCother"](e)
-                end
-            end
-
-            _anti = anti; _flav = flav
-            return function eval_cc(params)
-                T   = typeof(params.xsec_cc1p1h_subgev_norm)
-                r1  = params.xsec_cc1p1h_nubar_ratio;  r_fl = params.xsec_cc1p1h_nue_numu_ratio
-                r2  = params.xsec_cc1pi_nubar_ratio;   r3   = params.xsec_ccdis_nubar_ratio
-                r4  = params.xsec_ccother_nubar_ratio
-
-                nf1  = _anti ? 2r1/(1+r1)  : 2/(1+r1)
-                nf_fl = _flav == :nue ? 2r_fl/(1+r_fl) : 2/(1+r_fl)
-                nf2  = _anti ? 2r2/(1+r2)  : 2/(1+r2)
-                nf3  = _anti ? 2r3/(1+r3)  : 2/(1+r3)
-                nf4  = _anti ? 2r4/(1+r4)  : 2/(1+r4)
-
-                w1 = max.(zero(T),
-                    (b_subgev .* params.xsec_cc1p1h_subgev_norm .+
-                     b_multigev .* params.xsec_cc1p1h_multigev_norm) .*
-                    (one(T) .+ params.xsec_cc1p1h_shape .* s_1p1h)) .* (nf1 * nf_fl)
-
-                w2 = max.(zero(T),
-                    b_1pi .* params.xsec_cc1pi_norm .*
-                    (one(T) .+ params.xsec_cc1pi_shape .* s_1pi)) .* nf2
-
-                w3 = max.(zero(T),
-                    b_dis .* params.xsec_ccdis_norm .*
-                    (one(T) .+ params.xsec_ccdis_shape .* s_dis)) .* nf3
-
-                w4 = max.(zero(T),
-                    b_other .* params.xsec_ccother_norm .*
-                    (one(T) .+ params.xsec_ccother_shape .* s_other)) .* nf4
-
-                result = w1 .+ w2 .+ w3 .+ w4
-                return _flav == :nutau ? result .* params.xsec_nutau_cc_norm : result
-            end
+            base, sh = t.ratio["NC"][fk].(Ev), h2o_nc_shape(t, anti).(Ev)
+            return params -> h2o_nc(base, sh, anti, params)
         end
+        tabs = h2o_event_tables(t, Ev, genie_codes, flav, anti)
+        return params -> h2o_event_eval(t, tabs, Ev, flav, anti, params)
     end
-
-    return event_weights
 end
 
-# Grid-based precomputed path for H2O_PCA reweighting on a fixed true-energy grid.
-# Used by experiments (e.g. ORCA) that only have CC/NC labels per event, not sub-channel codes.
-# Called once at configure time; returns (E_grid, flav, interaction, anti) -> (params -> weights).
-# The weight at energy bin k is:
-#   CC: [Σ_ch σ_nominal_ch(E_k) × norm_ch × shape_ch] / σ_mc_nominal_total_CC(E_k)
-#   NC: σ_nominal_NC(E_k) × norm_nc × shape_nc / σ_mc_nominal_NC(E_k)
-# In get_expected, events are weighted by indexing into this array with E_true_bin.
+# Reweighting of a simulation without interaction codes on a true-energy grid: CC weight
+# Σ_ch σ_nominal,ch(E) × norm_ch × shape_ch / σ_mc,CC(E); NC σ_nominal,NC × norm × shape / σ_mc,NC.
 function get_grid_weights(cfg::H2O_PCA)
-    E_grid, wester_xsec, all_xsec = _load_genie_data()
-
-    nominal_key    = string(cfg.nominal)
-    mc_nominal_key = string(cfg.mc_nominal)
-
-    # All CC channels in the nominal model (NEUT has CC2p2h; G00_00a does not)
-    cc_channels    = ("CC1p1h", "CC2p2h", "CC1pi", "CCDIS", "CCother")
-    # Only channels present in the MC generator (denominator)
-    mc_cc_channels = ("CC1p1h", "CC1pi", "CCDIS", "CCother")
-    flav_keys      = ("nue", "nuebar", "numu", "numubar")
-
-    i_neut_last = findlast(E_grid .<= 26.0)
-
-    # Shape PCA (same setup as get_event_weights)
-    E_valid_max  = 30.0
-    E_fade_start = 20.0
-    taper = [E_grid[i] < E_fade_start ? 1.0 :
-             E_grid[i] > E_valid_max  ? 0.0 :
-             (1.0 - (E_grid[i] - E_fade_start) / (E_valid_max - E_fade_start))
-             for i in 1:length(E_grid)]
-    E_pca_mask = E_grid .<= E_valid_max
-
-    genie_tunes = ["G18_10a", "G21_11a", "G18_02a"]
-    alt_keys = [t for t in genie_tunes if t != nominal_key]
-    if nominal_key != "NEUT5_4_0"; push!(alt_keys, "NEUT5_4_0"); end
-
-    shape_itps = Dict{String, Any}()
-    for ch in (cc_channels..., "NC")
-        nom  = get_ch_curve(wester_xsec, all_xsec, nominal_key, ch, i_neut_last)
-        alts = [get_ch_curve(wester_xsec, all_xsec, k, ch, i_neut_last) for k in alt_keys]
-        shape_itps[ch], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
-    end
-    for (label, flav) in [("NC_nu", "nue"), ("NC_nubar", "nuebar")]
-        nom  = get_curve(wester_xsec, all_xsec, nominal_key, flav, "NC", i_neut_last)
-        alts = [get_curve(wester_xsec, all_xsec, k, flav, "NC", i_neut_last) for k in alt_keys]
-        shape_itps[label], _ = compute_shape_pca(nom, alts, E_grid, E_pca_mask, taper)
-    end
-
-    # Absolute σ_nominal per channel per flavor
-    nom_xsec_itps = Dict{String, Dict{String, Any}}()
-    for fk in flav_keys
-        nom_xsec_itps[fk] = Dict{String, Any}()
-        for ch in (cc_channels..., "NC")
-            nom_xsec_itps[fk][ch] = make_itp(get_curve(wester_xsec, all_xsec, nominal_key, fk, ch, i_neut_last), E_grid)
-        end
-    end
-
-    # MC total CC denominator per flavor (only channels present in mc_nominal)
-    mc_total_cc_itps = Dict{String, Any}()
-    for fk in flav_keys
-        total = sum(get_curve(wester_xsec, all_xsec, mc_nominal_key, fk, ch, i_neut_last) for ch in mc_cc_channels)
-        mc_total_cc_itps[fk] = make_itp(max.(total, 1e-30), E_grid)
-    end
-
-    # NC ratio: σ_nominal_NC / σ_mc_nominal_NC per flavor
-    nc_ratio_itps = Dict{String, Any}()
-    for fk in flav_keys
-        nom_nc = get_curve(wester_xsec, all_xsec, nominal_key,    fk, "NC", i_neut_last)
-        mc_nc  = get_curve(wester_xsec, all_xsec, mc_nominal_key, fk, "NC", i_neut_last)
-        ratio  = map(i -> mc_nc[i] > 0 ? nom_nc[i] / mc_nc[i] : 1.0, eachindex(nom_nc))
-        nc_ratio_itps[fk] = make_itp(ratio, E_grid)
-    end
-
-    # Returns a closure (params) -> weight_vector of length(E_eval).
-    # All interpolations are evaluated at configure/asset-load time; eval is pure arithmetic.
+    t = _h2o_pca_setup(cfg)
     function grid_weights(E_eval, flav::Symbol, interaction::Symbol, anti::Bool)
-        fk   = get_flavor_key(flav, anti)
-        n    = length(E_eval)
-        Evec = vec(E_eval)
-
+        fk = get_flavor_key(flav, anti)
+        Ev = collect(vec(E_eval))
         if interaction == :NC
-            baseline  = nc_ratio_itps[fk].(Evec)
-            nc_sh_itp = anti ? shape_itps["NC_nubar"] : shape_itps["NC_nu"]
-            shape_val = nc_sh_itp.(Evec)
-            _anti = anti
-            return function eval_nc_grid(params)
-                T  = typeof(params.xsec_nc_norm)
-                r  = params.xsec_nc_nubar_ratio
-                nf = _anti ? 2r/(1+r) : 2/(1+r)
-                return max.(zero(T), baseline .* params.xsec_nc_norm .*
-                       (one(T) .+ params.xsec_nc_shape .* shape_val)) .* nf
-            end
-        else  # CC: weight = Σ_ch σ_nominal_ch(E) × norm_ch × shape_ch / σ_mc_total_cc(E)
-            mc_denom = mc_total_cc_itps[fk].(Evec)
-
-            b_subgev = zeros(n); b_multigev = zeros(n); s_1p1h  = zeros(n)
-            b_2p2h   = zeros(n);                        s_2p2h  = zeros(n)
-            b_1pi    = zeros(n);                        s_1pi   = zeros(n)
-            b_dis    = zeros(n);                        s_dis   = zeros(n)
-            b_other  = zeros(n);                        s_other = zeros(n)
-
-            for i in 1:n
-                e = Evec[i]; d = mc_denom[i]
-                σ1 = nom_xsec_itps[fk]["CC1p1h"](e) / d
-                if e < 1.33; b_subgev[i] = σ1; else; b_multigev[i] = σ1; end
-                s_1p1h[i]  = shape_itps["CC1p1h"](e)
-                b_2p2h[i]  = nom_xsec_itps[fk]["CC2p2h"](e) / d
-                s_2p2h[i]  = shape_itps["CC2p2h"](e)
-                b_1pi[i]   = nom_xsec_itps[fk]["CC1pi"](e)   / d
-                s_1pi[i]   = shape_itps["CC1pi"](e)
-                b_dis[i]   = nom_xsec_itps[fk]["CCDIS"](e)   / d
-                s_dis[i]   = shape_itps["CCDIS"](e)
-                b_other[i] = nom_xsec_itps[fk]["CCother"](e) / d
-                s_other[i] = shape_itps["CCother"](e)
-            end
-
-            _anti = anti; _flav = flav
-            return function eval_cc_grid(params)
-                T    = typeof(params.xsec_cc1p1h_subgev_norm)
-                r1   = params.xsec_cc1p1h_nubar_ratio;  r_fl = params.xsec_cc1p1h_nue_numu_ratio
-                r2   = params.xsec_cc2p2h_nubar_ratio;  r3   = params.xsec_cc1pi_nubar_ratio
-                r4   = params.xsec_ccdis_nubar_ratio;   r5   = params.xsec_ccother_nubar_ratio
-
-                nf1  = _anti ? 2r1/(1+r1)  : 2/(1+r1)
-                nf_fl = _flav == :nue ? 2r_fl/(1+r_fl) : 2/(1+r_fl)
-                nf2  = _anti ? 2r2/(1+r2)  : 2/(1+r2)
-                nf3  = _anti ? 2r3/(1+r3)  : 2/(1+r3)
-                nf4  = _anti ? 2r4/(1+r4)  : 2/(1+r4)
-                nf5  = _anti ? 2r5/(1+r5)  : 2/(1+r5)
-
-                w1 = max.(zero(T),
-                    (b_subgev .* params.xsec_cc1p1h_subgev_norm .+
-                     b_multigev .* params.xsec_cc1p1h_multigev_norm) .*
-                    (one(T) .+ params.xsec_cc1p1h_shape .* s_1p1h)) .* (nf1 * nf_fl)
-                w2 = max.(zero(T),
-                    b_2p2h .* params.xsec_cc2p2h_norm .*
-                    (one(T) .+ params.xsec_cc2p2h_shape .* s_2p2h)) .* nf2
-                w3 = max.(zero(T),
-                    b_1pi .* params.xsec_cc1pi_norm .*
-                    (one(T) .+ params.xsec_cc1pi_shape .* s_1pi)) .* nf3
-                w4 = max.(zero(T),
-                    b_dis .* params.xsec_ccdis_norm .*
-                    (one(T) .+ params.xsec_ccdis_shape .* s_dis)) .* nf4
-                w5 = max.(zero(T),
-                    b_other .* params.xsec_ccother_norm .*
-                    (one(T) .+ params.xsec_ccother_shape .* s_other)) .* nf5
-
-                result = w1 .+ w2 .+ w3 .+ w4 .+ w5
-                return _flav == :nutau ? result .* params.xsec_nutau_cc_norm : result
-            end
+            base, sh = t.ratio["NC"][fk].(Ev), h2o_nc_shape(t, anti).(Ev)
+            return params -> h2o_nc(base, sh, anti, params)
         end
+        denom = t.mc_total_cc[fk].(Ev)
+        tabs = map(ch -> ch => (base = t.σ_nom[fk][ch].(Ev) ./ denom, shape = t.shape[ch].(Ev)), H2O_CC_CHANNELS)
+        return params -> h2o_event_eval(t, tabs, Ev, flav, anti, params)
     end
-
-    return grid_weights
 end
+
+"""
+    get_weights(cfg::Union{H2O_PCA, Differential_H2O})
+
+`weights(E; flavour, anti, current, ...)` = `dσdE(params) / dσdE(nominal params)`: the model's change
+relative to its nominal curves (target and generator are ignored: the model is for water, and its
+nominal is the generator). Multiply the experiment's nominal cross section by it.
+"""
+function get_weights(cfg::Union{H2O_PCA, Differential_H2O})
+    dσ = get_dσdE(cfg)
+    p0 = get_params(cfg)
+    function weights(E; flavour::Symbol, anti::Bool, current::Symbol, kwargs...)
+        Ev = collect(Float64, vec(E))
+        d0 = dσ(Ev, flavour, current, anti, p0)
+        inv0 = ifelse.(d0 .> 0, 1 ./ max.(d0, 1e-300), 0.0)
+        params -> dσ(Ev, flavour, current, anti, params) .* inv0
+    end
+end
+
+"""
+    event_weights(xsec, E, current; flavour, anti, target, generator, process = :all) -> (params -> weights)
+
+Per-event cross-section weights for events of mixed currents (`current[i] ∈ (:CC, :NC)`), built from
+`xsec.weights` per current; `process` is `:all` or one process per event (ignored for NC events).
+"""
+function event_weights(xs, E, current::AbstractArray{Symbol}; flavour::Symbol, anti::Bool, target::Symbol,
+                       generator::Symbol, process = :all)
+    current = vec(current)
+    process = process isa AbstractArray ? vec(process) : process
+    idx_nc = findall(current .=== :NC)
+    idx_cc = findall(current .!== :NC)
+    Ev = collect(Float64, vec(E))
+    wnc = xs.weights(Ev[idx_nc]; flavour, anti, current = :NC, target, generator)
+    wcc = xs.weights(Ev[idx_cc]; flavour, anti, current = :CC, target, generator,
+                     process = process isa AbstractVector ? process[idx_cc] : process)
+    n = length(Ev)
+    function (params)
+        a = wnc(params); b = wcc(params)
+        w = Vector{promote_type(eltype(a), eltype(b))}(undef, n)
+        w[idx_nc] .= a
+        w[idx_cc] .= b
+        w
+    end
+end
+
+include("xsec_correlated.jl")
 
 end

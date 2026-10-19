@@ -252,6 +252,26 @@ factor = xsec.scale(:numu, :cc, params)   # :cc or :nc; flavour as Symbol
 
 This is mostly used internally by experiments. Direct use is mainly relevant if you want to study cross-section systematic effects in isolation.
 
+All cross-section models also provide a common reweighting interface. An experiment builds closures once,
+declaring its target and the cross-section model of its simulation, and evaluates them with the parameters:
+
+```julia
+w = xsec.weights(E_true; flavour = :numu, anti = false, current = :CC, target = :H2O,
+                 generator = :GENIE2_12, process = :all)   # or one process per event, e.g. [:QE, :RES, :DIS, ...]
+w(params)   # weights (or a scalar for models without energy dependence)
+```
+
+For global fits, give all experiments the same correlated model, so that one parameter set moves all of them:
+
+```julia
+xs = Newtrinos.xsec.configure(Newtrinos.xsec.CorrelatedXsec())
+experiments = (
+    deepcore = Newtrinos.deepcore_8y.configure(merge(Newtrinos.deepcore_8y.default_physics(), (; xsec = xs))),
+    super_k  = Newtrinos.super_k.configure(merge(Newtrinos.super_k.default_physics(), (; xsec = xs))),
+    t2k      = Newtrinos.t2k.configure(merge(Newtrinos.t2k.default_physics(), (; xsec = xs))),
+)
+```
+
 ---
 
 ## Summary
@@ -271,5 +291,6 @@ This is mostly used internally by experiments. Direct use is mainly relevant if 
 | Nominal atmospheric flux | `atm_flux.nominal_flux(E_grid, cz_grid)` | `Table` with flux columns |
 | Systematic flux shifts | `atm_flux.sys_flux(flux, params)` | `NamedTuple` of flux arrays |
 | Cross-section scale | `xsec.scale(flav, interaction, params)` | scalar |
+| Cross-section reweighting | `xsec.weights(E; flavour, anti, current, target, generator, process)` | `params -> weights` |
 
 See the [Physics API Reference](../api/physics.md) for the full list of types, functions, and configuration options.

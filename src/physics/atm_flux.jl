@@ -64,7 +64,7 @@ Barr et al., "Uncertainties in Atmospheric Neutrino Fluxes." The systematics cov
 | `atm_flux_numunumubar_sigma`       | ``\\nu_\\mu / \\bar\\nu_\\mu`` ratio uncertainty |
 | `atm_flux_nuenumu_sigma`           | ``\\nu_e / \\nu_\\mu`` ratio uncertainty    |
 | `atm_flux_delta_spectral_index`    | Spectral index tilt                       |
-| `atm_flux_uphorizonzal_sigma`      | Up/horizontal anisotropy                  |
+| `atm_flux_uphorizontal_sigma`      | Up/horizontal anisotropy                  |
 | `atm_flux_updown_sigma`            | Up/down asymmetry                         |
 
 All sigma parameters are centred at 0 with unit Gaussian priors (truncated at ±3).
@@ -189,7 +189,7 @@ function get_params(cfg::Barr)
         atm_flux_numunumubar_sigma = 0.,
         atm_flux_nuenumu_sigma = 0.,
         atm_flux_delta_spectral_index = 0.,
-        atm_flux_uphorizonzal_sigma = 0.,
+        atm_flux_uphorizontal_sigma = 0.,
         atm_flux_updown_sigma = 0.,
         )
 end
@@ -242,7 +242,7 @@ function get_priors(cfg::Barr)
         atm_flux_numunumubar_sigma = Truncated(Normal(0., 1.), -3, 3),
         atm_flux_nuenumu_sigma = Truncated(Normal(0., 1.), -3, 3),
         atm_flux_delta_spectral_index = Truncated(Normal(0., 0.1), -0.3, 0.3),
-        atm_flux_uphorizonzal_sigma = Truncated(Normal(0., 1.), -3, 3),
+        atm_flux_uphorizontal_sigma = Truncated(Normal(0., 1.), -3, 3),
         atm_flux_updown_sigma = Truncated(Normal(0., 1.), -3, 3),
         )
 end
@@ -516,13 +516,13 @@ end
     # up/horizontal
     # nue
     uncert = (-0.43*log10e^5 + 1.17*log10e^4 + 0.89*log10e^3 - 0.36*log10e^2 - 1.59*log10e + 1.96) / 100.
-    f_uphorizontal = uphorizontal(cz, 1 + uncert * params.atm_flux_uphorizonzal_sigma)
+    f_uphorizontal = uphorizontal(cz, 1 + uncert * params.atm_flux_uphorizontal_sigma)
     flux_nue3 = flux_nue2 * f_spectral_shift * f_uphorizontal * f_updown
     flux_nuebar3 = flux_nuebar2 * f_spectral_shift * f_uphorizontal * f_updown
 
     # numu
     uncert = (-0.16*log10e^5 + 0.45*log10e^4 + 0.48*log10e^3 + 0.17*log10e^2 - 1.88*log10e + 1.88) / 100.
-    f_uphorizontal = uphorizontal(cz, 1 + uncert * params.atm_flux_uphorizonzal_sigma)
+    f_uphorizontal = uphorizontal(cz, 1 + uncert * params.atm_flux_uphorizontal_sigma)
     flux_numu3 = flux_numu2 * f_spectral_shift * f_uphorizontal * f_updown
     flux_numubar3 = flux_numubar2 * f_spectral_shift * f_uphorizontal * f_updown
 

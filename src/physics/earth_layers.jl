@@ -8,7 +8,7 @@ using Distributions
 
 using ..Newtrinos
 export configure
-export PREM, VariableDensity
+export PREM, VariableDensity, PREM_discontinuities
 
 const datadir = @__DIR__
 
@@ -39,12 +39,45 @@ zones defined by density boundaries.
   `zones`), rather than a single value assumed constant across all layers.
 - `atm_heihgt::Float64 = 20.`: atmospheric shell thickness [km] added above the Earth's
   surface (density = 0).
+- `continental::Bool = false`: replace PREM's global 3 km ocean layer (1.02 g/cm³) by upper-crust
+  density (2.6 g/cm³), for detectors in continental rock. Matters for near-horizon paths (e.g.
+  the solar day/night asymmetry, where ~200 km of a grazing night path at Kamioka would
+  otherwise be water). Density zones that become empty are dropped.
 """
 @kwdef struct PREM <: DensityModel
     zones::Array{Float64} = [0., 4., 7.5, 12.5, 13.1]
     p_fractions::Vector{Float64} = [0.496, 0.494, 0.468, 0.466]  # Ye per density zone
     atm_heihgt::Float64 = 20.
+    continental::Bool = false
 end
+
+# PREM table, with the ocean replaced by upper crust for `continental` models
+function _prem_table(cfg::PREM)
+    PREM = CSV.read(joinpath(datadir, "PREM_1s.csv"), DataFrame, header=["radius","depth","density","Vpv","Vph","Vsv","Vsh","eta","Q-mu","Q-kappa"])
+    if cfg.continental
+        PREM.density[PREM.density .== 1.02] .= 2.6
+    end
+    PREM
+end
+
+# indices of the density zones that contain PREM rows
+_nonempty_zones(cfg::PREM, PREM) = [i for i in 1:length(cfg.zones)-1 if any((PREM.density .< cfg.zones[i+1]) .& (PREM.density .>= cfg.zones[i]))]
+
+"""
+    PREM_discontinuities(; continental=false) -> PREM
+
+[`PREM`](@ref) zoning that follows the density discontinuities of the PREM table (ocean,
+upper and lower crust, LID/low-velocity zone, transition zone, lower mantle, outer and inner
+core), with the mantle gradient split into a few zones. Together with chord-averaged densities
+([`get_compute_chord_paths`](@ref)) this reproduces the continuous PREM profile for Earth
+regeneration of solar neutrinos, whose oscillation length in the Earth (~300 km) resolves the
+crust and upper mantle.
+"""
+PREM_discontinuities(; continental::Bool=false) = PREM(
+    zones = [0.0, 2.0, 2.75, 3.0, 3.45, 3.75, 4.0, 4.6, 5.0, 5.3, 5.6, 10.5, 11.5, 12.2, 13.1],
+    p_fractions = [0.555, 0.495, 0.495, 0.495, 0.495, 0.495, 0.495, 0.495, 0.495, 0.495, 0.467, 0.467, 0.467, 0.467],
+    continental = continental,
+)
 
 """
     VariableDensity <: DensityModel
@@ -92,6 +125,7 @@ module's matter-effect calculations (see [`Newtrinos.osc.SI`](@ref)).
     priors::NamedTuple
     compute_layers::Function
     compute_paths::Function
+    compute_chord_paths::Function
 end
 
 """
@@ -120,7 +154,8 @@ function configure(cfg::PREM=PREM())
         params = (;),
         priors = (;),
         compute_layers = get_compute_layers(cfg),
-        compute_paths = compute_paths
+        compute_paths = compute_paths,
+        compute_chord_paths = get_compute_chord_paths(cfg)
         )
 end
 
@@ -147,7 +182,8 @@ function configure(cfg::VariableDensity)
         params = (electron_density_scale = 1.0,),
         priors = (electron_density_scale = Normal(1.0, 0.068),),
         compute_layers = get_compute_layers(cfg.prem),
-        compute_paths = compute_paths
+        compute_paths = compute_paths,
+        compute_chord_paths = get_compute_chord_paths(cfg.prem)
         )
 end
 
@@ -182,7 +218,7 @@ A zero-argument closure `compute_layers() -> StructVector{Layer}`.
 function get_compute_layers(cfg::PREM)
     function compute_layers()
 
-        PREM = CSV.read(joinpath(datadir, "PREM_1s.csv"), DataFrame, header=["radius","depth","density","Vpv","Vph","Vsv","Vsh","eta","Q-mu","Q-kappa"])
+        PREM = _prem_table(cfg)
         # density boundaries to define the constant density zones
 
         radii = Float64[]
@@ -191,13 +227,14 @@ function get_compute_layers(cfg::PREM)
         push!(radii, 6371+cfg.atm_heihgt)
         push!(ave_densities, 0.)
 
-        for i in 1:length(cfg.zones)-1
+        zones = _nonempty_zones(cfg, PREM)
+        for i in zones
             mask = (PREM.density .< cfg.zones[i+1]) .& (PREM.density .>= cfg.zones[i])
             push!(radii, maximum(PREM.radius[mask]))
             push!(ave_densities, _radial_mean(PREM.radius[mask], PREM.density[mask]))
         end
 
-        ye = vcat([0.5], cfg.p_fractions)  # prepend atmosphere Ye (density=0, so value irrelevant)
+        ye = vcat([0.5], cfg.p_fractions[zones])  # prepend atmosphere Ye (density=0, so value irrelevant)
         layers = StructArray{Newtrinos.Layer}((radii, ave_densities .* ye, ave_densities .* (1 .- ye)))
     end
 end
@@ -337,6 +374,83 @@ end
 
 function compute_paths(cz::AbstractArray, layers; r_detector = 6369)
     VectorOfVectors{Newtrinos.Path}(compute_paths.(cz, Ref(layers), r_detector));
+end
+
+"""
+    get_compute_chord_paths(cfg::PREM) -> Function
+
+Construct `compute_chord_paths(cz, layers; r_detector=6369, n_samples=20) -> (paths, chord_layers)`.
+
+The constant-density zones of [`get_compute_layers`](@ref) carry the radially averaged PREM
+density of each zone, but a chord through a zone samples a path-dependent part of the density
+gradient (a shallow chord sees mostly the top of a zone). `compute_chord_paths` keeps the zone
+geometry of [`compute_paths`](@ref), but gives every segment of every path its own
+[`Newtrinos.osc.Layer`](@ref), with the PREM density averaged along that chord segment
+(midpoint rule with `n_samples` points). The atmosphere layer (index 1) is shared.
+
+The returned `chord_layers` and `paths` can be passed to the oscillation probability in place
+of `layers` and `compute_paths(cz, layers)`; `layers` must come from `compute_layers()` of the
+same configuration. With finite `max_length` [km], each segment is further split into equal
+pieces no longer than `max_length`, each with its own chord-averaged density, which resolves
+density gradients within a zone along the chord.
+"""
+function get_compute_chord_paths(cfg::PREM)
+    profiles = _zone_profiles(cfg)
+    function compute_chord_paths(cz::AbstractArray, layers; r_detector = 6369, n_samples = 20, max_length = Inf)
+        paths = compute_paths(cz, layers; r_detector)
+        radius = [layers.radius[1]]
+        p_density = [layers.p_density[1]]
+        n_density = [layers.n_density[1]]
+        chord_paths = map(zip(cz, paths)) do (c, path)
+            L = sum(seg.length for seg in path)
+            t = 0.0  # distance from the entry point
+            out = Newtrinos.Path[]
+            for seg in path
+                if seg.layer_idx == 1
+                    push!(out, seg)
+                else
+                    r_zone, ρ_zone = profiles[seg.layer_idx - 1]
+                    ye = cfg.p_fractions[seg.layer_idx - 1]
+                    n_pieces = max(1, ceil(Int, seg.length / max_length))
+                    ℓ = seg.length / n_pieces
+                    for j in 1:n_pieces
+                        ρ = 0.0
+                        for k in 1:n_samples
+                            s = L - (t + (j - 1 + (k - 0.5) / n_samples) * ℓ)  # distance from the detector
+                            r = sqrt(max(r_detector^2 + s^2 + 2 * r_detector * s * c, 0.0))
+                            ρ += _interp_flat(r_zone, ρ_zone, r) / n_samples
+                        end
+                        push!(radius, layers.radius[seg.layer_idx])
+                        push!(p_density, ρ * ye)
+                        push!(n_density, ρ * (1 - ye))
+                        push!(out, Newtrinos.Path(ℓ, length(radius)))
+                    end
+                end
+                t += seg.length
+            end
+            out
+        end
+        VectorOfVectors{Newtrinos.Path}(chord_paths), StructArray{Newtrinos.Layer}((radius, p_density, n_density))
+    end
+end
+
+# PREM radial density profile restricted to each density zone, sorted by radius
+function _zone_profiles(cfg::PREM)
+    PREM = _prem_table(cfg)
+    map(_nonempty_zones(cfg, PREM)) do i
+        mask = (PREM.density .< cfg.zones[i+1]) .& (PREM.density .>= cfg.zones[i])
+        order = sortperm(PREM.radius[mask])
+        Float64.(PREM.radius[mask][order]), Float64.(PREM.density[mask][order])
+    end
+end
+
+# linear interpolation, constant beyond the end points
+function _interp_flat(x, y, xi)
+    xi <= x[1] && return y[1]
+    xi >= x[end] && return y[end]
+    j = searchsortedlast(x, xi)
+    x[j+1] == x[j] && return y[j]
+    y[j] + (y[j+1] - y[j]) * (xi - x[j]) / (x[j+1] - x[j])
 end
 
 """

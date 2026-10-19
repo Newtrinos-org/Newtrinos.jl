@@ -95,10 +95,12 @@ function configure(; datadir = @__DIR__, use_flux_data::Bool = true, ff_model::S
     assets = get_assets(datadir)
 
     # Configure the SNS flux module
+    # flux tables normalised to the release's 3.198e23 POT and 0.0848 ν per flavour per proton
     sns_flux = Newtrinos.sns_flux.configure(
         exposure = assets.exposure,
         distance = assets.distance,
         use_data = use_flux_data,
+        pot = assets.pot,
         sns_flux_kwargs...
     )
 
@@ -168,8 +170,8 @@ function get_assets(datadir = @__DIR__, sns_flux = nothing)
     er_centers = midpoints(er_edges)
 
     pe_width = 5.0
-    # Custom PE bin edges
-    out_edges = [0, 12, 16, 20, 24, 28, 32, 36, 40, 46, 54, 64, 76, 100, 148, 196]
+    # PE bin edges: the CEvNS fit region of the paper, PE < 60 (and t_rec < 6 μs)
+    out_edges = [0, 12, 16, 20, 24, 28, 32, 36, 40, 46, 54, 60]
     out_centers = midpoints(out_edges)  # Bin centers: [5, 10, 15, ..., 200]
 
     # Initialize placeholders for binned data
@@ -213,6 +215,7 @@ function get_assets(datadir = @__DIR__, sns_flux = nothing)
         # Perform 2D binning for unbinned event lists (PE, timestamp)
         #@info "Binning unbinned CsI data"
 
+        ssBkg_df_all = copy(ssBkg_df)
         # Filter out events outside the range of out_edges and time_bins
         valid_ssBkg = filter(row -> row[1] >= first(out_edges) && row[1] <= last(out_edges) &&
                               row[2] >= first(time_edges) && row[2] <= last(time_edges), eachrow(ssBkg_df))
@@ -226,8 +229,14 @@ function get_assets(datadir = @__DIR__, sns_flux = nothing)
         # Perform binning
         ssBkg_hist = fit(Histogram, (ssBkg_df[:, 1], ssBkg_df[:, 2]), (out_edges, time_edges))
         observed_hist = fit(Histogram, (observed_df[:, 1], observed_df[:, 2]), (out_edges, time_edges))
-        ssBkg = ssBkg_hist.weights
         observed = observed_hist.weights
+        # steady-state background as prescribed by the release: PE distribution of all AC events (no PE–time
+        # correlation), exponential time distribution with k = −0.0494/μs, normalised to the AC events in the fit region
+        ac_all = filter(row -> row[1] >= first(out_edges) && row[1] < last(out_edges), eachrow(ssBkg_df_all))
+        ss_pe = fit(Histogram, [r[1] for r in ac_all], out_edges).weights
+        k_ss = 0.0494e-3   # 1/ns
+        ss_t = [exp(-k_ss * time_edges[i]) - exp(-k_ss * time_edges[i+1]) for i in 1:length(time_edges)-1]
+        ssBkg = reshape(ss_pe ./ sum(ss_pe), :, 1) .* reshape(ss_t ./ sum(ss_t), 1, :) .* sum(ssBkg_hist.weights)
 
         # BRN and NIN are provided as uncorrelated PE and time projections.
         # PE distributions already include epsilon_PE, while time distributions do not include epsilon_T.
@@ -238,12 +247,10 @@ function get_assets(datadir = @__DIR__, sns_flux = nothing)
         brn_time_source_edges = edges_from_centers(brnTrec_df[:, 1])
         nin_time_source_edges = edges_from_centers(ninTrec_df[:, 1])
 
-        if sum(brn_pe_pdf) > 0
-            brn_pe_pdf ./= sum(brn_pe_pdf)
-        end
-        if sum(nin_pe_pdf) > 0
-            nin_pe_pdf ./= sum(nin_pe_pdf)
-        end
+        # normalised to the full PE distributions of the release, so that the templates keep the fraction of events
+        # inside the PE range of the fit
+        brn_pe_pdf ./= sum(brnPE_df[:, 2])
+        nin_pe_pdf ./= sum(ninPE_df[:, 2])
 
         brn_time_counts = rebin_histogram_1d(brn_time_source, brn_time_source_edges, time_edges)
         nin_time_counts = rebin_histogram_1d(nin_time_source, nin_time_source_edges, time_edges)
@@ -263,6 +270,7 @@ function get_assets(datadir = @__DIR__, sns_flux = nothing)
 
     distance = 1930  # cm
     exposure = 13.99  # GWh
+    pot = 3.198e23    # protons on target of the exposure
     eff_nominal = (1.32045, 0.285979, 10.8646, -0.333322)
     eff_delta = (0.02345, -0.000613, -1.01862, -0.023042)
     qf_nominal = (0.0554628, 4.30681, -111.707, 840.384)
@@ -296,6 +304,7 @@ function get_assets(datadir = @__DIR__, sns_flux = nothing)
         ss_bkg_nom,
         distance,
         exposure,
+        pot,
         time_efficiency,
         eff_nominal,
         eff_delta,
@@ -384,17 +393,38 @@ function gamma_pdf_integrated_over_bins(Eee, pe_centers, pe_edges, resolution, l
     return probs
 end
 
-# Single ER-bin response column, AD-safe
+# Single ER-bin response column, AD-safe: per PE bin ∫_bin Γ(PE | Eee) ε(PE) dPE (composite Simpson on ≤ 1 PE
+# sub-steps), with the Gamma distribution normalised over the PE range of the analysis. The efficiency is applied at
+# the reconstructed PE within each bin, not at the bin centre: ε rises steeply between 7 and 15 PE, and at the centre of
+# the 0–12 PE bin it is negative (clamped to zero), which removed all CEvNS events in 8–12 PE.
 function response_matrix_per_er_bin(keVnr, params, assets)
-    keVee = qf(keVnr, params, assets)            # scalar (possibly Dual)
-    weights = gamma_pdf_integrated_over_bins(keVee, assets.out_centers, assets.out_edges,
-                                             assets.resolution, assets.light_yield)
-    s = sum(weights)
-    if iszero(s)
-        return weights  # already zeros of correct type
+    Eee = qf(keVnr, params, assets)            # scalar (possibly Dual)
+    edges = assets.out_edges
+    T = promote_type(typeof(Eee), eltype(csi_eff_coefficients(params, assets)), Float64)
+    n_bins = length(edges) - 1
+    col = zeros(T, n_bins)
+    (iszero(Eee) || !isfinite(Eee)) && return col
+    a = assets.resolution[1] / Eee
+    b = assets.resolution[2] * Eee
+    k = one(T) + b
+    θ = inv(a * (one(T) + b))
+    total = zero(T)
+    for i in 1:n_bins
+        lo, hi = edges[i], edges[i+1]
+        m = max(1, ceil(Int, (hi - lo) / 2))   # 2m Simpson intervals of ≤ 1 PE
+        h = (hi - lo) / (2m)
+        g_int = zero(T); ge_int = zero(T)
+        for j in 0:2m
+            x = lo + j * h
+            w = (j == 0 || j == 2m) ? 1 : (isodd(j) ? 4 : 2)
+            g = _gamma_pdf(x, k, θ)
+            g_int += w * g
+            ge_int += w * g * eff(x, params, assets)
+        end
+        total += g_int * h / 3
+        col[i] = ge_int * h / 3
     end
-    eff_vals = eff(assets.out_centers, params, assets)
-    return weights .* eff_vals
+    total > eps(T) && isfinite(total) ? col ./ total : zero(col)
 end
 
 # Full PE response matrix, AD-safe
