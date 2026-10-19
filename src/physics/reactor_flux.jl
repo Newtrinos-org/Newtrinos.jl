@@ -131,18 +131,6 @@ function get_priors(flux::DayaBayFlux; datadir = datadir)
     mu = [data["U235"][1], data["U238"][1], data["Pu239"][1], data["Pu241"][1]]
     var = [data["U235"][2], data["U238"][2], data["Pu239"][2], data["Pu241"][2]].^2
     energy_per_fission = Distributions.MvNormal(mu, Diagonal(var))
-    #energy_per_fission_U235 = Distributions.Normal(data["U235"][1], data["U235"][1])
-    #energy_per_fission_U238 = Distributions.Normal(data["U238"][1], data["U238"][1])
-    #energy_per_fission_Pu239 = Distributions.Normal(data["Pu239"][1], data["Pu239"][1])
-    #energy_per_fission_Pu241 = Distributions.Normal(data["Pu241"][1], data["Pu241"][1])
-
-    #energy_per_fission = (
-    #    U235=energy_per_fission_U235,
-    #    U238=energy_per_fission_U238,
-    #    Pu239=energy_per_fission_Pu239,
-    #    Pu241=energy_per_fission_Pu241,
-    #    )
-
 
     ## reactor thermal power uncertainty
     data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_thermal_power_uncertainty.yaml"))
@@ -151,7 +139,6 @@ function get_priors(flux::DayaBayFlux; datadir = datadir)
     reactor_thermal_power_scale = Distributions.MvNormal(mu .* ones(6), Diagonal(sigma.^2 .* ones(6)))
 
     ## fission fraction scale
-
     data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions_scale.yaml"), dicttype=OrderedDict{String,Any})
     fraction_scale = data["parameters"]["fission_fractions_scale"]
 
@@ -349,8 +336,11 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir)
     fissions_per_second_nom = nominal_thermal_power * GJ_to_MeV / sum(fractions .* default_params.energy_per_fission)
 
     function on_mesh(E::AbstractVector)
+        #shape for each isotope
         S = [f.(E) for f in isotope_shapes]
+        #relative NEQ correction for each isotope
         NEQ = [neq_rel_corr[i].(E) .* S[i] for i in 1:4]
+        #relative SNF correction for each isotope for each reactor
         SNF = [fissions_per_second_nom .* sum(fractions[i] .* S[i] for i in 1:4) .* snf_rel_corr[r].(E) for r in 1:6]
         # linear interpolation weights of the correction exponent between the edges (extrapolated outside)
         k = [clamp(searchsortedlast(spec_edges, e), 1, length(spec_edges) - 1) for e in E]
@@ -360,6 +350,7 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir)
             w = fission_fractions_scale .* fractions
             fissions_per_GJ = GJ_to_MeV * thermal_power_scale / sum(w .* energy_per_fission)
             main = fissions_per_GJ .* (w[1] .* S[1] .+ w[2] .* S[2] .+ w[3] .* S[3] .+ w[4] .* S[4])
+            # skips 2nd entry (U238 has no NEQ correction!)
             neq = fissions_per_GJ .* (neq_scale[1] * w[1] .* NEQ[1] .+ neq_scale[3] * w[3] .* NEQ[3] .+ neq_scale[4] * w[4] .* NEQ[4])
             correction = @. exp(pulls[k] + t * (pulls[k+1] - pulls[k]))
             return main, neq, snf_scale .* SNF[reac_idx], correction
