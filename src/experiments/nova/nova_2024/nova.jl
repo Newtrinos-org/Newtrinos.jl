@@ -17,11 +17,15 @@ reconstructed bin:
 
 - νμ / ν̄μ disappearance (4 quartiles per beam mode): `NoOscillations_Signal × ⟨P_μμ⟩` plus the
   released beam and cosmic backgrounds. The per-quartile energy resolutions are calibrated so that
-  `NoOscillations_Signal × ⟨P_μμ(θ_ref)⟩` reproduces the released `Oscillated_Signal`
-  (`calibrate_numu_resolution.jl`).
+  `NoOscillations_Signal × ⟨P_μμ(θ_ref)⟩` reproduces the shape of the released `Oscillated_Signal`
+  (`calibrate_numu_resolution.jl`); a fixed per-bin correction (as in the T2K module) then makes the
+  prediction exact at the reference point (the Gaussian response alone falls 1–3% short, mostly in the
+  oscillation dip).
 - νe / ν̄e appearance (low-PID core, high-PID core, peripheral; plus the FHC low-energy sample):
   each component is scaled by `⟨P(θ)⟩ / ⟨P(θ_ref)⟩` for its channel (signal νμ→νe, wrong-sign
-  ν̄μ→ν̄e, beam νe νe→νe, νμ CC νμ→νμ, ντ CC νμ→ντ); NC and cosmics are unchanged.
+  ν̄μ→ν̄e, beam νe νe→νe, νμ CC νμ→νμ, ντ CC νμ→ντ); NC and cosmics are unchanged. ντ CC
+  events are averaged over their own true-energy density (νμ spectrum × σ(ντ CC)/σ(νμ CC), above the τ
+  threshold), the same for all bins of a sample, as their reconstructed energy does not follow the true one.
 
 Systematics (priors sized to the rate and parameter uncertainties quoted after the ND
 extrapolation, PRL 136, 011802, Tab. I and text): νμ and RHC normalisations, νe signal and
@@ -220,6 +224,30 @@ function spectrum_proxy(Et, edges, values)
     [(E < edges[1] || E >= edges[end]) ? fl : dens[searchsortedlast(edges, E)] + fl for E in Et]
 end
 
+"""
+    tau_weights(Et, proxy, anti) -> Matrix (1 × length(Et))
+
+True-energy density of the ντ CC background: ντ CC events are produced only above the τ threshold and are
+reconstructed far below their true energy (the τ decay neutrinos escape), so their reconstructed energy carries no
+information on the true one. The density is the unoscillated νμ CC spectrum (released reconstructed spectrum as a
+proxy, continued exponentially above its last bin) times σ(ντ CC)/σ(νμ CC) of the simulation's generator, one row
+shared by all bins of a sample.
+"""
+function tau_weights(Et, proxy, anti)
+    edges, values = proxy.edges, proxy.values
+    dens = values ./ diff(edges)
+    c = (edges[1:end-1] .+ edges[2:end]) ./ 2
+    λ = (c[end] - c[end-1]) / log(max(dens[end-1], 1e-12) / max(dens[end], 1e-12))
+    fμ = [E < edges[end] ? (E < edges[1] ? 0.0 : dens[searchsortedlast(edges, E)]) : dens[end] * exp(-(E - c[end]) / max(λ, 0.1)) for E in Et]
+    X = Newtrinos.xsec
+    tabE = X.load_table().E
+    στ = X.at_energies(tabE, sum(X.generator_sigma(XSEC_GENERATOR, XSEC_TARGET, :nutau, anti, :CC)), Et)
+    σμ = X.at_energies(tabE, sum(X.generator_sigma(XSEC_GENERATOR, XSEC_TARGET, :numu, anti, :CC)), Et)
+    dE = vcat(diff(Et), diff(Et)[end])
+    w = fμ .* ifelse.(σμ .> 0, στ ./ max.(σμ, 1e-300), 0.0) .* dE
+    reshape(w ./ sum(w), 1, :)
+end
+
 function get_assets(physics; file = datafile, calibration::Symbol = :ref2024)
     cal = getproperty(CALIBRATIONS, calibration)
     @info "Loading NOvA 2024 data release"
@@ -229,7 +257,9 @@ function get_assets(physics; file = datafile, calibration::Symbol = :ref2024)
 
     layers = StructArray{Newtrinos.Layer}((radius = [6371.0], p_density = [RHO * YE], n_density = [RHO * (1 - YE)]))
     paths = VectorOfVectors{Newtrinos.Path}([[Newtrinos.Path(L_FD, 1)]])
-    Et = exp10.(range(log10(0.1), log10(10.0), 400))   # true-energy grid [GeV]
+    Et = exp10.(range(log10(0.1), log10(20.0), 460))   # true-energy grid [GeV] (up to 20 GeV for ντ CC)
+    # oscillation probabilities at the reference point of the released predictions
+    Pref = channel_probabilities(physics, Et, paths, layers, ref_params(calibration))
 
     # --- νμ / ν̄μ disappearance: 4 quartiles per beam mode ---
     numu_sample(mode, q) = begin
@@ -238,10 +268,18 @@ function get_assets(physics; file = datafile, calibration::Symbol = :ref2024)
         noosc = pred("$dir/NoOscillations_Signal")
         ranges = [(noosc.edges[b], noosc.edges[b+1]) for b in 1:length(noosc.values)]
         fE = spectrum_proxy(Et, noosc.edges, noosc.values)
-        (signal_noosc = noosc.values,
+        W = smearing_weights(Et, ranges, σ, fE; bias = getproperty(cal.numu_bias, Symbol(mode))[q])
+        # fixed per-bin correction such that the released oscillated signal is reproduced exactly at the reference
+        # point (the effective Gaussian response leaves 1–3% deficits, mostly in the oscillation dip, from
+        # non-Gaussian feed-down); as in the T2K module
+        osc_ref = pred("$dir/Oscillated_Signal").values
+        model_ref = noosc.values .* (W * (mode == "rhc" ? Pref.nubar.mm : Pref.nu.mm))
+        corr = ifelse.(model_ref .> 0, osc_ref ./ max.(model_ref, 1e-12), 1.0)
+        (signal_noosc = noosc.values .* corr,
          beam_bkg = pred("$dir/Oscillated_Beam_bkg").values,
          cosmic = pred("$dir/Cosmic_bkg").values,
-         W = smearing_weights(Et, ranges, σ, fE; bias = getproperty(cal.numu_bias, Symbol(mode))[q]),
+         W = W,
+         corr = corr,
          f_had = hadronic_fraction(σ),
          edges = noosc.edges,
          observed = data("$(mode == "fhc" ? "neutrino" : "antineutrino")_mode_numu_quartile$(q)"))
@@ -261,9 +299,10 @@ function get_assets(physics; file = datafile, calibration::Symbol = :ref2024)
         comp(name) = name == "Signal" ? pred("$dir/Signal").values[used] : to_data_layout(pred("$dir/$name").values)[used]
         proxy = pred("prediction_components_numu_$(mode)_all/NoOscillations_Signal")
         fE = spectrum_proxy(Et, proxy.edges, proxy.values)
+        Wτ = tau_weights(Et, proxy, mode == "rhc")
         (signal = comp("Signal"), wrong_sign = comp("Wrong_sign_bkg"), beam_nue = comp("Beam_nue_bkg"),
          numu_cc = comp("NumuCC_bkg"), tau_cc = comp("TauCC_bkg"), nc = comp("NC_bkg"), cosmic = comp("Cosmic_bkg"),
-         W = smearing_weights(Et, nue_ranges, getproperty(NUE_RESOLUTION, Symbol(mode)), fE),
+         W = smearing_weights(Et, nue_ranges, getproperty(NUE_RESOLUTION, Symbol(mode)), fE), Wτ,
          observed = data("$(mode == "fhc" ? "neutrino" : "antineutrino")_mode_nue")[used])
     end
     lowe_sample() = begin
@@ -275,15 +314,15 @@ function get_assets(physics; file = datafile, calibration::Symbol = :ref2024)
          numu_cc = pred("$dir/NumuCC_bkg").values, tau_cc = pred("$dir/TauCC_bkg").values, nc = pred("$dir/NC_bkg").values,
          cosmic = pred("$dir/Cosmic_bkg").values,
          W = smearing_weights(Et, ranges, NUE_RESOLUTION.fhc, spectrum_proxy(Et, proxy.edges, proxy.values)),
+         Wτ = tau_weights(Et, proxy, false),
          observed = data("neutrino_mode_nueLowE"))
     end
     nue = (fhc = nue_sample("fhc"), rhc = nue_sample("rhc"), lowe_fhc = lowe_sample())
     close(f)
 
     # oscillation-averaged reference probabilities per νe bin and channel (denominators of the reweighting)
-    Pref = channel_probabilities(physics, Et, paths, layers, ref_params(calibration))
     nue = map(nue, (fhc = false, rhc = true, lowe_fhc = false)) do s, anti
-        merge(s, (ref = averaged_channels(s.W, Pref, anti),))
+        merge(s, (ref = averaged_channels(s.W, s.Wτ, Pref, anti),))
     end
 
     observed = merge(map(s -> s.observed, numu), (nue_fhc = nue.fhc.observed, nue_rhc = nue.rhc.observed, nue_lowe_fhc = nue.lowe_fhc.observed))
@@ -340,12 +379,14 @@ Bin-averaged probabilities for a νe sample; `anti` selects the beam mode (signa
 cross-section weights `xw` (per ν/ν̄: μ, e, τ), each channel is weighted with its detected flavour,
 relative to the νμ weight of its parent beam (near-detector constraint).
 """
-function averaged_channels(W, P, anti, xw = nothing)
+function averaged_channels(W, Wτ, P, anti, xw = nothing)
     main, other = anti ? (P.nubar, P.nu) : (P.nu, P.nubar)
-    isnothing(xw) && return (signal = W * main.me, wrong_sign = W * other.me, beam_nue = W * main.ee, numu_cc = W * main.mm, tau_cc = W * main.mt)
+    nb = size(W, 1)
+    isnothing(xw) && return (signal = W * main.me, wrong_sign = W * other.me, beam_nue = W * main.ee, numu_cc = W * main.mm,
+                             tau_cc = fill(only(Wτ * main.mt), nb))
     m, o = anti ? (xw.nubar, xw.nu) : (xw.nu, xw.nubar)
     (signal = nd_ratio(W, main.me, m.e, m.μ), wrong_sign = nd_ratio(W, other.me, o.e, o.μ), beam_nue = nd_ratio(W, main.ee, m.e, m.μ),
-     numu_cc = W * main.mm, tau_cc = nd_ratio(W, main.mt, m.τ, m.μ))
+     numu_cc = W * main.mm, tau_cc = fill(only(nd_ratio(Wτ, main.mt, m.τ, m.μ)), nb))
 end
 
 _ratio(a, b) = ifelse.(b .> 0, a ./ max.(b, 1e-12), one.(a))
@@ -377,9 +418,9 @@ function get_expected(params, physics, assets)
     P_rhc = scale_energy(P, assets.dlnE, had.rhc)
     sig_fhc = params.nova_nue_signal_norm * params.nova_nue_xsec_ratio_nu
     sig_rhc = params.nova_nue_signal_norm * params.nova_nue_xsec_ratio_nubar * params.nova_rhc_norm
-    nue_fhc = nue_expected(assets.nue.fhc, averaged_channels(assets.nue.fhc.W, P_fhc, false, xw), params, sig_fhc)
-    nue_rhc = nue_expected(assets.nue.rhc, averaged_channels(assets.nue.rhc.W, P_rhc, true, xw), params, sig_rhc)
-    nue_lowe_fhc = nue_expected(assets.nue.lowe_fhc, averaged_channels(assets.nue.lowe_fhc.W, P_fhc, false, xw), params, sig_fhc)
+    nue_fhc = nue_expected(assets.nue.fhc, averaged_channels(assets.nue.fhc.W, assets.nue.fhc.Wτ, P_fhc, false, xw), params, sig_fhc)
+    nue_rhc = nue_expected(assets.nue.rhc, averaged_channels(assets.nue.rhc.W, assets.nue.rhc.Wτ, P_rhc, true, xw), params, sig_rhc)
+    nue_lowe_fhc = nue_expected(assets.nue.lowe_fhc, averaged_channels(assets.nue.lowe_fhc.W, assets.nue.lowe_fhc.Wτ, P_fhc, false, xw), params, sig_fhc)
     merge(numu, (; nue_fhc, nue_rhc, nue_lowe_fhc))
 end
 
