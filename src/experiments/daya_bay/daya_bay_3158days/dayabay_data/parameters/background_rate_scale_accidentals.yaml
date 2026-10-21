@@ -1,0 +1,7 @@
+format: ["value", "sigma_percent"]
+state: "variable"
+parameters:
+  accidentals: [1.0, 1.0]
+labels:
+  accidentals:
+    text: "Scale of accidentals rate in {index[1]} during {index[0]} [#/day]"

@@ -1,0 +1,9 @@
+format: ["value", "sigma_percent"]
+state: "variable"
+
+parameters:
+  thermal_power_scale: [1, 0.5]
+
+labels:
+  thermal_power_scale: 
+    text: "Thermal power correction scale for{space_key}"

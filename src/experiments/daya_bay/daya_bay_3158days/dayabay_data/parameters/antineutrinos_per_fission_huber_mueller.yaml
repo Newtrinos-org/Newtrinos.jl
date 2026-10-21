@@ -1,0 +1,29 @@
+format: "value"
+state: "fixed"
+parameters:
+  antineutrinos_per_fission:
+    U235: 1.959115403761888
+    U238: 2.571160453445151
+    Pu239: 1.49127698675536
+    Pu241: 1.880796553974762
+labels:
+  antineutrinos_per_fission:
+    U235:
+      text: "# antineutrinos per fission from ²³⁵U (Huber et al.) [#ν/fission]" 
+      latex: 'Number of antineutrinos per fission from ${}^{235}$U (Huber et al.) [$\#\nu/fission$]]'
+      mark: "#ν(²³⁵U)"
+    U238:
+      text: "# antineutrinos per fission from ²³⁸U (Mueller et al.) [#ν/fission]"
+      latex: 'Number of antineutrinos per fission from ${}^{238}$U (Mueller et al.) [$\#\nu/fission$]]'
+      mark: "#ν(²³⁸U)"
+    Pu239:
+      text: "# antineutrinos per fission from ²³⁹Pu (Huber et al.) [#ν/fission]"
+      latex: 'Number of antineutrinos per fission from ${}^{239}$Pu (Huber et al.) [$\#\nu/fission$]]'
+      mark: "#ν(²³⁹Pu)"
+    Pu241:
+      text: "# antineutrinos per fission from ²⁴¹Pu (Huber et al.) [#ν/fission]"
+      latex: 'Number of antineutrinos per fission from ${}^{241}$Pu (Huber et al.) [$\#\nu/fission$]]'
+      mark: "#ν(²⁴¹Pu)"
+    group:
+      text: "# antineutrinos per fission"
+      mark: "#ν"

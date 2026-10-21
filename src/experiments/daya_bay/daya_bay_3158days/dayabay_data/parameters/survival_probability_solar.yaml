@@ -1,0 +1,15 @@
+format: ["value", "sigma_absolute"]
+state: "variable"
+parameters:
+  DeltaMSq21: [7.53e-05, 0.18e-5]   # PDG 2014-2024
+  SinSq2Theta12: [0.851, 0.02]      # PDG 2018-2024, sin²θ₁₂=0.307±0.013
+
+labels:
+  DeltaMSq21:
+    text: '"Solar" neutrino mass splitting Δm²₂₁ [eV²]'
+    latex: '"Solar" neutrino mass splitting $\Delta m^{2}_{21}$ [eV$^2$]'
+    mark: 'Δm²₂₁'
+  SinSq2Theta12:
+    text: '"Solar" neutrino mixing angle sin²2θ₁₂'
+    latex: '"Solar" neutrino mixing angle $\sin^{2}2\theta_{12}$'
+    mark: 'sin²2θ₁₂'

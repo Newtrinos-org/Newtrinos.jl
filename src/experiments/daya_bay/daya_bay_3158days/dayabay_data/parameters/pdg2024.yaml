@@ -1,0 +1,26 @@
+format: "value"
+state: "fixed"
+parameters:
+  NeutronLifeTime: 878.4        # s,   page 176
+  NeutronMass:     939.5654205  # MeV, page 176
+  ProtonMass:      938.27208816 # MeV, page 174
+  ElectronMass:    0.5109989500 # MeV, page 17
+
+labels:
+  NeutronLifeTime:
+    text: "neutron lifetime [s] (PDG2024)"
+    latex: "$\\tau_n$ neutron lifetime [s] (PDG2024)"
+    mark: "τ(n)"
+  NeutronMass:
+    text: "neutron mass [MeV] (PDG2024)"
+    latex: "$m_n$ neutron mass [MeV] (PDG2024)"
+    mark: "m(n)"
+  ProtonMass:
+    text: "proton mass [MeV] (PDG2024)"
+    latex: "$m_p$ proton mass [MeV] (PDG2024)"
+    mark: "m(p)"
+  ElectronMass:
+    text: "electron mass [MeV] (PDG2024)"
+    latex: "$m_e$ electron mass [MeV] (PDG2024)"
+    mark: "m(e)"
+

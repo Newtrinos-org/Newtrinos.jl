@@ -1,0 +1,10 @@
+format: "value"
+state: "fixed"
+
+parameters:
+  nominal_thermal_power: 2.895
+
+labels:
+  nominal_thermal_power:
+    text: "Nominal thermal power{space_key} [GW]"
+    mark: "Wth"

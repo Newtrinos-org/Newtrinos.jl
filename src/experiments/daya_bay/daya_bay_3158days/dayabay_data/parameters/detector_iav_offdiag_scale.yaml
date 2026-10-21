@@ -1,0 +1,10 @@
+format: ["value", "sigma_absolute"]
+state: "variable"
+parameters:
+  iav_offdiag_scale_factor: [1, 0.04]
+
+labels:
+  iav_offdiag_scale_factor:
+    text: "IAV scale for off-diagonal elements at {key}"
+    mark: "s"
+

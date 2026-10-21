@@ -6,6 +6,7 @@ using Test
         include("test_osc.jl")
         include("test_earth_layers.jl")
         include("test_xsec.jl")
+        include("test_ibd_xsec.jl")
         include("osc_unit_tests.jl")
         include("test_snsflux.jl")
         include("test_atmflux.jl")

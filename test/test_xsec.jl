@@ -1,4 +1,7 @@
 using Distributions
+using DelimitedFiles
+using DataFrames
+import CSV
 using Test
 using Newtrinos
 using ForwardDiff
@@ -159,6 +162,14 @@ using ForwardDiff
         result_nc = xs.grid_weights(E_grid, :numu, :NC, false)(xs.params)
         @test length(result_nc) == length(E_grid)
         @test all(result_nc .>= 0)
+    end
+
+    @testset "IBD cross section" begin
+        ibd = Newtrinos.ibd_xsec.configure()
+        xsec = CSV.read(joinpath(@__DIR__, "../src/physics/ibd_xsec.csv"), DataFrame, header=0, delim=",")
+        energies = reshape(Matrix(xsec[!, [1, 5, 9]]), (45))
+        xsection = reshape(Matrix(xsec[!, [2, 6, 10]]), (45))
+        @test isapprox(xsection, ibd.xsec.(energies))
     end
 
     @testset "weights interface: Nominal and SimpleScaling" begin

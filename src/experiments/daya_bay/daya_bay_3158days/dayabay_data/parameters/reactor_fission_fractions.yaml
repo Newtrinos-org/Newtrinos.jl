@@ -1,0 +1,31 @@
+format: "value"
+state: "fixed"
+
+parameters:
+  fission_fractions:
+    U235: 0.563452
+    U238: 0.07593
+    Pu239: 0.304785
+    Pu241: 0.055834
+
+labels:
+  fission_fractions:
+    U235:
+      text: "Mean ²³⁵U fission fraction"
+      latex: "$f$ mean ${}^{235}$U fission fraction"
+      mark: "f(²³⁵U)"
+    U238:
+      text: "Mean ²³⁸U fission fraction"
+      latex: "$f$ mean ${}^{238}$U fission fraction"
+      mark: "f(²³⁸U)"
+    Pu239:
+      text: "Mean ²³⁹Pu fission fraction"
+      latex: "$f$ mean ${}^{239}$Pu fission fraction"
+      mark: "f(²³⁹Pu)"
+    Pu241:
+      text: "Mean ²⁴¹Pu fission fraction"
+      latex: "$f$ mean ${}^{241}$Pu fission fraction"
+      mark: "f(²⁴¹Pu)"
+    group:
+      text: "Mean fission fractions"
+      mark: "f"
