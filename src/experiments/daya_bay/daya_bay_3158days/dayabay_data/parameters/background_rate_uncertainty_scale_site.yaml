@@ -1,0 +1,11 @@
+format: ["value", "sigma_absolute"]
+state: "variable"
+parameters:
+  lithium_helium: [0.0, 1.0]
+  fast_neutrons: [0.0, 1.0]
+labels:
+  fast_neutrons:
+    text: "Scale of fast neutron background rate uncertainty correction in {index[1]} during {index[0]}"
+  lithium_helium:
+    text: "Scale of ⁹Li/⁸He background rate uncertainty correction in {index[1]} during {index[0]}"
+    latex: "Scale of $^{{9}}$Li/$^{{8}}$He background rate uncertainty correction in {index[1]} during {index[0]}"

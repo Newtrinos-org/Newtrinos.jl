@@ -1,0 +1,9 @@
+format: "value"
+state: "fixed"
+parameters:
+  n_protons_nominal_ad: 1.4338e+30
+
+labels:
+  n_protons_nominal_ad: 
+    text: "Nominal # of target protons in detector [#protons]"
+    latex: "Nominal \\# of target protons in detector [\\#protons]"

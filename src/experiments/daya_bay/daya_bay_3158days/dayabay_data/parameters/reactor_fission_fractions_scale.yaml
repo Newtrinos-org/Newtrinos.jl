@@ -1,0 +1,37 @@
+format: ["value", "sigma_percent"]
+state: "variable"
+parameters:
+  fission_fractions_scale:
+    U235:  [1, 5]
+    U238:  [1, 5]
+    Pu239: [1, 5]
+    Pu241: [1, 5]
+correlations:
+  fission_fractions_scale:
+    names: [ "U235", "U238", "Pu239", "Pu241" ]
+    matrix_type: "correlation"
+    matrix: [ [  1.00, -0.22,  -0.53,   -0.18 ],
+              [ -0.22,  1.00,   0.18,    0.26 ],
+              [ -0.53,  0.18,   1.00,    0.49 ],
+              [ -0.18,  0.26,   0.49,    1.00 ] ]
+labels:
+  fission_fractions_scale:
+    U235:
+      text: "Fission fraction scale for ²³⁵U"
+      latex: "Fission fraction scale for $^{235}$U"
+      mark: "f(²³⁵U)"
+    U238:
+      text: "Fission fraction scale for ²³⁸U"
+      latex: "Fission fraction scale for $^{238}$U"
+      mark: "f(²³⁸U)"
+    Pu239:
+      text: "Fission fraction scale for ²³⁹Pu"
+      latex: "Fission fraction scale for $^{239}$Pu"
+      mark: "f(²³⁹Pu)"
+    Pu241:
+      text: "Fission fraction scale for ²⁴¹Pu"
+      latex: "Fission fraction scale for $^{241}$Pu"
+      mark: "f(²⁴¹Pu)"
+    group:
+      text: "Fission fraction scale {key}"
+      mark: "f"

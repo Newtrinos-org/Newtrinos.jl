@@ -1,0 +1,25 @@
+# Detector energy resolution:
+# σ(E)/E = sqrt(a² + b²/E + c²/E²),
+
+format: ["value", "sigma_percent"]
+state: "variable"
+parameters:
+  eres:
+    a_nonuniform: [0.016, 30]
+    b_stat:       [0.081, 30]
+    c_noise:      [0.026, 30]
+
+labels:
+  eres:
+    a_nonuniform:
+      text:  "Energy resolution par a — spatial/temporal resolution term"
+      latex: "Energy resolution par $a$ — spatial/temporal resolution term"
+      mark:  "a"
+    b_stat:
+      text:  "Energy resolution par b [√MeV] — photon statistics term"
+      latex: "Energy resolution par $b$ $[\\sqrt{\\mathrm{MeV}}]$ — photon statistics term"
+      mark:  "b"
+    c_noise:
+      text:  "Energy resolution par c [MeV] — dark noise term"
+      latex: "Energy resolution par $c$ [MeV] — dark noise term"
+      mark:  "c"

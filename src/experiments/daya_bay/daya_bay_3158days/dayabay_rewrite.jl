@@ -11,7 +11,6 @@ using BAT
 using HDF5
 using Interpolations
 using SpecialFunctions: erfc
-#using SparseArrays
 using DelimitedFiles
 import YAML
 import ..Newtrinos
@@ -280,32 +279,6 @@ function read_lsnl_correction(datadir = @__DIR__)
 end
 
 """
-    not_a_knot_spline(x, y, xnew)
-
-Cubic spline through `(x, y)` with not-a-knot end conditions (as scipy's `interp1d(kind="cubic")`), evaluated at `xnew`
-(within the range of `x`).
-"""
-function not_a_knot_spline(x::Vector{Float64}, y::Vector{Float64}, xnew::AbstractVector{Float64})
-    n = length(x)
-    h = diff(x)
-    # second derivatives M: interior continuity of the first derivative, not-a-knot at both ends
-    A = zeros(n, n)
-    b = zeros(n)
-    A[1, 1], A[1, 2], A[1, 3] = h[2], -(h[1] + h[2]), h[1]
-    for i in 2:n-1
-        A[i, i-1], A[i, i], A[i, i+1] = h[i-1], 2 * (h[i-1] + h[i]), h[i]
-        b[i] = 6 * ((y[i+1] - y[i]) / h[i] - (y[i] - y[i-1]) / h[i-1])
-    end
-    A[n, n-2], A[n, n-1], A[n, n] = h[n-1], -(h[n-2] + h[n-1]), h[n-2]
-    M = A \ b
-    map(xnew) do t
-        k = clamp(searchsortedlast(x, t), 1, n - 1)
-        a, c = x[k+1] - t, t - x[k]
-        (M[k] * a^3 + M[k+1] * c^3) / (6h[k]) + (y[k] / h[k] - M[k] * h[k] / 6) * a + (y[k+1] / h[k] - M[k+1] * h[k] / 6) * c
-    end
-end
-
-"""
     refine_lsnl(E, f; refine_times = 4, newmin = 0.5, newmax = 12.1)
 
 LSNL curve processing of the official model (`refine_lsnl_data`): the relative curve f = Evis/Escint is converted to the
@@ -314,7 +287,7 @@ the outermost fine segments) to [`newmin`, `newmax`]. Returns the fine Escint gr
 """
 function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}; refine_times = 4, newmin = 0.5, newmax = 12.1)
     xfine = collect(range(E[1], E[end], length = (length(E) - 1) * refine_times + 1))
-    yfine = not_a_knot_spline(E, f .* E, xfine)
+    yfine = Newtrinos.Helpers.not_a_knot_spline(E, f .* E, xfine)
     step = xfine[2] - xfine[1]
     xleft = collect(newmin:step:xfine[1]-step*1e-9)
     stepright = xfine[end] - xfine[end-1]
