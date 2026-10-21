@@ -1,0 +1,14 @@
+# This parameter has no effect on oscillation parameters measurement in the "relative" setup with
+# near and far detectors and therefore is fixed. The "relative" setup may also be understood as
+# setup with free global normalization parameter or free common reactor antineutrino spectrum.
+format: ["value", "sigma_percent"]
+state: "fixed"
+parameters:
+  detector_absolute:
+    efficiency_factor: [1, 1.93]
+
+labels:
+  detector_absolute:
+    efficiency_factor:
+       text: "Absolute detector efficiency factor"
+       mark: "ε"

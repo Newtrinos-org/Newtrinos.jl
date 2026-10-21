@@ -1,0 +1,17 @@
+format: "value"
+state: "fixed"
+parameters:
+  n_protons_correction:
+    AD11: 0.99705
+    AD12: 0.99835
+    AD21: 0.99455
+    AD22: 0.99720
+    AD31: 0.99585
+    AD32: 0.99945
+    AD33: 0.99460
+    AD34: 0.99655
+
+labels:
+  n_protons_correction: 
+    text: "Relative correction to # of target protons in {index[1]}"
+    latex: "Relative correction to \\# of target protons in {index[1]}"

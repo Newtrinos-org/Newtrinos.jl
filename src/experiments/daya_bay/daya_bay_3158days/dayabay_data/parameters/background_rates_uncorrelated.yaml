@@ -1,0 +1,32 @@
+format: ["value", "sigma_absolute"]
+state: "variable"
+parameters:
+  alpha_neutron:
+    6AD:
+      AD11: [0.09, 0.045]
+      AD12: [0.07, 0.035]
+      AD21: [0.05, 0.025]
+      AD31: [0.05, 0.025]
+      AD32: [0.04, 0.02]
+      AD33: [0.04, 0.02]
+    8AD:
+      AD11: [0.08, 0.04]
+      AD12: [0.06, 0.03]
+      AD21: [0.04, 0.02]
+      AD22: [0.06, 0.03]
+      AD31: [0.04, 0.02]
+      AD32: [0.04, 0.02]
+      AD33: [0.03, 0.015]
+      AD34: [0.04, 0.02]
+    7AD:
+      AD12: [0.05, 0.025]
+      AD21: [0.03, 0.015]
+      AD22: [0.06, 0.03]
+      AD31: [0.03, 0.015]
+      AD32: [0.03, 0.015]
+      AD33: [0.03, 0.015]
+      AD34: [0.03, 0.015]
+labels:
+  alpha_neutron:
+    text: "¹³C(α,n)¹⁶O background rate in {index[1]} during {index[0]} [#/day]"
+    latex: "$^{{13}}$C($\\alpha$,$n$)$^{{16}}$O background rate in {index[1]} during {index[0]} [#/day]"

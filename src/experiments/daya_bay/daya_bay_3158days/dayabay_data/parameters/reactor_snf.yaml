@@ -1,0 +1,8 @@
+format: ["value", "sigma_percent"]
+state: "variable"
+parameters:
+  snf_scale: [1, 30]
+labels:
+  snf_scale:
+    text: "SNF contribution scale{space_key}"
+    mark: "c(SNF)"

@@ -1,0 +1,9 @@
+format: "value"
+state: "fixed"
+parameters:
+  nmo: 1
+
+labels:
+  nmo:
+    text: "Neutrino mass ordering: NO=1, IO=-1"
+    mark: "NMO"

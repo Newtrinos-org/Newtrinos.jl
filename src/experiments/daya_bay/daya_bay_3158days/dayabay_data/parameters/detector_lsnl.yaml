@@ -1,0 +1,13 @@
+# Detector LSNL parametrization:
+# f(E) = a₀f₀(E) + Σₖaₖ[fₖ(E) - f₀(E)]
+# where a₀=1
+
+format: ["value", "sigma_absolute"]
+state: "variable"
+parameters:
+  lsnl_scale_a: [0, 1]
+
+labels:
+  lsnl_scale_a:
+    text:  "Energy non-linearity parameter for {key}"
+    mark:  "aᵢ"

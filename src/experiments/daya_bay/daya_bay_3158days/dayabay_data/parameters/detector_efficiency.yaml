@@ -1,0 +1,9 @@
+format: "value"
+state: "fixed"
+parameters:
+  efficiency: 0.8025190696388883
+
+labels:
+  efficiency:
+    text:  "Detector efficiency"
+    mark:  "ε"

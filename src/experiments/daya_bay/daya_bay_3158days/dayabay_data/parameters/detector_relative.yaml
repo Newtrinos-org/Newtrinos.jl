@@ -1,0 +1,24 @@
+format: ["value", "sigma_percent"]
+state: "variable"
+parameters:
+  detector_relative:
+    efficiency_factor: [1, 0.10630145812734648]
+    energy_scale_factor: [1, 0.2]
+correlations:
+  detector_relative:
+    names: [ 'efficiency_factor', 'energy_scale_factor' ]
+    matrix_type: 'correlation'
+    matrix: [ [ 1.000, 0.545 ],
+              [ 0.545, 1.000 ]  ]
+
+labels:
+  detector_relative:
+    energy_scale_factor:
+       text: "Relative detector energy scale for {key}"
+       mark: "sᵢ"
+    efficiency_factor:
+       text: "Relative detector efficiency factor for {key}"
+       mark: "εᵢ"
+    group:
+      text: "Relative detector parameters for {key}"
+      mark: "εᵢ,sᵢ"

@@ -1,0 +1,8 @@
+format: ["value", "sigma_absolute"]
+state: "variable"
+parameters:
+  amc: [0.0, 1.0]
+labels:
+  amc:
+    text: "Scale of ²⁴¹Am¹³C rate uncertainty correction"
+    latex: "Scale of $^{{241}}$Am$^{{13}}$C rate uncertainty correction"

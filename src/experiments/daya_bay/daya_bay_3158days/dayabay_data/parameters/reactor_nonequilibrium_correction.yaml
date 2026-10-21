@@ -1,0 +1,8 @@
+format: ["value", "sigma_percent"]
+state: "variable"
+parameters:
+  nonequilibrium_scale: [1, 30]
+labels:
+  nonequilibrium_scale:
+    text: "Non-Equilibrium (NEQ) contribution scale for {index[1]} in {index[0]}"
+    mark: "c(NEQ)"
