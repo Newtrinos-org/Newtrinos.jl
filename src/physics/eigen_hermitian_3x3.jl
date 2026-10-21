@@ -127,25 +127,30 @@ function fast_eigen(
         α = d * (c - λ) - conj(e) * f
         β = f * (b - λ) - d * e
         u = SVector(β * (λ - c) - α * e, α * f, β * f)
-        
-        # provide fall backs for edge cases where kernel rows are parallel 
-        # and therefore we get a null eigenvector from the row cross product
-        # if this happens then the fallbacks select another row combination for the calculation
-        if all(iszero, u)
-            # rows 2&3 cross product was zero; try rows 1&3
-            u = SVector(
-                conj(d) * (c - λ) - e * conj(f),
-                abs2(f) - (a - λ) * (c - λ),
-                (a - λ) * e - conj(d) * f,
-            )
-        end
-        if all(iszero, u)
-            # still zero; try rows 1&2 (handles all degenerate single-eigenvalue cases)
-            u = SVector(
-                conj(d) * conj(e) - (b - λ) * conj(f),
-                conj(f) * d - (a - λ) * conj(e),
-                (a - λ) * (b - λ) - abs2(d),
-            )
+
+        # Two kernel rows can be (anti)parallel, e.g. rows 2 & 3 when (0, s, c) is an exact
+        # eigenvector, as for θ₁₃ = 0. Their cross product then vanishes analytically but not
+        # numerically, and normalising the round-off would give a wrong eigenvector. Use the
+        # row combination with the largest cross product instead (rows 1&3, then 1&2).
+        u13 = SVector(
+            conj(d) * (c - λ) - e * conj(f),
+            abs2(f) - (a - λ) * (c - λ),
+            (a - λ) * e - conj(d) * f,
+        )
+        u12 = SVector(
+            conj(d) * conj(e) - (b - λ) * conj(f),
+            conj(f) * d - (a - λ) * conj(e),
+            (a - λ) * (b - λ) - abs2(d),
+        )
+        # u is |f| times the rows 2&3 cross product; compare at the same scale (u = 0 if f = 0)
+        s = iszero(f2) ? one(f2) : f2
+        n23 = sum(abs2, u)
+        n13 = s * sum(abs2, u13)
+        n12 = s * sum(abs2, u12)
+        if n13 > n23 && n13 >= n12
+            u = u13
+        elseif n12 > n23
+            u = u12
         end
         # normalize the eigenvector
         normalize(u)

@@ -1,66 +1,35 @@
-using Test
-using Accessors
-using Newtrinos
+using Test, Newtrinos, Dates, DataFrames
 
-@testset "Reactor flux" begin 
-    @testset "Configuration" begin
-        reactor = Newtrinos.reactor_flux.configure()
-        @test reactor isa Newtrinos.reactor_flux.ReactorFlux
-        # TODO: how to comapre that each key of params is in priors?
-        params = Newtrinos.reactor_flux.get_params(reactor.cfg.flux_model)
-        priors = Newtrinos.reactor_flux.get_priors(reactor.cfg.flux_model)
+@testset "Reactor flux" begin
+    R = Newtrinos.reactor_flux
+    rf = R.configure()
+    @testset "Huber–Mueller × IBD yields" begin
+        # Huber (PRC 84, 024617) table values of the ²³⁵U and ²³⁹Pu spectra [ν̄e / fission / MeV]
+        @test rf.isotope_spectrum(:U235, 4.0) ≈ 0.294 rtol = 0.01
+        @test rf.isotope_spectrum(:U235, 6.0) ≈ 0.0389 rtol = 0.03
+        @test rf.isotope_spectrum(:Pu239, 4.0) ≈ 0.195 rtol = 0.02
+        @test rf.ibd_xsec(1.0) == 0
+        # IBD yield per fission (Huber–Mueller, ×10⁻⁴³ cm²): 6.69, 10.10, 4.40, 6.03 (within the cross-section convention)
+        pure(i) = NamedTuple{R.ISOTOPES}(Tuple(Float64(j == i) for j in R.ISOTOPES))
+        for (i, y) in zip(R.ISOTOPES, (6.69, 10.10, 4.40, 6.03))
+            @test R.ibd_yield(pure(i)) / 1e-43 ≈ y rtol = 0.015
+        end
+        # Bugey-4 anchoring lowers the Huber–Mueller rate by the reactor anomaly (~5–6 %)
+        @test 0.92 < R.bugey4_scale((U235 = 0.567, U238 = 0.078, Pu239 = 0.298, Pu241 = 0.057)) < 0.97
+        # IBD kinematics (Strumia & Vissani Eq. 16): prompt energy 2 m_e at threshold, E_ν − E_prompt grows with the neutron recoil
+        @test R.neutrino_energy(2 * R.M_E) ≈ R.IBD_THRESHOLD atol = 1e-3
+        @test R.neutrino_energy(8.0) - 8.0 ≈ 0.853 atol = 2e-3
+        @test all(R.positron_energy(R.neutrino_energy(e)) + R.M_E ≈ e for e in 1.1:0.5:9.0)
     end
-
-    @testset "Flux values" begin
-        E = collect(LinRange(1, 12, 100))
-        reactor = Newtrinos.reactor_flux.configure()
-        flux = reactor.flux
-        params = reactor.params
-        @testset "vectorisation" begin
-            nom1, neq1, snf1, corr1 = flux(3, params.reactor_thermal_power_scale[1], params.energy_per_fission, params.fission_fractions_scale_R1, params.spectrum_pulls, params.neq_scale_R1, params.snf_scale[1], 1)
-            nom2, neq2, snf2, corr2 = flux(2, params.reactor_thermal_power_scale[1], params.energy_per_fission, params.fission_fractions_scale_R1, params.spectrum_pulls, params.neq_scale_R1, params.snf_scale[1], 1)
-            nom12, neq12, snf12, corr12 = flux([3, 2],  params.reactor_thermal_power_scale[1], params.energy_per_fission, params.fission_fractions_scale_R1, params.spectrum_pulls, params.neq_scale_R1, params.snf_scale[1], 1)
-            @test isapprox(nom12, [nom1, nom2])
-            @test isapprox(snf12, [snf1, snf2])
-            @test isapprox(corr12, [corr1, corr2])
-        end
-        @testset "snf" begin
-            @reset params.neq_scale_R1 = zeros(4)
-            nom1, neq1, snf1, corr1 = flux(2.5,  params.reactor_thermal_power_scale[1], params.energy_per_fission, params.fission_fractions_scale_R1, params.spectrum_pulls, params.neq_scale_R1, 1, 1)
-            nom2, neq2, snf2, corr2 = flux(2.5,  params.reactor_thermal_power_scale[1], params.energy_per_fission, params.fission_fractions_scale_R1, params.spectrum_pulls, params.neq_scale_R1, 0, 1)
-            @test isapprox(nom1, nom2)
-            @test isapprox(corr1, corr2)
-            @test isapprox(snf2, 0.0)
-            # nom is per GW, snf for a reactor at nominal power (2.895 GW)
-            @test 0 < snf1 / (2.895 * nom2) <= 0.04
-        end
-
-        @testset "neq" begin
-            @reset params.neq_scale_R1 = zeros(4)
-            nom1, neq1, snf1, corr1 = flux(2.5,  params.reactor_thermal_power_scale[1], params.energy_per_fission, params.fission_fractions_scale_R1, params.spectrum_pulls, params.neq_scale_R1, 0, 1)
-            @reset params.neq_scale_R1 = ones(4)
-            nom2, neq2, snf2, corr2 = flux(2.5,  params.reactor_thermal_power_scale[1], params.energy_per_fission, params.fission_fractions_scale_R1, params.spectrum_pulls, params.neq_scale_R1, 0, 1)
-            @test isapprox(nom1, nom2)
-            @test neq1 == 0
-            # the non-equilibrium correction adds a few per cent at low energy
-            @test 0 < neq2 / nom2 < 0.1
-        end
-
-        @testset "free spectrum correction" begin
-            _, _, _, corr0 = flux(E, params.reactor_thermal_power_scale[1], params.energy_per_fission, params.fission_fractions_scale_R1, zeros(19), params.neq_scale_R1, 0, 1)
-            @test all(corr0 .≈ 1)
-            _, _, _, corr1 = flux(E, params.reactor_thermal_power_scale[1], params.energy_per_fission, params.fission_fractions_scale_R1, fill(0.1, 19), params.neq_scale_R1, 0, 1)
-            @test all(corr1 .≈ exp(0.1))
-        end
-        
-        @testset "thermal power scale" begin
-            @reset params.reactor_thermal_power_scale[1] = 1.0
-            @reset params.snf_scale = zeros(6)
-            nom1, neq1, snf1, corr1 = flux(E, params.reactor_thermal_power_scale[1], params.energy_per_fission, params.fission_fractions_scale_R1, params.spectrum_pulls, params.neq_scale_R1, params.snf_scale[1], 1)
-            @reset params.reactor_thermal_power_scale[1] = 2.0
-            nom2, neq2, snf2, corr2 = flux(E, params.reactor_thermal_power_scale[1], params.energy_per_fission, params.fission_fractions_scale_R1, params.spectrum_pulls, params.neq_scale_R1, params.snf_scale[1], 1)
-            @test isapprox(nom1 .* 2, nom2)
-        end
+    @testset "PRIS reactor database" begin
+        u = R.load_units()
+        @test nrow(u) >= 75
+        kk = u[u.unit .== "KASHIWAZAKI KARIWA-6", :][1, :]
+        # Chūetsu-oki earthquake: no operation between August 2007 and the end of 2008
+        @test sum(R.daily_power(kk, Date(2007, 8, 1), Date(2008, 12, 31))) == 0
+        e2005 = sum(R.daily_power(kk, Date(2005, 1, 1), Date(2005, 12, 31)))
+        @test e2005 ≈ kk.thermal_power_MW * 0.966 * 365 rtol = 0.01
+        det = R.ecef(36.4225, 137.3153)
+        @test R.baseline(det, R.ecef(37.4286, 138.5978)) ≈ 160 atol = 2      # Kashiwazaki-Kariwa – Kamioka
     end
-
 end

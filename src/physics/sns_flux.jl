@@ -52,8 +52,13 @@ Create a fully configured SNS flux physics module.
 - `use_data::Bool = true`: if `true`, load flux from CSV tables (default); if `false`, use analytic
   decay-at-rest spectra.
 - `flux_folder::String`: path to the directory containing the SNS flux CSV files.
-- `beam_power::Real = 1.4`: beam power [MW] (for time normalization).
+- `beam_power::Real = 1.4`: beam power [MW] (for time normalization; data mode without `pot`).
 - `proton_energy::Real = 1.0`: proton beam energy [GeV] (analytic mode only).
+- `pot = nothing`: protons on target of the exposure (data mode). When given, the CSV tables are used for their
+  energy–time shapes only and normalised to `nu_yield` neutrinos per flavour per proton (summed over all energies
+  and times, averaged over νμ, ν̄μ and νe), as prescribed by the COHERENT data releases. Without it, the tables are
+  scaled as rates at `beam_power`, whose absolute normalisation is not documented.
+- `nu_yield::Real = 0.0848`: neutrinos per flavour per proton (COHERENT CsI 2021 release).
 
 # Returns
 An [`SNSFlux`](@ref) instance.
@@ -62,9 +67,9 @@ function configure(;
         exposure, distance,
         ecut= mmu/2., E_bin_width=0.5, tcut=6000.0, tbins=Nothing,
         use_data=true, flux_folder=joinpath(@__DIR__, "..", "experiments", "coherent", "coherent_2020", "csi", "snsFlux2D_CSV"),
-        beam_power=1.4, proton_energy=1.0)
+        beam_power=1.4, proton_energy=1.0, pot=nothing, nu_yield=0.0848)
     # Call get_assets and assign the result to `assets`
-    assets = get_assets(; use_data, exposure, distance, beam_power, proton_energy, flux_folder, ecut, E_bin_width, tcut, tbins)
+    assets = get_assets(; use_data, exposure, distance, beam_power, proton_energy, flux_folder, ecut, E_bin_width, tcut, tbins, pot, nu_yield)
     # Return the configured SNSFlux object
     return SNSFlux(
         params = get_params(use_data),
@@ -160,7 +165,7 @@ A `NamedTuple` with fields `E`, `T` (data mode only), and per-flavour flux array
 """
 function get_assets(; use_data, exposure, distance,
                         beam_power, proton_energy,
-                        flux_folder, ecut, E_bin_width, tcut, tbins)
+                        flux_folder, ecut, E_bin_width, tcut, tbins, pot=nothing, nu_yield=0.0848)
     if use_data
         #@info "Loading SNS Flux data"
         # Function to read and rebin flux data from CSV files
@@ -184,6 +189,9 @@ function get_assets(; use_data, exposure, distance,
 
             # Extract weight submatrix
             weights = Matrix(data[:, 2:end])
+            # table total over all energies and times (for the normalisation to POT × ν yield)
+            dE_all = diff(data[:, 1]); dt_all = diff(parse.(Float64, names(data)[2:end]))
+            total_all = sum(weights .* vcat(dE_all, dE_all[end]) .* vcat(dt_all, dt_all[end])')
             weights = weights[energy_mask, time_mask]
 
             # Compute bin widths
@@ -208,7 +216,7 @@ function get_assets(; use_data, exposure, distance,
                         rebinned_weights[:, i] = sum(weights[:, idx], dims=2)[:, 1]
                     end
                 end
-                return (energy_centers, time_edges, rebinned_weights)
+                return (energy_centers, time_edges, rebinned_weights, total_all)
             end
             # Number of desired log-spaced time bins
             n_log_bins = 8
@@ -228,7 +236,7 @@ function get_assets(; use_data, exposure, distance,
                     rebinned_weights[:, i] = sum(weights[:, idx], dims=2)[:, 1]
                 end
             end
-            return (energy_centers, time_edges, rebinned_weights)
+            return (energy_centers, time_edges, rebinned_weights, total_all)
         end
         s_per_gwh = 3.6e6 / beam_power  # seconds per GWh
         distance = distance * 5.07e10 # in MeV^-1
@@ -240,10 +248,14 @@ function get_assets(; use_data, exposure, distance,
         file_path_e_bar = joinpath(flux_folder, "convolved_energy_time_of_anti_nu_e.csv")
 
         # Load flux data for each component
-        E_mu, T_mu, flux_mu = read_flux_data(file_path_mu)
-        E_e, T_e, flux_e = read_flux_data(file_path_e)
-        E_mu_bar, T_mu_bar, flux_mu_bar = read_flux_data(file_path_mu_bar)
-        E_e_bar, T_e_bar, flux_e_bar = read_flux_data(file_path_e_bar)
+        E_mu, T_mu, flux_mu, tot_mu = read_flux_data(file_path_mu)
+        E_e, T_e, flux_e, tot_e = read_flux_data(file_path_e)
+        E_mu_bar, T_mu_bar, flux_mu_bar, tot_mu_bar = read_flux_data(file_path_mu_bar)
+        E_e_bar, T_e_bar, flux_e_bar, _ = read_flux_data(file_path_e_bar)
+        if pot !== nothing
+            # tables as shapes: ν per flavour = POT × nu_yield (all energies and times), flavour ratios of the simulation kept
+            eta = pot * nu_yield / (4 * pi * distance^2) / ((tot_mu + tot_e + tot_mu_bar) / 3)
+        end
 
         # Store the loaded data as assets
         assets = (;

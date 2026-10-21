@@ -10,10 +10,8 @@ using Logging
 using BAT
 using HDF5
 using Interpolations
-using Integrals
 using SpecialFunctions: erfc
 using DelimitedFiles
-using PCHIPInterpolation
 import YAML
 import ..Newtrinos
 
@@ -29,7 +27,7 @@ end
 function default_physics()
     osc = Newtrinos.osc.configure()
     xsec = Newtrinos.ibd_xsec.configure(Newtrinos.ibd_xsec.VogelBeacomO1())
-    flux = Newtrinos.reactor_flux.configure()
+    flux = Newtrinos.dayabay_flux.configure()
     (; osc, xsec, flux)
 end
 
@@ -711,7 +709,7 @@ function get_assets(datadir = @__DIR__)
     end
     close(file)
 
-    reactor_config = Newtrinos.reactor_flux.configure()
+    reactor_config = Newtrinos.dayabay_flux.configure()
     energy_per_fission = reactor_config.params.energy_per_fission
     fractions = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions.yaml"), dicttype=OrderedDict{String,Any})["parameters"]["fission_fractions"]
     fractions = NamedTuple((Symbol(key),value) for (key,value) in fractions)
@@ -779,7 +777,6 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     iav_func = get_iav_matrix(datadir)
     lsnl = get_lsnl_correction(datadir)
 
-    reactor_flux = physics.flux.flux
 
     osc = physics.osc
     xsec = physics.xsec.xsec

@@ -8,8 +8,8 @@ cd -
 cd src/experiments/juno/
 julia test.jl
 cd -
-cd src/experiments/kamland/kamland_7years/
-julia test.jl
+cd src/experiments/kamland/kamland_periods/
+julia --project=../../../.. validate_noosc.jl
 cd -
 cd src/experiments/km3net/orca6_433kton/
 julia test.jl

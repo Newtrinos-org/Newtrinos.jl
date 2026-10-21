@@ -1,0 +1,28 @@
+# 37Cl neutrino absorption cross section [1e-46 cm^2]; Bahcall et al., Phys. Rev. C 54, 411 (1996) (sigma) and Bahcall, Neutrino Astrophysics (1989) (sigma_book)
+# http://www.sns.ias.edu/~jnb/SNdata/Export/Chlorinecross/chlorinecrosstab
+# Rows at 0.814 (threshold), 0.8613 (7Be line) and 1.442 MeV (pep line) added from Bahcall, Neutrino Astrophysics (1989), Table 8.2, to resolve the steep rise above threshold.
+# Table 8.2 gives the 7Be cross section per 7Be neutrino (2.38e-46, averaged over both lines; the 0.384 MeV line is below threshold),
+# so the 0.8613 MeV line has 2.38 / 0.8956 = 2.657e-46 (with it, Bahcall's exportrates.f rates are reproduced).
+E,sigma,sigma_book
+0.814,0.0000e+00,0.0000e+00
+0.8613,2.6575e+00,2.6575e+00
+1.0,5.2100e+00,5.2100e+00
+1.442,1.6000e+01,1.6000e+01
+2.0,3.7000e+01,3.7000e+01
+3.0,1.0200e+02,1.1500e+02
+4.0,2.2300e+02,2.6300e+02
+5.0,5.3800e+02,5.6300e+02
+6.0,1.4400e+03,1.5200e+03
+7.0,4.6200e+03,4.7600e+03
+8.0,1.0100e+04,1.0200e+04
+9.0,1.8500e+04,1.7900e+04
+10.0,3.0000e+04,2.7700e+04
+11.0,4.4500e+04,3.9700e+04
+12.0,6.2100e+04,5.3800e+04
+13.0,8.2700e+04,7.0000e+04
+14.0,1.0600e+05,8.8300e+04
+15.0,1.3300e+05,1.0900e+05
+16.0,1.6200e+05,1.3100e+05
+18.0,2.2800e+05,1.8100e+05
+20.0,3.0500e+05,2.3800e+05
+30.0,8.2000e+05,6.1100e+05
