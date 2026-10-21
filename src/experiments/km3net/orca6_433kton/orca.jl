@@ -27,7 +27,8 @@ const XSEC_TARGET = :H2O
 
 function default_physics()
     osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction=Newtrinos.osc.SI(), eigen_method=Newtrinos.BargerEigen()))
-    atm_flux = Newtrinos.atm_flux.configure(Newtrinos.atm_flux.AtmFluxConfig(nominal_model=Newtrinos.atm_flux.HKKM("frj-ally-20-01-mtn-solmin.d")))
+    # flux prescribed by the data release: azimuth-averaged Honda 2014 tables at Frejus WITHOUT mountain, solar minimum
+    atm_flux = Newtrinos.atm_flux.configure(Newtrinos.atm_flux.AtmFluxConfig(nominal_model=Newtrinos.atm_flux.HKKM("frj-ally-20-01-solmin.d")))
     earth_layers = Newtrinos.earth_layers.configure()
     xsec = Newtrinos.xsec.configure()
     (; osc, atm_flux, earth_layers, xsec)
@@ -140,19 +141,26 @@ function make_hist_per_channel(mc, p_flux, p_flux_nc, j, lifetime_seconds, param
 end
 
 
-# Oscillated flux on the true grid, indexed [E, cosθ, detected flavour], for ν and ν̄
+# Oscillated flux on the true grid, indexed [E, cosθ, detected flavour], for ν and ν̄.
+#
+# Energy scale Eₛ (paper: "applied as a shift in the true energy of the detector response"): a neutrino of energy E is
+# seen like a nominal one of energy Eₛ·E, i.e. the response becomes A(Eₛ E). With the binned response
+# W_i = A(E_i) ΔE_i this is Σ_i A(Eₛ E_i) ΔE_i Φ(E_i) P(E_i) = (1/Eₛ) Σ_i A(E_i) ΔE_i Φ(E_i/Eₛ) P(E_i/Eₛ): flux and
+# oscillation are evaluated at E/Eₛ and the rate gets the Jacobian 1/Eₛ (applied in get_expected).
 function reweight(params, physics, assets)
 
-    flux = physics.atm_flux.nominal_flux(assets.binning.e_fine * params.orca_energy_scale, assets.binning.cz_fine)
+    e = assets.binning.e_fine ./ params.orca_energy_scale
+
+    flux = physics.atm_flux.nominal_flux(e, assets.binning.cz_fine)
     
     sys_flux = physics.atm_flux.sys_flux(flux, params)
 
     s = assets.true_shape
 
-    p = physics.osc.osc_prob(assets.binning.e_fine * params.orca_energy_scale, assets.paths, assets.layers, params)
+    p = physics.osc.osc_prob(e, assets.paths, assets.layers, params)
     nu = @views reshape(sys_flux.nue, s) .* p[:, :, 1, :] .+ reshape(sys_flux.numu, s) .* p[:, :, 2, :]
 
-    p = physics.osc.osc_prob(assets.binning.e_fine * params.orca_energy_scale, assets.paths, assets.layers, params, anti=true)
+    p = physics.osc.osc_prob(e, assets.paths, assets.layers, params, anti=true)
     nubar = @views reshape(sys_flux.nuebar, s) .* p[:, :, 1, :] .+ reshape(sys_flux.numubar, s) .* p[:, :, 2, :]
 
     (; nu, nubar)
@@ -162,7 +170,8 @@ function get_expected(params, physics, assets)
 
     osc_flux = reweight(params, physics, assets)
 
-    lifetime_seconds = 1.
+    # the weights W are per unit flux for the full exposure; 1/Eₛ is the Jacobian of the energy-scale shift (see reweight)
+    lifetime_seconds = 1. / params.orca_energy_scale
 
     # NC is flavour-blind: total active flux after oscillation, Σ_β Φ_osc(β)
     nc_nu = dropdims(sum(osc_flux.nu, dims=3), dims=3)
