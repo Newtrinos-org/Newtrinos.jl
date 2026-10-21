@@ -135,6 +135,8 @@ DensityInterface.logdensityof(::ArgumentErrorDensity, x) = throw(ArgumentError("
         t2k = Newtrinos.t2k.configure()
         nominal = Newtrinos.get_params((t2k = t2k,)); best = Newtrinos.get_params((t2k = t2k,); start = :best_fit)
         stored = Newtrinos.stored_best_fit(t2k)
+        @test isfile(joinpath(Newtrinos.module_dir(Newtrinos.t2k), "bestfit.toml"))
+        @test endswith(Newtrinos.module_dir(Newtrinos.t2k), joinpath("src", "experiments", "t2k", "t2k_2025"))
         @test !isempty(stored)
         @test keys(best) == keys(nominal)
         @test all(best[k] == (k in keys(t2k.params) ? stored[k] : nominal[k]) for k in keys(nominal))

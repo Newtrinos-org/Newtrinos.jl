@@ -69,7 +69,7 @@ priors = Newtrinos.get_priors(experiments)
 likelihood = Newtrinos.generate_likelihood(experiments)
 ```
 
-**Start values for joint fits:** `get_params(experiments; start = :best_fit)` replaces each experiment's own parameters (`x.params`; never physics parameters such as the oscillation, `xsec_*` or flux parameters) by the best fit of that experiment alone in its default setup, stored in `src/experiments/best_fit/<module>.toml` and written by `src/experiments/best_fit/generate.jl` (rerun it when an experiment's data or model change). Only start values: results do not depend on them.
+**Start values for joint fits:** `get_params(experiments; start = :best_fit)` replaces each experiment's own parameters (`x.params`; never physics parameters such as the oscillation, `xsec_*` or flux parameters) by the best fit of that experiment alone in its default setup, stored in `bestfit.toml` next to the experiment's module (e.g. `src/experiments/t2k/t2k_2025/bestfit.toml`) and written by `src/utils/generate_bestfit.jl` (rerun it when an experiment's data or model change). Only start values: results do not depend on them.
 
 **Parameters flow as NamedTuples** throughout the codebase. `get_params`/`get_priors` merge across all physics and experiment modules using `safe_merge` (checks for conflicts). Use `@reset` from Accessors.jl to modify individual fields.
 

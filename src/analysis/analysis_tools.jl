@@ -240,20 +240,37 @@ end
 convert_like(nominal::Number, v) = convert(typeof(nominal), v)
 convert_like(nominal::AbstractArray, v) = convert(typeof(nominal), reshape(collect(v), size(nominal)))
 
-"Directory of the stored best-fit parameter values, one `<experiment module>.toml` per experiment"
-const BEST_FIT_DIR = normpath(joinpath(@__DIR__, "..", "experiments", "best_fit"))
+"""
+    module_dir(m::Module) -> String
+
+Source directory of the experiment module `m` (the directory of the file defining its `configure`), resolved
+relative to the installed Newtrinos package; `nothing` if `m` has no `configure`.
+"""
+function module_dir(m::Module)
+    isdefined(m, :configure) || return nothing
+    file = replace(string(first(methods(getproperty(m, :configure))).file), '\\' => '/')
+    i = findlast("/src/", file)
+    isnothing(i) && return dirname(file)
+    dirname(joinpath(pkgdir(Newtrinos), file[first(i)+1:end]))
+end
 
 """
     stored_best_fit(x::Experiment) -> NamedTuple
 
-Best-fit values of the experiment's own parameters in its default setup, read from
-`src/experiments/best_fit/<module>.toml` (`<module>` is the module defining the experiment type); empty if there is
-no file. The files are written by `src/experiments/best_fit/generate.jl`.
+Best-fit values of the experiment's own parameters in its default setup, read from `bestfit.toml` next to the module
+defining the experiment type (see [`module_dir`](@ref)); empty if there is no such file. The files are written by
+`src/utils/generate_bestfit.jl`.
 """
 function stored_best_fit(x::Newtrinos.Experiment)
-    f = joinpath(BEST_FIT_DIR, "$(nameof(parentmodule(typeof(x)))).toml")
+    m = parentmodule(typeof(x))
+    dir = module_dir(m)
+    isnothing(dir) && return NamedTuple()
+    f = joinpath(dir, "bestfit.toml")
     isfile(f) || return NamedTuple()
-    d = TOML.parsefile(f)["params"]
+    toml = TOML.parsefile(f)
+    name = get(get(toml, "meta", Dict()), "experiment", string(nameof(m)))
+    name == string(nameof(m)) || error("$f was written for experiment `$name`, not `$(nameof(m))`")
+    d = toml["params"]
     NamedTuple(Symbol(k) => v for (k, v) in d)
 end
 

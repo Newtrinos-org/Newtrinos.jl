@@ -1,10 +1,10 @@
 # Best fit of each experiment alone, in its default setup (`configure()`, default priors), stored as
-# `<experiment module>.toml` in this directory. Only the experiment's own parameters are read back, as start values by
+# `bestfit.toml` next to the experiment's module (`Newtrinos.module_dir`). Only the experiment's own parameters are read back, as start values by
 # `Newtrinos.get_params(...; start = :best_fit)`; the oscillation best fit is recorded for information only.
 # Each experiment is fitted from 8 starts (both mass orderings, both θ₂₃ octants, δCP = π/2 and 3π/2); the best
 # one is kept.
 #
-#   julia -t N --project=<Newtrinos.jl> src/experiments/best_fit/generate.jl <experiment> [<experiment> ...]
+#   julia -t N --project=<Newtrinos.jl> src/utils/generate_bestfit.jl <experiment> [<experiment> ...]
 using Newtrinos, Distributions, TOML, Dates, Printf, LinearAlgebra, Base.Threads
 using BAT: distprod
 BLAS.set_num_threads(1)
@@ -30,8 +30,8 @@ function write_best_fit(name, res)
                             "log_likelihood" => llh, "log_posterior" => lp, "ordering" => string(o), "oscillation" => osc),
              "params" => Dict(string(k) => (bf[k] isa AbstractArray ? collect(Float64, vec(bf[k])) : Float64(bf[k])) for k in keys(own)))
     logmsg("$name best fit: " * repr(d["params"]))          # also in the log, in case writing the file fails
-    open(joinpath(@__DIR__, "$name.toml"), "w") do io
-        println(io, "# written by generate.jl: best fit of `$name` alone in its default setup; [params] are read by")
+    open(joinpath(N.module_dir(getproperty(N, Symbol(name))), "bestfit.toml"), "w") do io
+        println(io, "# written by src/utils/generate_bestfit.jl: best fit of `$name` alone in its default setup; [params] are read by")
         println(io, "# Newtrinos.get_params(...; start = :best_fit) as start values, [meta] is for information only")
         TOML.print(io, d; sorted = true)
     end

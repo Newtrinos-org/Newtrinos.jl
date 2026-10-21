@@ -1,4 +1,4 @@
-# written by generate.jl: best fit of `kamland` alone in its default setup; [params] are read by
+# written by src/utils/generate_bestfit.jl: best fit of `kamland` alone in its default setup; [params] are read by
 # Newtrinos.get_params(...; start = :best_fit) as start values, [meta] is for information only
 [meta]
 date = "2026-10-15"
