@@ -1,0 +1,56 @@
+# written by src/utils/generate_bestfit.jl: best fit of `super_k` alone in its default setup; [params] are read by
+# Newtrinos.get_params(...; start = :best_fit) as start values, [meta] is for information only
+[meta]
+date = "2026-10-15"
+experiment = "super_k"
+log_likelihood = -2870.208630893726
+log_posterior = -2778.360816281867
+newtrinos_commit = "3c346d7"
+ordering = "NO"
+
+    [meta.oscillation]
+    "Δm²₂₁" = 7.750242289170546e-5
+    "Δm²₃₁" = 0.0024447838427545743
+    "δCP" = 3.7494590758154427
+    "θ₁₂" = 0.7853895176346608
+    "θ₁₃" = 0.1493187570097054
+    "θ₂₃" = 0.7665216876498796
+
+[params]
+sk_fc_multigev_rel_norm = 0.9961047066731692
+sk_fc_norm = 0.99715035537708
+sk_fc_pc_separation = 1.0016875203577973
+sk_fiducial_norm = 0.9860540412231548
+sk_flux_norm_high = -0.17344154832513328
+sk_flux_norm_low = -0.6799824604208404
+sk_i_iii_decay_e_tag_eff = 0.9859848926805282
+sk_i_iii_energy_scale = 1.0109576935324764
+sk_i_iii_multigev_pid = 1.0026078246314447
+sk_i_iii_subgev_pid = 1.010459524097963
+sk_i_iii_updown_energy_scale = 0.9979115514108314
+sk_i_v_bdt_1 = 0.9120589548502718
+sk_i_v_bdt_2 = 0.9891154215840634
+sk_i_v_bdt_3 = 0.9914978293776991
+sk_iv_v_decay_e_tag_eff = 1.0043820187242436
+sk_iv_v_energy_scale = 1.002013269178261
+sk_iv_v_multigev_neutron_tag_eff = 1.0961087689357127
+sk_iv_v_multigev_pid = 1.0019361647941698
+sk_iv_v_subgev_neutron_tag_eff = 1.0996500781673006
+sk_iv_v_subgev_pid = 0.9950186670927611
+sk_iv_v_updown_energy_scale = 1.0020332572340118
+sk_multigev_ring_counting = 0.9728690988320741
+sk_nc_mu_norm = 1.0543269980108003
+sk_ncpi0_norm = 1.003381584022987
+sk_nue_contamination = 1.002103564748162
+sk_pc_norm = 0.9800148513977486
+sk_pc_stop_thru_barrel = 0.8996396356979848
+sk_pc_stop_thru_bottom = 1.0237293173625641
+sk_pc_stop_thru_top = 1.0901109469272547
+sk_pc_upmu_rel_norm = 1.020629291772902
+sk_pi0_norm = 0.9791342299865873
+sk_ring_counting = 1.0066274520067082
+sk_solar_activity = 2.2204460492502485e-16
+sk_total_norm = 1.1317156661657721
+sk_upmu_nonshower_vs_shower = 1.0235988894408734
+sk_upmu_norm = 1.0030758952743408
+sk_upmu_stopping_vs_througoing = 1.0013649596637155
