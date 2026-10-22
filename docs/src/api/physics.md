@@ -38,6 +38,7 @@ Newtrinos.osc.ThreeFlavour
 Newtrinos.osc.ThreeFlavourXYCP
 Newtrinos.osc.Sterile
 Newtrinos.osc.ADD
+Newtrinos.osc.NND
 ```
 
 ### Parameters and Priors
@@ -61,6 +62,7 @@ Newtrinos.osc.NSI
 ```@docs
 Newtrinos.osc.PropagationModel
 Newtrinos.osc.Basic
+Newtrinos.osc.Spray
 Newtrinos.osc.Decoherent
 Newtrinos.osc.Damping
 ```
@@ -96,6 +98,19 @@ Newtrinos._fast_eigen_dfzero
 Newtrinos._sorted_eigen
 ```
 
+### Solar Oscillations
+
+`osc.solar_prob(E, production, params)` (day) and `osc.solar_prob(E, production, paths, layers, params)` (with Earth
+regeneration) give the solar-neutrino survival and appearance probabilities for a production region from
+`Newtrinos.solar_flux`. MSW conversion in the Sun is adiabatic unless Parke's level-crossing estimate is
+non-negligible; then the transition is evolved numerically through the solar density profile.
+
+```@docs
+Newtrinos.osc.solar_mass_fractions
+Newtrinos.osc.solar_crossing_probability
+Newtrinos.osc.solar_transition_matrix
+```
+
 ### Internal Functions
 
 These functions are not part of the public API but are documented for developers working
@@ -121,6 +136,7 @@ physics module providing layer structures and path computations for matter-effec
 ```@docs
 Newtrinos.earth_layers.DensityModel
 Newtrinos.earth_layers.PREM
+Newtrinos.earth_layers.VariableDensity
 Newtrinos.earth_layers.EarthLayers
 ```
 
@@ -130,6 +146,9 @@ Newtrinos.earth_layers.EarthLayers
 Newtrinos.earth_layers.configure
 Newtrinos.earth_layers.get_compute_layers
 Newtrinos.earth_layers.compute_paths
+Newtrinos.earth_layers.get_compute_chord_paths
+Newtrinos.earth_layers.PREM_discontinuities
+Newtrinos.earth_layers.scale_densities
 Newtrinos.earth_layers.ray_circle_path_length
 ```
 
@@ -269,4 +288,7 @@ Newtrinos.xsec.get_scale
 ```@docs
 Newtrinos.Helpers.bin
 Newtrinos.Helpers.rebin
+Newtrinos.Helpers.not_a_knot_spline
 ```
+
+See also [Solar and Reactor Physics API](solar_reactor.md) for the solar, reactor and IBD modules and published Δχ² maps.

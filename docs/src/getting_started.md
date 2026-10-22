@@ -91,4 +91,4 @@ fig
 ![png](./first_example_plot.png)
 
 ## Next Step
-Go to the [tutorials](tutorials/) and work through the features in more detail to understand how the package works and to be able to do own analyses with Newtrinos.jl
+Go to the [tutorials](tutorials/architecture.md) and work through the features in more detail to understand how the package works and to be able to do own analyses with Newtrinos.jl

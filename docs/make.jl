@@ -36,6 +36,7 @@ makedocs(
         "API Documentation" => [
             "Types" => "api/types.md",
             "Physics" => "api/physics.md",
+            "Solar and Reactor Physics" => "api/solar_reactor.md",
             "Analysis" => "api/analysis.md",
         ],
         "Contribution guidelines" => "contribution_guidelines.md",

@@ -42,7 +42,8 @@ osc = Newtrinos.osc.configure(osc_cfg)
 - `ThreeFlavour(ordering=:NO)` / `ThreeFlavour(ordering=:IO)` — standard 3-flavour
 - `Sterile()` — 3+1 sterile neutrino model
 - `ADD()` — large extra dimensions
-- `Darkdim_tower()`, `Darkdim_lightest()` — dark dimension models
+- `Darkdim_Lambda()`, `Darkdim_Masses()`, `Darkdim_cas()` — dark dimension models
+- `NND()` — N-naturalness tower of neutrino states
 
 #### Available Interaction Models
 
@@ -53,6 +54,7 @@ osc = Newtrinos.osc.configure(osc_cfg)
 #### Available Propagation Models
 
 - `Basic()` — standard propagation
+- `Spray()` — averaging of the oscillation phases over an energy (and production-height) kernel, e.g. one cell of an experiment's energy grid, to avoid aliasing of fast oscillations
 - `Decoherent()` — quantum decoherence
 - `Damping()` — damped oscillations
 
@@ -290,6 +292,7 @@ experiments = (
 | Neutrino paths through Earth | `earth_layers.compute_paths(cz, layers)` | `VectorOfVectors{Path}` |
 | Nominal atmospheric flux | `atm_flux.nominal_flux(E_grid, cz_grid)` | `Table` with flux columns |
 | Systematic flux shifts | `atm_flux.sys_flux(flux, params)` | `NamedTuple` of flux arrays |
+| Solar probabilities | `osc.solar_prob(E, production, params)` / `osc.solar_prob(E, production, paths, layers, params)` | `(n_E, 3)` / `(n_E, n_paths, 3)` |
 | Cross-section scale | `xsec.scale(flav, interaction, params)` | scalar |
 | Cross-section reweighting | `xsec.weights(E; flavour, anti, current, target, generator, process)` | `params -> weights` |
 
