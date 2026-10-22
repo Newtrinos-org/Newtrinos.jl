@@ -29,6 +29,9 @@ released oscillated/unoscillated pairs and mode breakdowns (`calibrate_response.
   `osc − NC − beam νe ⟨P_ee⟩ − νμ CC ⟨P_μμ⟩`, is reweighted by `⟨P_μe(θ)⟩ / ⟨P_μe(θ_ref)⟩`; in RHC a wrong-sign
   νμ → νe contribution is included. Beam νe oscillate with P_ee, misidentified νμ CC with P_μμ; NC is unoscillated.
 
+All reference-point quantities (`θ_ref` probabilities, mode split, per-bin corrections) are computed with the default
+standard-3ν physics the release was produced with, independent of the configured oscillation model.
+
 Matter effects use a constant density (L = 295 km, ρ = 2.6 g/cm³). The e-like samples are fitted in
 E_rec only (T2K fits p–θ), and there are no systematic templates, so the official result is not
 reproduced exactly.
@@ -278,7 +281,9 @@ function get_assets(physics; file = datafile, response = RESPONSE, ws_ratio = RH
     layers = StructArray{Newtrinos.Layer}((radius = [6371.0], p_density = [RHO * YE], n_density = [RHO * (1 - YE)]))
     paths = VectorOfVectors{Newtrinos.Path}([[Newtrinos.Path(L_FD, 1)]])
     Et = exp10.(range(log10(0.05), log10(10.0), 500))
-    Pref = channel_probabilities(physics, Et, paths, layers, ref_params())
+    # oscillation probabilities at the reference point of the released predictions, always with the default (standard
+    # 3ν) physics the release was produced with, whatever oscillation model is configured (e.g. Spray averaging or BSM)
+    Pref = channel_probabilities(default_physics(), Et, paths, layers, ref_params())
 
     samples = h5open(file) do f
         hist(path) = (edges = read(f["$path/edges"]), values = read(f["$path/values"]))
