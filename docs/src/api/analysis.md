@@ -27,6 +27,18 @@ Newtrinos.safe_merge
 Newtrinos.correlated_priors_vars
 ```
 
+### Best-fit start values
+
+`get_params(experiments; start = :best_fit)` replaces each experiment's own parameters (never physics parameters such
+as the oscillation, cross-section or flux parameters) by the best fit of that experiment alone in its default setup,
+read from `bestfit.toml` next to the experiment's module. The files are written by `src/utils/generate_bestfit.jl`
+(rerun it when an experiment's data or model change). They are start values only; results do not depend on them.
+
+```@docs
+Newtrinos.stored_best_fit
+Newtrinos.module_dir
+```
+
 ---
 
 ## Data Generation
@@ -71,7 +83,8 @@ Newtrinos.get_fwd_model
 
 `scan` evaluates the joint likelihood on a fixed grid without optimization.
 `profile` minimizes over nuisance parameters at each grid point.
-`find_mle` / `find_mle_cached` locate the global maximum-likelihood estimate.
+`find_mle` / `find_mle_cached` locate the global maximum-likelihood estimate. Fits with several local minima (e.g.
+in δCP or the θ₂₃ octant) can be started from several points with `profile(...; starts = [...])`.
 
 ```@docs
 Newtrinos.find_mle

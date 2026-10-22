@@ -139,7 +139,7 @@ fig
 
 ## Further Reading / Examples
 
-You can find tutorials and more examples in the [documentation](https://Newtrinos-org.github.io/Newtrinos.jl/dev/). You can also look inside the subdirectories of the various experimental datasets under `src/experiments/x/y`. Each of these subdirectories contains a julia script `test.jl` that is aimed at reproducing official results.
+You can find tutorials and more examples in the [documentation](https://Newtrinos-org.github.io/Newtrinos.jl/dev/). The implemented experiments are listed [here](https://Newtrinos-org.github.io/Newtrinos.jl/dev/tutorials/experiments/). Their validation against the publications — published figures next to the Newtrinos reproduction, with scripts and pinned Newtrinos commits — is collected on the [Newtrinos verifications site](https://newtrinos-org.github.io/newtrinos-verifications/). You can also look inside the subdirectories of the various experimental datasets under `src/experiments/x/y`, many of which contain a julia script `test.jl` that reproduces official results.
 
 ## Contributing to Newtrinos.jl
 All contributions, bug reports, bug fixes, documentation improvements, enhancements, and ideas are welcome. If you want to contribute, please take a look at the [contribution guidelines](https://Newtrinos-org.github.io/Newtrinos.jl/dev/contribution_guidelines/).
@@ -153,5 +153,5 @@ Newtrinos.jl has been used to produce the results presented in:
 * [Constraints on non-unitary neutrino mixing in light of atmospheric and reactor neutrino data](https://arxiv.org/abs/2407.20388) - Published in: JHEP 05 (2025) 130
 * [A neutrino data analysis of extra-dimensional theories with massive bulk fields](https://arxiv.org/abs/2508.04274) - Published in: Phys.Rev.D 112 (2025) 5, 055009
 * [Atmospheric Neutrino Oscillations: the Full Picture](https://arxiv.org/abs/2606.09714) - Published in: Phys.Rev.D 114 (2026) 5, 053005
-* [Searching for the N-naturalness tower of neutrinos](https://arxiv.org/abs/2607.14243) - accepted for publication by PRD
+* [Searching for the N-naturalness tower of neutrinos](https://arxiv.org/abs/2607.14243) - Published in: Phys.Rev.D 114 (2026) 7, 075022
 
