@@ -291,7 +291,8 @@ end
     get_flux_on_mesh(cfg; datadir)
 
 Returns `E -> flux` where `flux(thermal_power_scale, energy_per_fission, fission_fractions_scale, pulls, neq_scale,
-snf_scale, reac_idx)` gives `(main, neq, snf, correction)` at the antineutrino energies `E` (see [`get_flux`](@ref)).
+snf_scale, reac_idx; correction)` gives `(main, neq, snf, correction)` at the antineutrino energies `E` (see
+[`get_flux`](@ref)); the free spectrum correction depends only on `pulls` and can be passed in as `correction`.
 Everything that does not depend on the parameters (isotope spectra, NEQ and SNF corrections, interpolation weights of
 the free spectrum correction) is tabulated once for the mesh `E`.
 """
@@ -344,13 +345,15 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir)
         k = [clamp(searchsortedlast(spec_edges, e), 1, length(spec_edges) - 1) for e in E]
         t = [(e - spec_edges[kk]) / (spec_edges[kk+1] - spec_edges[kk]) for (e, kk) in zip(E, k)]
 
-        function flux(thermal_power_scale, energy_per_fission, fission_fractions_scale, pulls, neq_scale, snf_scale, reac_idx)
+        spectrum_correction(pulls) = @. exp(pulls[k] + t * (pulls[k+1] - pulls[k]))
+        # `correction` can be passed in when it is shared by several reactors (it depends only on `pulls`)
+        function flux(thermal_power_scale, energy_per_fission, fission_fractions_scale, pulls, neq_scale, snf_scale, reac_idx;
+                      correction = spectrum_correction(pulls))
             w = fission_fractions_scale .* fractions
             fissions_per_GJ = GJ_to_MeV * thermal_power_scale / sum(w .* energy_per_fission)
             main = fissions_per_GJ .* (w[1] .* S[1] .+ w[2] .* S[2] .+ w[3] .* S[3] .+ w[4] .* S[4])
             # skips 2nd entry (U238 has no NEQ correction!)
             neq = fissions_per_GJ .* (neq_scale[1] * w[1] .* NEQ[1] .+ neq_scale[3] * w[3] .* NEQ[3] .+ neq_scale[4] * w[4] .* NEQ[4])
-            correction = @. exp(pulls[k] + t * (pulls[k+1] - pulls[k]))
             return main, neq, snf_scale .* SNF[reac_idx], correction
         end
     end
