@@ -26,6 +26,9 @@ reconstructed bin:
   ν̄μ→ν̄e, beam νe νe→νe, νμ CC νμ→νμ, ντ CC νμ→ντ); NC and cosmics are unchanged. The ντ CC
   background (<0.5% of the νe samples) is not reweighted with a cross-section model.
 
+All reference-point quantities (`θ_ref` probabilities, the per-bin νμ correction) are computed with the default
+standard-3ν physics the release was produced with, independent of the configured oscillation model.
+
 Systematics (priors sized to the rate and parameter uncertainties quoted after the ND
 extrapolation, PRL 136, 011802, Tab. I and text): νμ and RHC normalisations, νe signal and
 background normalisations, the νe/νμ and ν̄e/ν̄μ cross-section ratios, and a muon and a hadronic
@@ -233,8 +236,9 @@ function get_assets(physics; file = datafile, calibration::Symbol = :ref2024)
     layers = StructArray{Newtrinos.Layer}((radius = [6371.0], p_density = [RHO * YE], n_density = [RHO * (1 - YE)]))
     paths = VectorOfVectors{Newtrinos.Path}([[Newtrinos.Path(L_FD, 1)]])
     Et = exp10.(range(log10(0.1), log10(10.0), 400))   # true-energy grid [GeV]
-    # oscillation probabilities at the reference point of the released predictions
-    Pref = channel_probabilities(physics, Et, paths, layers, ref_params(calibration))
+    # oscillation probabilities at the reference point of the released predictions, always with the default (standard
+    # 3ν) physics the release was produced with, whatever oscillation model is configured (e.g. Spray averaging or BSM)
+    Pref = channel_probabilities(default_physics(), Et, paths, layers, ref_params(calibration))
 
     # --- νμ / ν̄μ disappearance: 4 quartiles per beam mode ---
     numu_sample(mode, q) = begin
