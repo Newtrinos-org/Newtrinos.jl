@@ -43,6 +43,8 @@ FileIO.save("test_output/test.jld2", Dict("result" => result))
 
 converted = Newtrinos.NewtrinosResult(axes = (sin2theta23 = sin.(result.axes.θ₂₃).^2, Δm²₃₂ = result.axes.Δm²₃₁ .- p.Δm²₂₁), values=result.values);
 
+# WebPlotDigitizer export of the official 3-year 90% C.L. contour, presumably Fig. 3 of PoS(ICRC2019)1031
+# (doi:10.22323/1.358.1031); the source figure was not recorded
 official = CSV.read("wpd_datasets.csv", DataFrame, header=2)
 
 fig = Figure()

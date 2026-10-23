@@ -58,7 +58,7 @@ Create a fully configured SNS flux physics module.
   energy–time shapes only and normalised to `nu_yield` neutrinos per flavour per proton (summed over all energies
   and times, averaged over νμ, ν̄μ and νe), as prescribed by the COHERENT data releases. Without it, the tables are
   scaled as rates at `beam_power`, whose absolute normalisation is not documented.
-- `nu_yield::Real = 0.0848`: neutrinos per flavour per proton (COHERENT CsI 2021 release).
+- `nu_yield::Real = 0.0848`: neutrinos per flavour per proton (COHERENT CsI[Na] data release, arXiv:2110.07730).
 
 # Returns
 An [`SNSFlux`](@ref) instance.

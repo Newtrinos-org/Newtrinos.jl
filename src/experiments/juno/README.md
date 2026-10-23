@@ -1,6 +1,11 @@
 # JUNO
  ## Resources
-Data source: -
+The JUNO and TAO inputs (unoscillated spectrum, detector non-linearity, background spectra, TAO shape uncertainty)
+are curves digitised from the JUNO sensitivity study, Chin. Phys. C 46, 123001 (2022), arXiv:2204.13249, and its
+references (added by M. Erbek, 2025). The individual source figures were not recorded; `*_observed.csv` and
+`sm_asimov.csv` are Asimov pseudo-data generated with the module. TODO: record the figure of each CSV.
+
+Verification: https://newtrinos-org.github.io/newtrinos-verifications/entries/10.1088_1674-1137_ac8bc9/
 
 ## Test output plots
 ![Comparison](test_output/dm31.png)

@@ -50,7 +50,8 @@ function get_assets(physics; datadir = @__DIR__)
     # Reactors
     reactor_list = ["D1", "D2", "L1", "L2", "L3", "L4"]
     
-    # Correlation matrix from Fig. 29 in https://arxiv.org/pdf/1607.05378.pdf
+    # Reactor-spectrum correlation matrix read off Fig. 29 of https://arxiv.org/pdf/1607.05378.pdf
+    # (Daya Bay, Chin. Phys. C 41, 013002 (2017); how the values were obtained was not recorded)
     corr_mat_df = CSV.read(joinpath(datadir, "DayaBay_CorrMat_arXiv_1607.05378.txt"), DataFrame, delim=' ')
     corr_mat = Symmetric(Matrix(corr_mat_df[:, 5:end]))
     
