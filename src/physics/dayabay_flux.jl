@@ -24,7 +24,6 @@ abstract type FluxModel end
     flux_model::F = DayaBayFlux()
     datadir::String = datadir
     average::Bool = false
-    nominal_thermal_power::String = "DayaBay"
 end
 
 
@@ -43,19 +42,12 @@ end
 
 
 function configure(cfg::ReactorFluxConfig = ReactorFluxConfig())
-    #if cfg.flux_model isa DayaBayFlux
-    #    # get nominal thermal power
-    if cfg.nominal_thermal_power == "DayaBay"
-        file = YAML.load_file(joinpath(cfg.datadir, "dayabay_data/parameters/reactor_thermal_power_nominal.yaml"))
-        nominal_thermal_power = file["parameters"]["nominal_thermal_power"]   # GW
-    else
-
     ReactorFlux(
         cfg=cfg,
         params = get_params(cfg.flux_model, datadir=cfg.datadir),
         priors = get_priors(cfg.flux_model, datadir=cfg.datadir),
         flux = get_flux(cfg.flux_model, datadir=cfg.datadir, average=cfg.average),
-        flux_on_mesh = get_flux_on_mesh(cfg.flux_model, nominal_thermal_power, datadir=cfg.datadir, average=cfg.average),
+        flux_on_mesh = get_flux_on_mesh(cfg.flux_model, datadir=cfg.datadir, average=cfg.average),
         datadir = cfg.datadir,
         average=cfg.average,
     )

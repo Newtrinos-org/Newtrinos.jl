@@ -948,7 +948,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         map(1:6) do r
             main, neq, snf, correction = mesh_flux(params.reactor_thermal_power_scale[r], params.energy_per_fission,
                 params[ffs_symbols[r]], params.spectrum_pulls, params[neq_symbols[r]], params.snf_scale[r], r)
-            (main .* correction .+ neq, snf * )
+            (main .* correction .+ neq, snf)
         end
     end
     # survival probabilities per AD (shared by its periods)
