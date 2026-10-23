@@ -79,6 +79,9 @@ function get_params()
 
     reactor_thermal_power_scale = ones(9)
 
+    eres_unc_scale = 0.0
+    e_scale = 1.0
+
 
 
 
@@ -96,13 +99,16 @@ function get_params()
         juno_taishan_neq_scale = juno_taishan_neq_scale,
         juno_yangjiang_neq_scale =juno_yangjiang_neq_scale,
         juno_dayabay_neq_scale = juno_dayabay_neq_scale,        
-        juno_res_a = 0.0261,
-        juno_res_b = 0.0082 ,
-        juno_res_c = 0.0123,
-        juno_IBD_rate = IBD_rate,
+        #juno_res_a = 0.0261,
+        #juno_res_b = 0.0082,
+        #juno_res_c = 0.0123,
+        #juno_IBD_rate = IBD_rate,
+        
         juno_efficiency = efficiency,
         juno_reactor_thermal_power_scale = reactor_thermal_power_scale,
         juno_fission_fractions_scale = juno_fission_fractions_scale,
+        juno_eres_unc_scale = eres_unc_scale,
+        juno_e_scale = e_scale,
     )
 
 end
@@ -110,25 +116,26 @@ end
 function get_priors()
 
     # events per day, backgrounds
-    lihe_rate = 1.05
-    geo_rate = 1.30
-    world_reactors_rate = 0.92
-    bipo_rate = 0.42
+    #lihe_rate = 1.05
+    #geo_rate = 1.30
+    #world_reactors_rate = 0.92
+    #bipo_rate = 0.42
     # alpha_n, fast_n, double_n, atmo, acc
     other_rate = 0.05 + 0.02 + 0.1 + 0.09 + 0.07
 
     # Gaussian quadrature of other pre-fit background rate uncertainties for combined uncertainty
     other_sigma = sqrt(0.02^2 + 0.02^2 + 0.10^2 + 0.04^2 + 0.01^2 )
     
-    lihe = Truncated(Normal(lihe_rate, 0.27), 0.0, Inf)
-    geo = Truncated(Normal(geo_rate, 0.52), 0.0, Inf)
-    world_reactors = Truncated(Normal(world_reactors_rate, 0.09), 0.0, Inf)
-    bipo = Truncated(Normal(bipo_rate, 0.31), 0.0, Inf)
-    other = Normal(other_rate, other_sigma)
+    lihe = Truncated(Normal(1.05, 0.27), 0.0, Inf)
+    #geo = Truncated(Normal(1.30, 0.52), 0.0, Inf)
+    geo = Uniform(0, 5)
+    world_reactors = Truncated(Normal(0.92, 0.09), 0.0, Inf)
+    bipo = Truncated(Normal(0.42, 0.31), 0.0, Inf)
+    other = Truncated(Normal(0.33, 0.11), 0.0, Inf)
 
     efficiency_mu = 0.7401
-    efficiency_sisgma = efficiency_mu * 0.01
-    efficiency = Normal(efficiency_mu, efficiency_sisgma)
+    efficiency_sigma = efficiency_mu * 0.01 * 1.4
+    efficiency = Normal(efficiency_mu, efficiency_sigma)
 
     IBD_rate = Normal(36.02, 0.81)
 
@@ -150,24 +157,28 @@ function get_priors()
     #neq, assumes correlation within plant, uncorrelated between plants
     neq_mu = 1.0
     neq_sigma = neq_mu * 0.003
-    juno_taishan_neq_scale = MvNormal(neq_mu .* ones(4)), Diagonal(ones(4) .* neq_sigma^2)
-    juno_yangjiang_neq_scale = MvNormal(neq_mu .* ones(4)), Diagonal(ones(4) .* neq_sigma^2)
-    juno_dayabay_neq_scale = MvNormal(neq_mu .* ones(4)), Diagonal(ones(4) .* neq_sigma^2)
+    juno_taishan_neq_scale = MvNormal(neq_mu .* ones(4), Diagonal(ones(4) .* neq_sigma^2))
+    juno_yangjiang_neq_scale = MvNormal(neq_mu .* ones(4), Diagonal(ones(4) .* neq_sigma^2))
+    juno_dayabay_neq_scale = MvNormal(neq_mu .* ones(4), Diagonal(ones(4) .* neq_sigma^2))
 
     tps_mu = ones(9)
     tps_sigma = tps_mu .* 0.005
     thermal_power_scale = MvNormal(tps_mu, Diagonal(tps_sigma.^2))
+
+    eres_unc_scale = Normal(0., 1.)
+    # assume 0.5% energy scale uncertainty as per 59day Juno paper
+    e_scale = Normal(1, 0.005)
 
     priors = (
         juno_lihe_rate = lihe,
         juno_geo_rate = geo,
         juno_world_reactor_rate = world_reactors,
         juno_bipo_rate = bipo,
-        juno_other_rate = other_rate,
-        juno_IBD_rate = IBD_rate,
-        juno_res_a = Truncated(Normal(0.0261, 0.0002), 0.0, Inf),
-        juno_res_b = Truncated(Normal(0.0082, 0.0001), 0.0, Inf),
-        juno_res_c = Truncated(Normal(0.0123, 0.0004), 0.0, Inf),
+        juno_other_rate = other,
+        #juno_IBD_rate = IBD_rate,
+        #juno_res_a = Truncated(Normal(0.0261, 0.0002), 0.0, Inf),
+        #juno_res_b = Truncated(Normal(0.0082, 0.0001), 0.0, Inf),
+        #juno_res_c = Truncated(Normal(0.0123, 0.0004), 0.0, Inf),
         juno_efficiency = efficiency,
         juno_taishan_neq_scale = juno_taishan_neq_scale,
         juno_yangjiang_neq_scale = juno_yangjiang_neq_scale,
@@ -177,6 +188,8 @@ function get_priors()
         juno_dayabay_snf_scale = juno_dayabay_snf_scale,
         juno_fission_fractions_scale = juno_fission_fractions_scale,
         juno_reactor_thermal_power_scale = thermal_power_scale,
+        juno_e_scale = e_scale,
+        juno_eres_unc_scale = eres_unc_scale,
     )
 end
 
@@ -210,6 +223,11 @@ function get_eres()
     function _eres(E)
         @. nom_itp(E)
     end
+end
+
+function eres_parameterised(E; a = 0.0303, b = 0.010, c = 0.006)
+    # default values roughly match the plot provided in the paper
+    return @. sqrt(a^2 * E + b^2 * E^2 + c^2)
 end
 
 
@@ -372,9 +390,9 @@ function project_to_bins(image_edges, counts, target_edges)
     out
 end
 
-function eres(E, a, b, c)
-    sigma_E = @. sqrt(a^2 * E^2 + b^2 * E + c^2)
-end
+#function eres(E, a, b, c)
+#    sigma_E = @. sqrt(a^2 * E^2 + b^2 * E + c^2)
+#end
 
 """
     smear_bin_centres(counts, σ, edges; nσ = 8)
@@ -422,7 +440,7 @@ function rebin(counts, idx, n)
     out
 end
 
-function get_forward_model(physics, assets)
+function get_forward_model(physics, assets; debug = false)
 
     E_ana = assets.Ebins
     E_ana_c = assets.Ec
@@ -519,10 +537,6 @@ function get_forward_model(physics, assets)
 
     # TODO: insert proper nominal thermal power, is currently hidden in dayabay_flux module, only used for SNF
 
-
-
-    
-
     # background shapes
     lihe_shape = assets.lihe_shape
     world_reactor_shape = assets.world_reactor_shape
@@ -536,9 +550,9 @@ function get_forward_model(physics, assets)
 
     function forward_model(params)
         T = promote_type(
-                eltype(params.juno_res_a),
-                eltype(params.juno_res_b),
-                eltype(params.juno_res_c),
+                #eltype(params.juno_res_a),
+                #eltype(params.juno_res_b),
+                #eltype(params.juno_res_c),
                 eltype(params.juno_reactor_thermal_power_scale),
                 eltype(params.juno_fission_fractions_scale),
                 eltype(params.juno_taishan_neq_scale),
@@ -552,6 +566,8 @@ function get_forward_model(physics, assets)
                 eltype(params.juno_geo_rate),
                 eltype(params.juno_bipo_rate),
                 eltype(params.juno_other_rate),
+                eltype(params.juno_eres_unc_scale),
+                eltype(params.juno_e_scale),
                 eltype(params.spectrum_pulls),
                 eltype(params.energy_per_fission),
                 eltype(params.θ₁₃),
@@ -582,13 +598,17 @@ function get_forward_model(physics, assets)
         interm_spec .*= integral_weights
         spec = vec(sum(reshape(interm_spec, NQ, NFc), dims = 1))
 
-        E_vis_edges = lsnl(E_fine)
+        E_vis_edges = lsnl(E_fine) .* params.juno_e_scale
         evis_spectrum = project_to_bins(E_vis_edges, spec .* lsnl_mask, E_fine)
-        erec_spectrum = smear_bin_centres(evis_spectrum, sigma_E, E_fine)
-
+        scaled_eres = zeros(T, length(sigma_E))
+        scaled_eres .+= sigma_E .* (1 + 0.05 * params.juno_eres_unc_scale)
+        erec_spectrum = smear_bin_centres(evis_spectrum, scaled_eres, E_fine)
         coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency
+        if debug
+            return coarse_counts, bg
+        end
 
-        return coarse_counts, bg
+        return distprod(Poisson.(coarse_counts .+ bg))
     end
 end
 
