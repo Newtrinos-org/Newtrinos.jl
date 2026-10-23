@@ -77,7 +77,12 @@ function get_params()
 
     juno_fission_fractions_scale = ones(4)
 
-    reactor_thermal_power_scale = ones(9)
+    juno_taishan_ffs = ones(4)
+    juno_yangjiang_ffs = ones(4)
+    juno_dayabay_ffs = ones(4)
+
+    #reactor_thermal_power_scale = ones(9)
+    reactor_thermal_power_scale = 1.0
 
     eres_unc_scale = 0.0
     e_scale = 1.0
@@ -106,7 +111,9 @@ function get_params()
         
         juno_efficiency = efficiency,
         juno_reactor_thermal_power_scale = reactor_thermal_power_scale,
-        juno_fission_fractions_scale = juno_fission_fractions_scale,
+        juno_taishan_ffs = juno_taishan_ffs,
+        juno_yangjiang_ffs = juno_yangjiang_ffs,
+        juno_dayabay_ffs = juno_dayabay_ffs,
         juno_eres_unc_scale = eres_unc_scale,
         juno_e_scale = e_scale,
     )
@@ -147,7 +154,9 @@ function get_priors()
     # one set of parameter for all reactor cores assumed
     ffs_mu = ones(4)
     ffs_sigma = ffs_mu .* 0.006
-    juno_fission_fractions_scale = MvNormal(ffs_mu, Diagonal(ffs_sigma.^2))
+    juno_taishan_ffs = MvNormal(ffs_mu, Diagonal(ffs_sigma.^2))
+    juno_yangjiang_ffs = MvNormal(ffs_mu, Diagonal(ffs_sigma.^2))
+    juno_dayabay_ffs = MvNormal(ffs_mu, Diagonal(ffs_sigma.^2))
 
     # spent nuclear fuel, assumes correlation within plant, uncorrelated between plants
     snf_mu = 1.
@@ -165,7 +174,8 @@ function get_priors()
 
     tps_mu = ones(9)
     tps_sigma = tps_mu .* 0.01
-    thermal_power_scale = MvNormal(tps_mu, Diagonal(tps_sigma.^2))
+    #thermal_power_scale = MvNormal(tps_mu, Diagonal(tps_sigma.^2))
+    thermal_power_scale = Normal(1, 0.01)
 
     eres_unc_scale = Normal(0., 1.)
     # assume 0.5% energy scale uncertainty as per 59day Juno paper
@@ -188,7 +198,9 @@ function get_priors()
         juno_taishan_snf_scale = juno_taishan_snf_scale,
         juno_yangjiang_snf_scale = juno_yangjiang_snf_scale,
         juno_dayabay_snf_scale = juno_dayabay_snf_scale,
-        juno_fission_fractions_scale = juno_fission_fractions_scale,
+        juno_taishan_ffs = juno_taishan_ffs,
+        juno_yangjiang_ffs = juno_yangjiang_ffs,
+        juno_dayabay_ffs = juno_dayabay_ffs,
         juno_reactor_thermal_power_scale = thermal_power_scale,
         juno_e_scale = e_scale,
         juno_eres_unc_scale = eres_unc_scale,
@@ -484,6 +496,17 @@ function get_forward_model(physics, assets; debug = false)
     # the reactor fluxes on the integration mesh depend only on the reactor parameters: computed once per evaluation
     # and shared by all AD-periods; (main × correction + neq, snf) per reactor
     mesh_flux = physics.flux.flux_on_mesh(E_nu_mesh)
+    ffs_symbols = [
+        :juno_taishan_ffs,
+        :juno_taishan_ffs,
+        :juno_yangjiang_ffs,
+        :juno_yangjiang_ffs,
+        :juno_yangjiang_ffs,
+        :juno_yangjiang_ffs,
+        :juno_yangjiang_ffs,
+        :juno_yangjiang_ffs,
+        :juno_dayabay_ffs,
+    ]
     neq_symbols = [
         :juno_taishan_neq_scale,
         :juno_taishan_neq_scale,
@@ -508,8 +531,8 @@ function get_forward_model(physics, assets; debug = false)
     ]
     function reactor_fluxes(params)
         map(1:9) do r
-            main, neq, snf, correction = mesh_flux(params.juno_reactor_thermal_power_scale[r], params.energy_per_fission,
-                params.juno_fission_fractions_scale, params.spectrum_pulls, params[neq_symbols[r]], params[snf_symbols[r]], r)
+            main, neq, snf, correction = mesh_flux(params.juno_reactor_thermal_power_scale, params.energy_per_fission,
+                params[ffs_symbols[r]], params.spectrum_pulls, params[neq_symbols[r]], params[snf_symbols[r]], r)
             (main .* correction .+ neq, snf)
         end
     end
@@ -555,7 +578,9 @@ function get_forward_model(physics, assets; debug = false)
                 #eltype(params.juno_res_b),
                 #eltype(params.juno_res_c),
                 eltype(params.juno_reactor_thermal_power_scale),
-                eltype(params.juno_fission_fractions_scale),
+                eltype(params.juno_taishan_ffs),
+                eltype(params.juno_yangjiang_ffs),
+                eltype(params.juno_dayabay_ffs),
                 eltype(params.juno_taishan_neq_scale),
                 eltype(params.juno_yangjiang_neq_scale),
                 eltype(params.juno_dayabay_neq_scale),
