@@ -59,13 +59,6 @@ function hessian(f, p::NamedTuple)
 
     g = ForwardDiff.hessian(wrapped_f, flat)
 
-    pos = 1
-    gvals = Any[]
-    for s in sizes
-        push!(gvals, s == 1 ? g[pos, :] : g[pos:pos+s-1, :])
-        pos += s
-    end
-
-    return NamedTuple{pnames}(gvals)
+    return g
 
 end
