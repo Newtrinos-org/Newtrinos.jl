@@ -3,8 +3,11 @@
 **Legacy module, not included by `src/Newtrinos.jl`** (superseded by `kamland_periods`).
 
 Data digitized from plots in https://arxiv.org/abs/1009.4771 (figures not recorded).
-`EnergySpectrum_0.1MeVbin_4th_result.dat`, `delta_chi2_4th_result.dat` (official Δχ² table, used only in
-`test.jl`) and `Reactors.csv`: source not recorded (presumably the KamLAND data release of the 2010/2011 result).
+`EnergySpectrum_0.1MeVbin_4th_result.dat` and `delta_chi2_4th_result.dat` (official Δχ² table, used only in
+`test.jl`): the KamLAND data release of the 4th reactor result (PRD 83, 052002),
+http://www.awa.tohoku.ac.jp/KamLAND/4th_result_data_release/4th_result_data_release.html (archived copy:
+https://web.archive.org/web/2014/http://www.awa.tohoku.ac.jp/KamLAND/4th_result_data_release/4th_result_data_release.html;
+identical file names). `Reactors.csv`: source not recorded.
 `deposited_to_visible_energy_conversion.csv`: Fig. 4.13 of S. Enomoto's doctoral dissertation,
 https://www.awa.tohoku.ac.jp/~sanshiro/research/SanshirosDoctoralDissertation.pdf
 
