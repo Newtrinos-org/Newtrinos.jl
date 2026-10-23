@@ -900,6 +900,8 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     iav_func = get_iav_matrix(datadir)
     lsnl = get_lsnl_correction(datadir)
 
+    nominal_thermal_power = assets.nominal_thermal_power
+
 
     osc = physics.osc
     xsec = physics.xsec.xsec
@@ -938,7 +940,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     lsnl_mask = fine_binning_Edep[1:end-1] .>= lsnl_min_energy - 1e-9
 
     # the reactor fluxes on the integration mesh depend only on the reactor parameters: computed once per evaluation
-    # and shared by all AD-periods; (main × correction + neq, snf) per reactor
+    # and shared by all AD-periods; (main × correction + neq, snf / nom_thermal_power) per reactor
     mesh_flux = physics.flux.flux_on_mesh(E_nu_mesh)
     ffs_symbols = [Symbol("fission_fractions_scale_R$(i)") for i=1:6]
     neq_symbols = [Symbol("neq_scale_R$(i)") for i=1:6]
@@ -946,7 +948,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         map(1:6) do r
             main, neq, snf, correction = mesh_flux(params.reactor_thermal_power_scale[r], params.energy_per_fission,
                 params[ffs_symbols[r]], params.spectrum_pulls, params[neq_symbols[r]], params.snf_scale[r], r)
-            (main .* correction .+ neq, snf)
+            (main .* correction .+ neq, snf * )
         end
     end
     # survival probabilities per AD (shared by its periods)
@@ -1041,7 +1043,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         # convert the cross section from e-41cm2 to m2 -> multiply by 1e-4
         flux_norm = 1e-45 * n_p .* P_th_seconds .* invL2
 
-        spec_prefac_snf = 1e-45 * n_p * sum(output.eff_livetime_seconds) .* invL2
+        spec_prefac_snf = nominal_thermal_power * 1e-45 * n_p * sum(output.eff_livetime_seconds) .* invL2
         function neutrino_counts(params, fluxes, P)
             # value type promoted over all parameter inputs, so intermediate
             # arrays stay dual even when only a subset of the parameters is dual
