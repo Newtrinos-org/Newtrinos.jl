@@ -127,7 +127,9 @@ function get_priors()
     other_sigma = sqrt(0.02^2 + 0.02^2 + 0.10^2 + 0.04^2 + 0.01^2 )
     
     lihe = Truncated(Normal(1.05, 0.27), 0.0, Inf)
-    #geo = Truncated(Normal(1.30, 0.52), 0.0, Inf)
+    # test with fit result of Juno
+    #geo = Truncated(Normal(2.21, 0.32), 0.0, Inf)
+    # properly use unconstrained value
     geo = Uniform(0, 5)
     world_reactors = Truncated(Normal(0.92, 0.09), 0.0, Inf)
     bipo = Truncated(Normal(0.42, 0.31), 0.0, Inf)
@@ -162,7 +164,7 @@ function get_priors()
     juno_dayabay_neq_scale = MvNormal(neq_mu .* ones(4), Diagonal(ones(4) .* neq_sigma^2))
 
     tps_mu = ones(9)
-    tps_sigma = tps_mu .* 0.005
+    tps_sigma = tps_mu .* 0.01
     thermal_power_scale = MvNormal(tps_mu, Diagonal(tps_sigma.^2))
 
     eres_unc_scale = Normal(0., 1.)
@@ -512,6 +514,7 @@ function get_forward_model(physics, assets; debug = false)
         end
     end
     L = assets.reactors[!, "Baseline_m"]
+    nominal_thermal_power = assets.reactors[!, "Power_GW_th"]
     baselines_km = L ./ 1e3
     L2 = 4 * pi .* L.^2;
     invL2 = inv.(L2);
@@ -528,14 +531,12 @@ function get_forward_model(physics, assets; debug = false)
         [nue_survival(E_nu_GeV, L, params) for L in baselines_km]
     end
 
-    P_th_seconds = assets.reactors[!, "Power_GW_th"] .* livetime_seconds
+    P_th_seconds = nominal_thermal_power .* livetime_seconds
     n_p = assets.n_protons
 
     #           e-41cm2 -> m2
     flux_norm = 1e-45 * n_p * P_th_seconds .* invL2
-    spec_prefac_snf = 1e-45 * n_p * livetime_seconds .* invL2
-
-    # TODO: insert proper nominal thermal power, is currently hidden in dayabay_flux module, only used for SNF
+    spec_prefac_snf = 1e-45 * n_p * P_th_seconds .* invL2
 
     # background shapes
     lihe_shape = assets.lihe_shape
@@ -578,13 +579,22 @@ function get_forward_model(physics, assets; debug = false)
                 eltype(params.δCP),
             )
         # backgrounds, rates as observed (after efficiency cuts, which are implicit in the rates)
-        bg = @. (
-            params.juno_lihe_rate * lihe_shape 
-            + params.juno_world_reactor_rate * world_reactor_shape
-            + params.juno_bipo_rate * bipo_shape
-            + params.juno_geo_rate * geo_shape
-            + params.juno_other_rate * other_shape
-        ) * livetime_days
+        if debug
+            bg = (
+                lihe = params.juno_lihe_rate .* lihe_shape .* livetime_days,
+                bipo = params.juno_bipo_rate .* bipo_shape .* livetime_days,
+                geo = params.juno_geo_rate .* geo_shape .* livetime_days,
+                other = params.juno_other_rate * other_shape .* livetime_days,    
+            )
+        else
+            bg = @. (
+                params.juno_lihe_rate * lihe_shape 
+                + params.juno_world_reactor_rate * world_reactor_shape
+                + params.juno_bipo_rate * bipo_shape
+                + params.juno_geo_rate * geo_shape
+                + params.juno_other_rate * other_shape
+            ) * livetime_days
+        end
 
         fluxes = reactor_fluxes(params)
         interm_spec = zeros(T, NF)
