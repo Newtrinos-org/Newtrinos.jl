@@ -81,11 +81,13 @@ function get_params()
     juno_yangjiang_ffs = ones(4)
     juno_dayabay_ffs = ones(4)
 
-    #reactor_thermal_power_scale = ones(9)
-    reactor_thermal_power_scale = 1.0
+    reactor_thermal_power_scale = ones(9)
+    # reactor_thermal_power_scale = 1.0
 
     eres_unc_scale = 0.0
     e_scale = 1.0
+
+    global_norm = 1.0
 
 
 
@@ -116,6 +118,7 @@ function get_params()
         juno_dayabay_ffs = juno_dayabay_ffs,
         juno_eres_unc_scale = eres_unc_scale,
         juno_e_scale = e_scale,
+        juno_global_norm = global_norm,
     )
 
 end
@@ -173,11 +176,14 @@ function get_priors()
     juno_dayabay_neq_scale = MvNormal(neq_mu .* ones(4), Diagonal(ones(4) .* neq_sigma^2))
 
     tps_mu = ones(9)
-    tps_sigma = tps_mu .* 0.01
-    #thermal_power_scale = MvNormal(tps_mu, Diagonal(tps_sigma.^2))
-    thermal_power_scale = Normal(1, 0.01)
+    # assume 5% uncertainty on per-core load factor, encoded in thermal power scale
+    tps_sigma = tps_mu .* 0.10
+    thermal_power_scale = MvNormal(tps_mu, Diagonal(tps_sigma.^2))
+    #thermal_power_scale = Normal(1, 0.01)
 
-    eres_unc_scale = Normal(0., 1.)
+    global_norm = Uniform(0, 2)
+
+    eres_unc_scale = Normal(0., 2.)
     # assume 0.5% energy scale uncertainty as per 59day Juno paper
     e_scale = Normal(1, 0.005)
 
@@ -204,6 +210,7 @@ function get_priors()
         juno_reactor_thermal_power_scale = thermal_power_scale,
         juno_e_scale = e_scale,
         juno_eres_unc_scale = eres_unc_scale,
+        juno_global_norm = global_norm,
     )
 end
 
@@ -267,11 +274,15 @@ function get_assets(datadir = @__DIR__)
         Power_GW_th = [4.6, 4.6, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 17.37],
         Baseline_m = 1e3 .* [52.77, 52.64, 52.74, 52.82, 52.41, 52.49, 52.11, 52.19, 215.0],
         IBD_Rate_per_day = [7.5, 7.6, 4.8, 4.7, 4.8, 4.8, 4.9, 4.9, 3.0], 
-        Relative_Flux_percent = [16.0, 16.1, 10.1, 10.1, 10.3, 10.2, 10.4, 10.4, 6.4] 
+        Relative_Flux_percent = [16.0, 16.1, 10.1, 10.1, 10.3, 10.2, 10.4, 10.4, 6.4],
+        load_factor = [0.90, 0.86, 0.95, 0.90, 0.88, 0.90, 0.92, 1.02, 0.93],
     )
 
+    # https://pris-stats.iaea.org/reactor/918, assume for Taishan1 that the shut off early summer 2025 is nor representative
+    # dayabay1 94.466, dayabay2 90.80, lingao 1 91.50, lingao 2 98.92, lingao 3 92.50, lingao 4 90.99
 
-    data = readdlm("data_207_days.txt", skipstart=27)
+
+    data = readdlm("data_207_days.txt", skipstart=29)
     Elow = convert(Vector{Float64}, data[:, 1])
     Ehigh = convert(Vector{Float64}, data[:, 2])
 
@@ -285,11 +296,12 @@ function get_assets(datadir = @__DIR__)
     hist_to_count = Ewidth / 0.04
     observed = convert.(Int64, round.(hist_obs .* hist_to_count, digits=0))
 
-    lihe = convert(Vector{Float64}, data[:, 7])
-    geo = convert(Vector{Float64}, data[:, 8])
-    world_reactor = convert(Vector{Float64}, data[:, 9])
-    bipo = convert(Vector{Float64}, data[:, 10])
-    other = convert(Vector{Float64}, data[:, 11])
+    lihe = convert(Vector{Float64}, data[:, 8])
+    geo = convert(Vector{Float64}, data[:, 9])
+    world_reactor = convert(Vector{Float64}, data[:, 10])
+    bipo = convert(Vector{Float64}, data[:, 11])
+    other = convert(Vector{Float64}, data[:, 12])
+    signal_mle = convert(Vector{Float64}, data[:, 7])
 
     lihe_counts = lihe .* hist_to_count
     geo_counts = geo .* hist_to_count
@@ -337,6 +349,7 @@ function get_assets(datadir = @__DIR__)
         Ewidth,
         hist_to_count,
         n_protons,
+        signal_mle,
         observed
     )
 end
@@ -463,6 +476,7 @@ function get_forward_model(physics, assets; debug = false)
 
     final_rebin_idx = rebin_index(E_fine, E_ana)
 
+    load_factor = assets.reactors[!, "load_factor"]
     # IBD integration as in the official model: in each deposited energy bin a two-fold Gauss-Legendre quadrature
     # over Edep (order 5) and the positron angle cosθ ∈ [-1, 1] (order 3), with exact kinematics Eν(Edep, cosθ),
     # the first order cross section dσ/dcosθ and the Jacobian dEν/dEdep
@@ -531,7 +545,7 @@ function get_forward_model(physics, assets; debug = false)
     ]
     function reactor_fluxes(params)
         map(1:9) do r
-            main, neq, snf, correction = mesh_flux(params.juno_reactor_thermal_power_scale, params.energy_per_fission,
+            main, neq, snf, correction = mesh_flux(params.juno_reactor_thermal_power_scale[r], params.energy_per_fission,
                 params[ffs_symbols[r]], params.spectrum_pulls, params[neq_symbols[r]], params[snf_symbols[r]], r)
             (main .* correction .+ neq, snf)
         end
@@ -558,7 +572,7 @@ function get_forward_model(physics, assets; debug = false)
     n_p = assets.n_protons
 
     #           e-41cm2 -> m2
-    flux_norm = 1e-45 * n_p * P_th_seconds .* invL2
+    flux_norm = 1e-45 * n_p * P_th_seconds .* invL2 .* load_factor
     spec_prefac_snf = 1e-45 * n_p * P_th_seconds .* invL2
 
     # background shapes
@@ -638,7 +652,7 @@ function get_forward_model(physics, assets; debug = false)
         scaled_eres = zeros(T, length(sigma_E))
         scaled_eres .+= sigma_E .* (1 + 0.05 * params.juno_eres_unc_scale)
         erec_spectrum = smear_bin_centres(evis_spectrum, scaled_eres, E_fine)
-        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency
+        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency .* params.juno_global_norm
         if debug
             return coarse_counts, bg
         end
