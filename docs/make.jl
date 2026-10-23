@@ -10,6 +10,7 @@ makedocs(
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
         canonical = "https://$(repo_owner).github.io/Newtrinos.jl",
+        assets = ["assets/home-link.js"],
     ),
     pages = [
         "Home" => "index.md",
