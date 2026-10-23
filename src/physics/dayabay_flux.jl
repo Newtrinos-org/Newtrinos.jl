@@ -24,7 +24,6 @@ abstract type FluxModel end
     flux_model::F = DayaBayFlux()
     datadir::String = datadir
     average::Bool = false
-    nominal_thermal_power::String = "DayaBay"
 end
 
 
@@ -45,11 +44,9 @@ end
 function configure(cfg::ReactorFluxConfig = ReactorFluxConfig())
     #if cfg.flux_model isa DayaBayFlux
     #    # get nominal thermal power
-    if cfg.nominal_thermal_power == "DayaBay"
-        file = YAML.load_file(joinpath(cfg.datadir, "dayabay_data/parameters/reactor_thermal_power_nominal.yaml"))
-        nominal_thermal_power = file["parameters"]["nominal_thermal_power"]   # GW
-    else
-
+    file = YAML.load_file(joinpath(cfg.datadir, "dayabay_data/parameters/reactor_thermal_power_nominal.yaml"))
+    nominal_thermal_power = file["parameters"]["nominal_thermal_power"]   # GW
+        
     ReactorFlux(
         cfg=cfg,
         params = get_params(cfg.flux_model, datadir=cfg.datadir),
@@ -211,7 +208,7 @@ snf_scale, reac_idx)` gives `(main, neq, snf, correction)` at the antineutrino e
 Everything that does not depend on the parameters (isotope spectra, NEQ and SNF corrections, interpolation weights of
 the free spectrum correction) is tabulated once for the mesh `E`.
 """
-function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false)
+function get_flux_on_mesh(cfg::DayaBayFlux, nominal_thermal_power; datadir = datadir, average = false)
 
     # fixed ordering of isotopes
     names = (:U235, :U238, :Pu239, :Pu241)
@@ -247,7 +244,7 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false)
 
     # SNF: fissions per second of a reactor at nominal thermal power, fission fractions and energies per fission
     default_params = get_params(cfg, datadir=datadir)
-    fissions_per_second_nom_bar_nom_th_power = GJ_to_MeV / sum(fractions .* default_params.energy_per_fission)
+    fissions_per_second_nom = nominal_thermal_power * GJ_to_MeV / sum(fractions .* default_params.energy_per_fission)
 
     function on_mesh(E::AbstractVector)
         #shape for each isotope
@@ -256,9 +253,9 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false)
         NEQ = [neq_rel_corr[i].(E) .* S[i] for i in 1:4]
         #relative SNF correction for each isotope for each reactor
         if average
-            SNF = fissions_per_second_nom_bar_nom_th_power .* sum(fractions[i] .* S[i] for i in 1:4) .* snf_rel_corr.(E)
+            SNF = fissions_per_second_nom .* sum(fractions[i] .* S[i] for i in 1:4) .* snf_rel_corr.(E)
         else
-            SNF = [fissions_per_second_nom_bar_nom_th_power .* sum(fractions[i] .* S[i] for i in 1:4) .* snf_rel_corr[r].(E) for r in 1:6]
+            SNF = [fissions_per_second_nom .* sum(fractions[i] .* S[i] for i in 1:4) .* snf_rel_corr[r].(E) for r in 1:6]
         end
         # linear interpolation weights of the correction exponent between the edges (extrapolated outside)
         k = [clamp(searchsortedlast(spec_edges, e), 1, length(spec_edges) - 1) for e in E]
@@ -291,7 +288,9 @@ SNF flux [ν/s/MeV] of a reactor at nominal power, and the free spectrum correct
 in the official model). For repeated evaluation on a fixed mesh use [`get_flux_on_mesh`](@ref).
 """
 function get_flux(cfg::DayaBayFlux; datadir = datadir, average = false)
-    on_mesh = get_flux_on_mesh(cfg; datadir = datadir, average = average)
+    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_thermal_power_nominal.yaml"))
+    nominal_thermal_power = file["parameters"]["nominal_thermal_power"]   # GW
+    on_mesh = get_flux_on_mesh(cfg, nominal_thermal_power; datadir = datadir, average = average)
     function reactor_flux(E, args...)
         E isa Number && return map(first, on_mesh([E])(args...))
         on_mesh(collect(Float64, E))(args...)
