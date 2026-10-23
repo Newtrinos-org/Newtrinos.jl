@@ -1,6 +1,12 @@
 # KamLAND
  ## Resources
-Data digitized from plots in https://arxiv.org/abs/1009.4771
+**Legacy module, not included by `src/Newtrinos.jl`** (superseded by `kamland_periods`).
+
+Data digitized from plots in https://arxiv.org/abs/1009.4771 (figures not recorded).
+`EnergySpectrum_0.1MeVbin_4th_result.dat`, `delta_chi2_4th_result.dat` (official Δχ² table, used only in
+`test.jl`) and `Reactors.csv`: source not recorded (presumably the KamLAND data release of the 2010/2011 result).
+`deposited_to_visible_energy_conversion.csv`: Fig. 4.13 of S. Enomoto's doctoral dissertation,
+https://www.awa.tohoku.ac.jp/~sanshiro/research/SanshirosDoctoralDissertation.pdf
 
 
 ## Test output plots

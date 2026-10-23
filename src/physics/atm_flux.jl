@@ -156,9 +156,9 @@ using Newtrinos
 # Default South Pole flux
 flux_physics = Newtrinos.atm_flux.configure()
 
-# Custom site flux file
+# Another site: Kamioka, solar minimum (tables shipped in src/physics)
 flux_physics = Newtrinos.atm_flux.configure(
-    AtmFluxConfig(nominal_model=HKKM(fname="spl-nu-20-12-000.d"))
+    AtmFluxConfig(nominal_model=HKKM(fname="kam-ally-20-01-solmin.d"))
 )
 ```
 """

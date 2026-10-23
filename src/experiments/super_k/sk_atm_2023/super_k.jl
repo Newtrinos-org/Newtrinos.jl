@@ -545,7 +545,7 @@ function apply_all_energy_scales(counts, assets, params)
     result = apply_energy_scale(result, assets.energy_groups_sk_iv_v, delta_iv_v)
 
     # Up/down energy scale: relative normalization of upgoing vs downgoing FC+PC events
-    # (Wester thesis Sec 5.2.3: "varies the normalization of upward-going and
+    # (T. Wester, PhD thesis (2023), https://open.bu.edu/handle/2144/46427, Sec 5.2.3: "varies the normalization of upward-going and
     # downward-going FC and PC events")
     delta_ud_i_iii = params.sk_i_iii_updown_energy_scale - one(params.sk_i_iii_updown_energy_scale)
     delta_ud_iv_v = params.sk_iv_v_updown_energy_scale - one(params.sk_iv_v_updown_energy_scale)
@@ -900,7 +900,8 @@ end
 
 function get_priors()
     priors = (
-        # Energy scales from Table 5.6 (conventional FV), exposure-weighted by livetime
+        # Energy scales from Table 5.6 of T. Wester, PhD thesis, Boston U. (2023), https://open.bu.edu/handle/2144/46427
+        # (conventional FV), exposure-weighted by livetime
         # SK I: 3.3% (~1489d), SK II: 2.0% (~799d), SK III: 2.4% (~518d) → exposure-weighted ~2.8%, use SK I-dominated 3.3%
         # SK IV: 2.1% (~3244d), SK V: 1.8% (~2970d) → exposure-weighted ~2.0%
         sk_i_iii_energy_scale = Truncated(Normal(1.0, 0.033), 0.5, 1.5),

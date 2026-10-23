@@ -125,8 +125,8 @@ angle, nuclear form factors, and BSM couplings such as NSI.
 
 | Experiment | Module | Dataset |
 |:-----------|:-------|:--------|
-| COHERENT CsI | `Newtrinos.coherent_csi` | CsI[Na] scintillator detector (2022 data release) |
-| COHERENT LAr | `Newtrinos.coherent_lAr` | Liquid argon detector |
+| COHERENT CsI | `Newtrinos.coherent_csi` | CsI[Na] full-dataset release (arXiv:2110.07730; PRL 129, 081801) |
+| COHERENT LAr | `Newtrinos.coherent_lAr` | CENNS-10 liquid argon, Analysis A release (doi:10.5281/zenodo.3903810) |
 
 Required physics modules: none (self-contained).
 

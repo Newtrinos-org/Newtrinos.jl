@@ -37,6 +37,8 @@ FileIO.save("test_output/test.jld2", Dict("result" => result))
 
 converted = Newtrinos.NewtrinosResult(axes = (sin2theta23 = sin.(result.axes.θ₂₃).^2, Δm²₃₂ = result.axes.Δm²₃₁ .- p.Δm²₂₁), values=result.values);
 
+# WebPlotDigitizer export of an official MINOS (sin²θ₂₃, Δm²₃₂) 68/90% contour from a slightly different analysis;
+# the source figure was not recorded
 official = CSV.read("wpd_datasets.csv", DataFrame, header=2)
 
 fig = Figure()

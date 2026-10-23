@@ -23,6 +23,7 @@ makedocs(
             "Neutrino physics" => "tutorials/neutrino_physics.md",
             "Assemble a physics model" => "tutorials/physics_model.md",
             "Experiments" => "tutorials/experiments.md",
+            "Data sources" => "tutorials/data_sources.md",
             "Configure an experiment" => "tutorials/configure_experiment.md",
             "Analyse data" => "tutorials/analyse_data.md",
             "Analysis CLI Reference" => "tutorials/cli.md",

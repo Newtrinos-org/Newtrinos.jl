@@ -83,7 +83,7 @@ for NC only the total, in `NC`), for a cross-section `generator`:
 - a GENIE tune from the table (e.g. `:G18_10a_02_11a`, `:G18_02a_00_000`, `:AR23_20i_00_000`,
   `:G2_12_10_Default_MEC`); `:GENIE2_12` is GENIE 2.12 default without MEC; `:tune_mean` is the mean of all
   tunes in the table (the nominal model of `CorrelatedXsec`);
-- `:NEUT5_4_0`: NEUT 5.4.0 on water (digitised, T. Wester, Super-K PhD thesis, Fig. 4.7; valid up to
+- `:NEUT5_4_0`: NEUT 5.4.0 on water (digitised, T. Wester, Super-K PhD thesis, Boston U. (2023), Fig. 4.7; valid up to
   26 GeV and continued with the G18_10a_02_11a shape above, ντ from νμ times the G18_10a_02_11a ντ/νμ
   ratio). Only for `target = :H2O`.
 """

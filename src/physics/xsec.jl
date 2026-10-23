@@ -58,7 +58,7 @@ Differential cross-section model for water (H₂O) targets.
 Provides per-interaction-mode normalization parameters (`cc1p1h_norm`, `cc2p2h_norm`,
 `cc1pi_norm`, `ccother_norm`, `ccdis_norm`) in addition to `nc_norm` and `nutau_cc_norm`.
 Energy-dependent CC interaction fractions are interpolated from digitized data
-(T. Wester, Super-K PhD thesis, Figure 4.7) for ``\\nu_e`` and ``\\bar{\\nu}_e``
+(T. Wester, Super-K PhD thesis, Boston U. (2023), Figure 4.7, https://open.bu.edu/handle/2144/46427) for ``\\nu_e`` and ``\\bar{\\nu}_e``
 separately.
 
 Additional systematic parameters adjust the underlying shape of the interpolated
