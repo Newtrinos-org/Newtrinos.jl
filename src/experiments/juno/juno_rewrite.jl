@@ -86,9 +86,10 @@ function get_params()
 
     eres_unc_scale = 0.0
     e_scale = 1.0
+    e_bias = 0.0
 
     global_norm = 1.0
-
+    lsnl_pull = 0.0
 
 
 
@@ -118,7 +119,9 @@ function get_params()
         juno_dayabay_ffs = juno_dayabay_ffs,
         juno_eres_unc_scale = eres_unc_scale,
         juno_e_scale = e_scale,
+        juno_e_bias = e_bias,
         juno_global_norm = global_norm,
+        juno_lsnl_pull = lsnl_pull,
     )
 
 end
@@ -187,6 +190,12 @@ function get_priors()
     # assume 0.5% energy scale uncertainty as per 59day Juno paper
     e_scale = Normal(1, 0.005)
 
+    unc = 0.005
+    e_bias = Normal(0, unc)
+
+
+    lsnl_pull = Normal(0.0, 1.0)
+
     priors = (
         juno_lihe_rate = lihe,
         juno_geo_rate = geo,
@@ -209,31 +218,40 @@ function get_priors()
         juno_dayabay_ffs = juno_dayabay_ffs,
         juno_reactor_thermal_power_scale = thermal_power_scale,
         juno_e_scale = e_scale,
+        juno_e_bias = e_bias,
         juno_eres_unc_scale = eres_unc_scale,
         juno_global_norm = global_norm,
+        juno_lsnl_pull = lsnl_pull,
     )
 end
 
 
 function get_lsnl_correction()
-    lsnl = readdlm(joinpath(@__DIR__, "lsnl_207_days.txt"), skipstart=27)
+    lsnl = readdlm(joinpath(@__DIR__, "207_days/lsnl_207_days.txt"), skipstart=27)
     # TODO: add uncertainty through nuisance param
     E_lsnl = lsnl[:, 1]
     lsnl_nom = lsnl[:, 2]
-    lsnlm = lsnl[:, 3]
-    lsnlp = lsnl[:, 4]
+    errm = lsnl[:, 5]
+    errp = lsnl[:, 6]
+
+    # errors are largely symmetric, use mean to create one pull term as in DayaBay model
+    m = mean((errm, errp))
+
 
     x, nom = refine_lsnl(E_lsnl, lsnl_nom)
     nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
+    pull_curve = refine_lsnl(E_lsnl, lsnl_nom .+ m)[2] - nom
+    pull_itp = linear_interpolation(x, pull_curve, extrapolation_bc = Line())
 
-    function _lsnl(E)
-        return @. nom_itp(E)
+    function _lsnl(E, pull)
+
+        return @. nom_itp(E) + pull * pull_itp(E)
     end
 end
 
 
 function get_eres()
-    data = readdlm("eres_207_days.txt", skipstart=19)
+    data = readdlm(joinoath(@__DIR__, "207_days/eres_207_days.txt"), skipstart=19)
     E = data[:, 1]
     # mul
     rel_eres_nom = data[:, 2] .* 0.01
@@ -282,7 +300,7 @@ function get_assets(datadir = @__DIR__)
     # dayabay1 94.466, dayabay2 90.80, lingao 1 91.50, lingao 2 98.92, lingao 3 92.50, lingao 4 90.99
 
 
-    data = readdlm("data_207_days.txt", skipstart=29)
+    data = readdlm(joinpath(@__DIR__, "207_days/data_207_days.txt"), skipstart=29)
     Elow = convert(Vector{Float64}, data[:, 1])
     Ehigh = convert(Vector{Float64}, data[:, 2])
 
@@ -607,7 +625,9 @@ function get_forward_model(physics, assets; debug = false)
                 eltype(params.juno_bipo_rate),
                 eltype(params.juno_other_rate),
                 eltype(params.juno_eres_unc_scale),
+                eltype(params.juno_e_bias),
                 eltype(params.juno_e_scale),
+                eltype(params.juno_lsnl_pull),
                 eltype(params.spectrum_pulls),
                 eltype(params.energy_per_fission),
                 eltype(params.θ₁₃),
@@ -623,7 +643,8 @@ function get_forward_model(physics, assets; debug = false)
                 lihe = params.juno_lihe_rate .* lihe_shape .* livetime_days,
                 bipo = params.juno_bipo_rate .* bipo_shape .* livetime_days,
                 geo = params.juno_geo_rate .* geo_shape .* livetime_days,
-                other = params.juno_other_rate * other_shape .* livetime_days,    
+                other = params.juno_other_rate * other_shape .* livetime_days,   
+                world = params.juno_world_reactor_rate * world_reactor_shape .* livetime_days, 
             )
         else
             bg = @. (
@@ -647,7 +668,7 @@ function get_forward_model(physics, assets; debug = false)
         interm_spec .*= integral_weights
         spec = vec(sum(reshape(interm_spec, NQ, NFc), dims = 1))
 
-        E_vis_edges = lsnl(E_fine) .* params.juno_e_scale
+        E_vis_edges = lsnl(E_fine, params.juno_lsnl_pull) .* params.juno_e_scale .+ params.juno_e_bias
         evis_spectrum = project_to_bins(E_vis_edges, spec .* lsnl_mask, E_fine)
         scaled_eres = zeros(T, length(sigma_E))
         scaled_eres .+= sigma_E .* (1 + 0.05 * params.juno_eres_unc_scale)
