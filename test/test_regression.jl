@@ -5,30 +5,32 @@ using Printf
 # All reference likelihood values at default parameters.
 # If a value changes beyond rtol=1e-6, it indicates a regression.
 # To update: run the experiment and replace the reference value.
+# 2026-10-26 (feature/earth-model): all experiments with matter effects updated for the exact chord split in the
+# zone containing the detector (earth_layers.compute_paths) and N_A = 6.02214076e23; |Δ log L| ≤ 0.005.
 const ALL_REFERENCE_VALUES = (
     dayabay      = -168.90003273508322,
-    kamland      = -144.63869819545005,
+    kamland      = -144.6386861120536,
     minos        = -268.4046154382636,
-    deepcore     = -942.5706065958955,
-    super_k      = -3432.5312315130445,
-    orca         = -1165.3469481902216,  # Frejus flux without mountain, as prescribed by the data release
-    t2k          = -353.62359957087017,
-    nova         = -329.9281060402088,
+    deepcore     = -942.5712342465076,
+    super_k      = -3432.5322914241383,
+    orca         = -1165.3470673472737,  # Frejus flux without mountain, as prescribed by the data release
+    t2k          = -353.6235922405067,
+    nova         = -329.9281023429479,
     coherent_csi = -276.22310206660876,
     coherent_lAr = -1755.0426661113386,
     katrin       = 0.4549394122046937,
     gerda        = -85.50961704258683,
-    chlorine     = -0.3161211491885203,
-    gallex_gno   = -6.3130576725955,
-    sage         = -2.3240030626211583,
-    sno          = 18.25318881919382,
-    sk1_solar    = -127.27197625330082,
-    sk2_solar    = -50.54386516276435,
-    sk3_solar    = -83.55199911835112,
-    sk4_solar    = -45.788946357271385,
-    borexino_ph1 = 0.6366322757818439,
-    borexino_ph2 = -5.065586938970489,
-    borexino_ph3 = -2290.7264526090985,
+    chlorine     = -0.3164252692207047,
+    gallex_gno   = -6.3130527871363515,
+    sage         = -2.3240021157480717,
+    sno          = 18.25308582658371,
+    sk1_solar    = -127.2706613216371,
+    sk2_solar    = -50.54257645772189,
+    sk3_solar    = -83.54935106662728,
+    sk4_solar    = -45.784337745482404,
+    borexino_ph1 = 0.6366341583525791,
+    borexino_ph2 = -5.065600153334937,
+    borexino_ph3 = -2290.726494633307,
 )
 
 # Parse --experiments from ARGS if present, otherwise run all
