@@ -68,7 +68,7 @@ struct Path
 end 
 
 # Physical constants
-const N_A = 6.022e23 #[mol^-1]
+const N_A = 6.02214076e23 #[mol^-1] (exact, SI 2019)
 const G_F = 8.961877245622253e-38 #[eV*cm^3]
 const A = sqrt(2) * G_F * N_A
 # conversion factor for km/GeV (1/(2*hbar*c))
