@@ -354,11 +354,12 @@ function compute_paths(cz::Number, layers, r_detector)
             lengths_traversed[i] = intersections[i]
             layer_idx_traversed[i] = i
         elseif i == n_layers_outside
-            len_det = -cz * (rs[i] - r_detector)
-            inter = intersections[i] - len_det
-            lengths_traversed[i] = inter/2 + len_det
+            # zone containing the detector: the near-side part ends where the ray reaches the next
+            # inner boundary rs[i+1] (first intersection from the detector), the rest is the far side
+            near = -r_detector * cz - sqrt(max(rs[i+1]^2 - r_detector^2 + (r_detector * cz)^2, zero(cz)))
+            lengths_traversed[i] = intersections[i] - near
             layer_idx_traversed[i] = i
-            lengths_traversed[end-i+n_layers_outside] = inter/2
+            lengths_traversed[end-i+n_layers_outside] = near
             layer_idx_traversed[end-i+n_layers_outside] = i
         else
             lengths_traversed[i] = intersections[i]/2
