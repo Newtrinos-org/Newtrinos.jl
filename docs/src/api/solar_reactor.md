@@ -12,6 +12,7 @@ default (`b8_spectrum = :bahcall` for Bahcall et al. 1996).
 Newtrinos.solar_flux.SolarFluxConfig
 Newtrinos.solar_flux.SolarFlux
 Newtrinos.solar_flux.B23
+Newtrinos.solar_flux.B16
 Newtrinos.solar_flux.CorrelatedSSMPriors
 Newtrinos.solar_flux.SSMPriors
 Newtrinos.solar_flux.configure

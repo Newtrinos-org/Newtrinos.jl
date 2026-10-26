@@ -189,6 +189,15 @@ end
     # other compositions
     sf_gs = Newtrinos.solar_flux.configure(Newtrinos.solar_flux.SolarFluxConfig(model=Newtrinos.solar_flux.B23(composition=:GS98)))
     @test sf_gs.nominal.b8 != sf.nominal.b8
+    # B16 (Vinyoles et al. 2017): fluxes of Table 5, production regions as for B23
+    for (comp, b8, be7, err_b8) in ((:GS98, 5.46e6, 4.93e9, 0.12), (:AGSS09, 4.50e6, 4.50e9, 0.12))
+        sf16 = Newtrinos.solar_flux.configure(Newtrinos.solar_flux.SolarFluxConfig(model=Newtrinos.solar_flux.B16(composition=comp)))
+        @test sf16.nominal.b8 ≈ b8 && sf16.nominal.be7 ≈ be7 && sf16.fractional_error.b8 ≈ err_b8
+        @test all(sum(sf16.production[c].w) ≈ 1 for c in Newtrinos.solar_flux.COMPONENTS)
+        @test 95 < sf16.production.b8.ne[1] < 101
+        @test sum(sf16.production.b8.r .* sf16.production.b8.w) < sum(sf16.production.pp.r .* sf16.production.pp.w)
+        @test sf16.production.b8.profile.r[end] ≈ 1.0                       # structure to the surface
+    end
     # default: one vector parameter with the correlated solar-model prior
     @test sf.priors.solar_norms isa MvNormal
     @test sf.priors.solar_norms == Newtrinos.solar_flux.ssm_prior(sf)
