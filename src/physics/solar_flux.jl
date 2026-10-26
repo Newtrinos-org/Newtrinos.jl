@@ -6,7 +6,7 @@ using Distributions
 using LinearAlgebra
 using ..Newtrinos
 
-export SolarFluxConfig, B23, SSMPriors, CorrelatedSSMPriors
+export SolarFluxConfig, B23, B16, SSMPriors, CorrelatedSSMPriors
 
 const datadir = joinpath(@__DIR__, "solar")
 
@@ -48,6 +48,25 @@ tables (`b23_*_structure.csv`, centre to surface) are written from its `struct+n
 @kwdef struct B23 <: SolarModel
     composition::Symbol = :MB22m
 end
+
+"""
+    B16 <: SolarModel
+
+B16 standard solar models (Vinyoles et al., ApJ 835, 202 (2017), arXiv:1611.09867), computed with SF-II nuclear rates;
+the solar model of the SK-IV and Borexino Phase-III analyses and of NuFIT 5. For cross-checks against B23 and against
+analyses that used B16. Tables `b16_*_fluxes.dat` and `b16_*_structure.csv`, written by `solar/make_b16_structure.py`
+from the files of the (now offline) Barcelona solar-model page. The B16 flux correlations were not archived: the
+correlation matrix of B23 for the same composition is used.
+
+# Fields
+- `composition::Symbol = :GS98`: `:GS98` or `:AGSS09` (AGSS09met).
+"""
+@kwdef struct B16 <: SolarModel
+    composition::Symbol = :GS98
+end
+
+table_prefix(model::B23) = "b23_$(model.composition)"
+table_prefix(model::B16) = "b16_$(model.composition)"
 
 """
     SolarFluxSystematics
@@ -200,30 +219,30 @@ flux_norm(::CorrelatedSSMPriors, comp::Symbol, params) = params.solar_norms[comp
 component_index(comp::Symbol) = findfirst(==(comp), COMPONENTS)
 
 """
-    read_fluxes(model::B23) -> (nominal, fractional_error, correlation)
+    read_fluxes(model::SolarModel) -> (nominal, fractional_error, correlation)
 
 Read total fluxes [cm⁻² s⁻¹], fractional uncertainties and the correlation matrix.
 """
-function read_fluxes(model::B23)
-    lines = filter(!isempty, strip.(readlines(joinpath(datadir, "b23_$(model.composition)_fluxes.dat"))))
+function read_fluxes(model::SolarModel)
+    lines = filter(!isempty, strip.(readlines(joinpath(datadir, "$(table_prefix(model))_fluxes.dat"))))
     n = length(COMPONENTS)
     flux = parse.(Float64, split(lines[3])[1:n])
     err = parse.(Float64, split(lines[4])[1:n])
     corr_rows = filter(l -> startswith(l, "+") || (startswith(l, "-") && !startswith(l, "--")), lines)
     corr = reduce(vcat, [permutedims(parse.(Float64, split(l)[1:n])) for l in corr_rows])
-    size(corr) == (n, n) || error("unexpected B23 flux file format")
+    size(corr) == (n, n) || error("unexpected solar-model flux file format")
     NamedTuple{COMPONENTS}(flux), NamedTuple{COMPONENTS}(err), corr
 end
 
 """
-    read_production(model::B23, n) -> NamedTuple
+    read_production(model::SolarModel, n) -> NamedTuple
 
 Production regions per component, compressed to `n` sample points of equal production
 probability (quantiles of the radial distribution), each carrying the production-weighted mean
 electron and neutron densities of its quantile bin.
 """
-function read_production(model::B23, n)
-    data, header = readdlm(joinpath(datadir, "b23_$(model.composition)_structure.csv"), ',', Float64, '\n'; header=true, comments=true)
+function read_production(model::SolarModel, n)
+    data, header = readdlm(joinpath(datadir, "$(table_prefix(model))_structure.csv"), ',', Float64, '\n'; header=true, comments=true)
     col(name) = data[:, findfirst(==(name), vec(header))]
     r, ne, ρ, X = col("r"), col("ne"), col("rho"), col("X")
     nn = ρ .* (1 .- X) ./ 2  # neutrons per nucleon ≈ ½ for everything but hydrogen
