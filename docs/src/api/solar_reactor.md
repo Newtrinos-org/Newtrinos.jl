@@ -36,12 +36,16 @@ Newtrinos.solar_xsec.configure
 
 ## Reactor Flux
 
-Reactor ν̄e fluxes and IBD detection shared by reactor experiments (`Newtrinos.reactor_flux`): Huber–Mueller isotope
-spectra, energy per fission, IBD cross section and kinematics, Bugey-4 rate anchoring, and a reactor database
+Reactor ν̄e fluxes and IBD detection shared by reactor experiments (`Newtrinos.reactor_flux`): Huber–Mueller isotope spectra
+or the Daya Bay unfolded spectra (`DayaBayUnfolded`, Chin. Phys. C 45, 073001),
+energy per fission, IBD cross section and kinematics, Bugey-4 rate anchoring, and a reactor database
 (`src/physics/reactors/`: IAEA PRIS units of Japan and Korea with thermal power, load factors and site coordinates).
 
 ```@docs
 Newtrinos.reactor_flux.ReactorFlux
+Newtrinos.reactor_flux.configure
+Newtrinos.reactor_flux.HuberMueller
+Newtrinos.reactor_flux.DayaBayUnfolded
 Newtrinos.reactor_flux.bugey4_scale
 Newtrinos.reactor_flux.neutrino_energy
 Newtrinos.reactor_flux.positron_energy

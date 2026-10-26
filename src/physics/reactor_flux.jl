@@ -2,7 +2,10 @@
 Reactor ν̄e flux and inverse-β-decay (IBD) detection, common to reactor experiments.
 
 - Isotope spectra (ν̄e per fission per MeV) of ²³⁵U, ²³⁹Pu, ²⁴¹Pu (Huber, PRC 84, 024617 (2011)) and ²³⁸U (Mueller et
-  al., PRC 83, 054615 (2011)), exponential-of-polynomial fits valid for 2 ≲ E_ν ≲ 8 MeV (the Huber–Mueller model).
+  al., PRC 83, 054615 (2011)), exponential-of-polynomial fits valid for 2 ≲ E_ν ≲ 8 MeV (the Huber–Mueller model,
+  `HuberMueller()`, default), or the data-driven spectra unfolded from Daya Bay (`DayaBayUnfolded()`, Chin. Phys. C 45,
+  073001 (2021)): measured total, ²³⁵U and Pu-combo spectra, corrected to other fission fractions with Huber–Mueller ²³⁸U
+  and ²⁴¹Pu.
 - Energy released per fission (Ma et al., PRC 88, 014605 (2013)).
 - IBD cross section of Strumia & Vissani (PLB 564, 42 (2003)), Eq. (25).
 - Reactor power → fission rate for given fission fractions.
@@ -36,23 +39,119 @@ const MEV_TO_J = 1.602176634e-13
     ReactorFlux <: Newtrinos.Physics
 
 # Fields
+- `model::SpectrumModel`: [`HuberMueller`](@ref) or [`DayaBayUnfolded`](@ref).
 - `isotope_spectrum(iso, E)`: ν̄e per fission per MeV of isotope `iso` ∈ `ISOTOPES` at energy `E` [MeV].
 - `spectrum(E, fractions)`: ν̄e per fission per MeV for fission fractions `fractions` (NamedTuple over `ISOTOPES`).
+- `rate_scale(fractions)`: normalisation applied to `spectrum` by experiments: the Bugey-4 anchoring
+  ([`bugey4_scale`](@ref)) for the Huber–Mueller model, 1 for the measured Daya Bay spectra.
 - `ibd_xsec(E)`: IBD cross section [cm²].
 - `fission_rate(P_MW, fractions)`: fissions per second at thermal power `P_MW` [MW].
 """
 @kwdef struct ReactorFlux <: Newtrinos.Physics
     params::NamedTuple = NamedTuple()
     priors::NamedTuple = NamedTuple()
+    model = HuberMueller()
     isotope_spectrum::Function
     spectrum::Function
+    rate_scale::Function
     ibd_xsec::Function
     fission_rate::Function
 end
 
+"Reactor antineutrino spectrum model of [`ReactorFlux`](@ref)."
+abstract type SpectrumModel end
+
+"""
+    HuberMueller <: SpectrumModel
+
+Huber (²³⁵U, ²³⁹Pu, ²⁴¹Pu) and Mueller (²³⁸U) conversion spectra; rates anchored to Bugey-4 ([`bugey4_scale`](@ref)).
+"""
+struct HuberMueller <: SpectrumModel end
+
+"""
+    DayaBayUnfolded <: SpectrumModel
+
+Data-driven spectra from Daya Bay (Chin. Phys. C 45, 073001 (2021); tables in `reactors/dayabay_unfolded/`): the
+unfolded total, ²³⁵U and Pu-combo (²³⁹Pu + 0.183 ²⁴¹Pu) antineutrino spectra of the near halls, at average fission
+fractions f_DB = 0.564 : 0.076 : 0.304 : 0.056 (²³⁵U : ²³⁸U : ²³⁹Pu : ²⁴¹Pu). For fission fractions f, the paper's
+prediction (Eq. 9) is
+
+``S(f) = S_\\mathrm{total} + Δf_{235} S_{235} + Δf_{239} S_\\mathrm{combo} + Δf_{238} S^\\mathrm{HM}_{238} + (Δf_{241} - 0.183 Δf_{239}) S^\\mathrm{HM}_{241}``,
+
+Δf = f − f_DB. Each unfolded spectrum is used as the Huber–Mueller spectrum times a ratio that is linear between the bin centres
+(1.925–8.65 MeV) and constant beyond, with node values chosen such that the bin means reproduce the unfolded bin
+contents exactly; this keeps the fine shape within the 0.25 MeV bins. The measured absolute normalisation is kept
+(`rate_scale = 1`). The Wiener-SVD regularisation smears the unfolded spectra (matrices A_c of the data release), which is
+not undone here; it is small compared with the energy resolution of liquid-scintillator detectors.
+"""
+struct DayaBayUnfolded <: SpectrumModel end
+
+const DYB_FRACTIONS = (U235 = 0.564, U238 = 0.076, Pu239 = 0.304, Pu241 = 0.056)
+
 isotope_spectrum(iso::Symbol, E) = (a = HM_COEFFS[iso]; exp(a[1] + E * (a[2] + E * (a[3] + E * (a[4] + E * (a[5] + E * a[6]))))))
 
 spectrum(E, fractions) = sum(fractions[i] * isotope_spectrum(i, E) for i in ISOTOPES)
+
+# ───────────────────────────── Daya Bay unfolded spectra ─────────────────────────────
+
+# unfolded spectra (ν̄e / fission / MeV, IBD cross section removed) of the data release: (centres, edges, U235, combo, total)
+function read_dyb_unfolded()
+    lines = readlines(joinpath(@__DIR__, "reactors", "dayabay_unfolded", "UnfoldAntineutrinoSpectra.txt"))
+    blocks = Vector{Vector{Float64}}[]
+    current = nothing
+    for l in lines
+        if occursin("Bin_Center[MeV]", l)
+            current = Vector{Float64}[]; push!(blocks, current)
+        elseif startswith(l, "#") || isempty(strip(l))
+            current = nothing
+        elseif current !== nothing
+            push!(current, parse.(Float64, split(l)))
+        end
+    end
+    length(blocks) == 3 || error("unexpected Daya Bay unfolded-spectrum file format")
+    centres = [r[1] for r in blocks[1]]
+    edges = vcat(collect(1.8:0.25:7.8), 9.5)
+    (centres = centres, edges = edges, U235 = [r[3] for r in blocks[1]], combo = [r[3] for r in blocks[2]], total = [r[3] for r in blocks[3]])
+end
+
+# mean of f over [a, b] (Simpson, 64 intervals)
+function bin_mean(f, a, b; n = 64)
+    h = (b - a) / n
+    (f(a) + f(b) + sum((isodd(k) ? 4 : 2) * f(a + k * h) for k in 1:n-1)) * h / 3 / (b - a)
+end
+
+# piecewise-linear interpolation through (x, y), constant beyond the end points
+function _interp_const(x, y, xi)
+    xi <= x[1] && return y[1] * one(xi)
+    xi >= x[end] && return y[end] * one(xi)
+    j = searchsortedlast(x, xi)
+    y[j] + (y[j+1] - y[j]) * (xi - x[j]) / (x[j+1] - x[j])
+end
+
+function dyb_unfolded_model()
+    t = read_dyb_unfolded()
+    hm_total(E) = spectrum(E, DYB_FRACTIONS)
+    hm_combo(E) = isotope_spectrum(:Pu239, E) + 0.183 * isotope_spectrum(:Pu241, E)
+    # node values r at the bin centres such that the bin means of hm(E) × interp(r)(E) equal the unfolded bin contents
+    # (a linear system; interpolating the plain bin ratios would miss the bin contents by up to 5 % around the 5 MeV bump)
+    hat(j, E) = _interp_const(t.centres, [Float64(k == j) for k in eachindex(t.centres)], E)
+    function ratio(data, hm)
+        M = [bin_mean(E -> hm(E) * hat(j, E), t.edges[b], t.edges[b+1]) for b in eachindex(data), j in eachindex(t.centres)]
+        M \ data
+    end
+    r235, rcombo, rtotal = ratio(t.U235, E -> isotope_spectrum(:U235, E)), ratio(t.combo, hm_combo), ratio(t.total, hm_total)
+    S235(E) = isotope_spectrum(:U235, E) * _interp_const(t.centres, r235, E)
+    Scombo(E) = hm_combo(E) * _interp_const(t.centres, rcombo, E)
+    Stotal(E) = hm_total(E) * _interp_const(t.centres, rtotal, E)
+    function spec(E, f)
+        d = NamedTuple{ISOTOPES}(Tuple(f[i] - DYB_FRACTIONS[i] for i in ISOTOPES))
+        Stotal(E) + d.U235 * S235(E) + d.Pu239 * Scombo(E) + d.U238 * isotope_spectrum(:U238, E) +
+            (d.Pu241 - 0.183 * d.Pu239) * isotope_spectrum(:Pu241, E)
+    end
+    # per isotope, consistent with Eq. 9 for the isotopic spectra (²³⁹Pu = combo − 0.183 ²⁴¹Pu)
+    iso(i::Symbol, E) = i === :U235 ? S235(E) : i === :Pu239 ? Scombo(E) - 0.183 * isotope_spectrum(:Pu241, E) : isotope_spectrum(i, E)
+    (; spec, iso, ratios = (centres = t.centres, U235 = r235, combo = rcombo, total = rtotal))
+end
 
 "Mean energy released per fission [MeV]."
 energy_per_fission(fractions) = sum(fractions[i] * ENERGY_PER_FISSION[i] for i in ISOTOPES)
@@ -95,7 +194,21 @@ function neutrino_energy(E_prompt)
     E
 end
 
-configure() = ReactorFlux(isotope_spectrum = isotope_spectrum, spectrum = spectrum, ibd_xsec = ibd_xsec, fission_rate = fission_rate)
+"""
+    configure(model::SpectrumModel = HuberMueller()) -> ReactorFlux
+
+Reactor flux module with the Huber–Mueller ([`HuberMueller`](@ref), default) or the Daya Bay data-driven
+([`DayaBayUnfolded`](@ref)) antineutrino spectra.
+"""
+configure(model::HuberMueller = HuberMueller()) =
+    ReactorFlux(model = model, isotope_spectrum = isotope_spectrum, spectrum = spectrum, rate_scale = bugey4_scale,
+                ibd_xsec = ibd_xsec, fission_rate = fission_rate)
+
+function configure(model::DayaBayUnfolded)
+    m = dyb_unfolded_model()
+    ReactorFlux(model = model, isotope_spectrum = m.iso, spectrum = m.spec, rate_scale = f -> 1.0,
+                ibd_xsec = ibd_xsec, fission_rate = fission_rate)
+end
 
 "IBD yield per fission ∫ S(E) σ(E) dE [cm²/fission] of the Huber–Mueller model."
 function ibd_yield(fractions; Emax = 12.0, n = 4000)

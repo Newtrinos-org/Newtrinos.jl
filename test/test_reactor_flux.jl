@@ -32,4 +32,22 @@ using Test, Newtrinos, Dates, DataFrames
         det = R.ecef(36.4225, 137.3153)
         @test R.baseline(det, R.ecef(37.4286, 138.5978)) ≈ 160 atol = 2      # Kashiwazaki-Kariwa – Kamioka
     end
+    @testset "Daya Bay unfolded spectra" begin
+        hm, dyb = R.configure(), R.configure(R.DayaBayUnfolded())
+        @test hm.model isa R.HuberMueller && dyb.model isa R.DayaBayUnfolded
+        t = R.read_dyb_unfolded()
+        @test length(t.centres) == 25 && length(t.edges) == 26
+        # the model reproduces the published bin contents at the Daya Bay fission fractions (Eq. 9 with Δf = 0)
+        f = R.DYB_FRACTIONS
+        @test all(R.bin_mean(E -> dyb.spectrum(E, f), t.edges[b], t.edges[b+1]) ≈ t.total[b] for b in 1:25)
+        @test all(R.bin_mean(E -> dyb.isotope_spectrum(:U235, E), t.edges[b], t.edges[b+1]) ≈ t.U235[b] for b in 1:25)
+        # the 5 MeV excess and the flux deficit relative to Huber–Mueller
+        @test dyb.spectrum(6.0, f) / hm.spectrum(6.0, f) > 1.03
+        @test dyb.spectrum(3.5, f) / hm.spectrum(3.5, f) < 0.96
+        # Eq. 9 is linear in the fission fractions; at other fractions the per-isotope spectra add up to it
+        g = (U235 = 0.6, U238 = 0.07, Pu239 = 0.27, Pu241 = 0.06)
+        @test dyb.spectrum(5.0, g) - dyb.spectrum(5.0, f) ≈ sum((g[i] - f[i]) * dyb.isotope_spectrum(i, 5.0) for i in R.ISOTOPES)
+        @test dyb.rate_scale(g) == 1.0
+        @test hm.rate_scale(g) ≈ R.bugey4_scale(g)
+    end
 end

@@ -141,7 +141,7 @@ function get_assets(physics, ds = DATASETS.periods2013)
     Et = collect(1.0:0.01:9.0); dE = 0.01
     Eν = Newtrinos.reactor_flux.neutrino_energy.(Et)
     dEν = (Newtrinos.reactor_flux.neutrino_energy.(Et .+ dE / 2) .- Newtrinos.reactor_flux.neutrino_energy.(Et .- dE / 2))
-    norm = Newtrinos.reactor_flux.bugey4_scale(ds.fractions) * LONG_LIVED
+    norm = rf.rate_scale(ds.fractions) * LONG_LIVED      # Bugey-4 anchoring for Huber–Mueller, 1 for measured spectra
     φσ = [rf.spectrum(e, ds.fractions) * rf.ibd_xsec(e) * norm * d for (e, d) in zip(Eν, dEν)]
     ex = reactor_exposure(rf, ds)
     L = vcat(ex.L, 5000.0)
