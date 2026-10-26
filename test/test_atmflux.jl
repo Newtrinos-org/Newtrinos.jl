@@ -200,4 +200,34 @@ using Test
         end
     end
 
+
+    @testset "daemonflux nominal flux and systematics" begin
+        AF = Newtrinos.atm_flux
+        af = AF.configure(AF.AtmFluxConfig(nominal_model = AF.Daemonflux(), systematics_model = AF.Daemon()))
+        names = AF.daemon_parameter_names()
+        @test length(names) == 24
+        @test af.priors.atm_flux_daemon isa MvNormal
+        @test af.params.atm_flux_daemon == zeros(24)
+        # reference values from daemonflux 0.9.0 (generic, revision 202303_2): flux / E³ [1/(GeV cm² s sr)] at
+        # (E, zenith) = (10 GeV, 0°) νμ, (3 GeV, 60°) ν̄e, (100 GeV, 90°) νe; up-going directions are mirrored
+        t = af.nominal_flux([10.0], [1.0]);  @test t.numu[1] ≈ 2.3117163410894675e-05 rtol = 1e-4
+        t2 = af.nominal_flux([10.0], [-1.0]); @test t2.numu[1] ≈ t.numu[1]
+        t = af.nominal_flux([3.0], [0.5]);   @test t.nuebar[1] ≈ 0.00030886099125104104 rtol = 1e-4
+        t = af.nominal_flux([100.0], [0.0]); @test t.nue[1] ≈ 1.7938055799537926e-08 rtol = 1e-4
+        # shifted parameters (in units of their calibrated errors): ratio to the nominal flux
+        p = zeros(24)
+        p[findfirst(==("K-_158G"), names)] = 1.5; p[findfirst(==("pi+_158G"), names)] = -0.7; p[findfirst(==("GSF_1"), names)] = 0.9
+        nominal = af.nominal_flux([10.0, 3.0, 100.0], [1.0, 0.5, 0.0])
+        sys = af.sys_flux(nominal, (atm_flux_daemon = p,))
+        @test sys.numu[1] / nominal.numu[1] ≈ 1.0061984666282797 rtol = 1e-5      # (10 GeV, cos z = 1)
+        @test sys.nuebar[5] / nominal.nuebar[5] ≈ 1.0037391531714885 rtol = 1e-5  # (3 GeV, cos z = 0.5)
+        @test sys.nue[9] / nominal.nue[9] ≈ 1.0190352679315529 rtol = 1e-5        # (100 GeV, cos z = 0)
+        nom0 = af.sys_flux(nominal, af.params)
+        @test nom0.numu ≈ nominal.numu
+        # applied to the HKKM nominal flux as relative variations
+        ah = AF.configure(AF.AtmFluxConfig(systematics_model = AF.Daemon()))
+        hk = ah.nominal_flux([10.0], [1.0])
+        @test ah.sys_flux(hk, (atm_flux_daemon = p,)).numu[1] / hk.numu[1] ≈ 1.0061984666282797 rtol = 1e-5
+    end
+
 end

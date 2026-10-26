@@ -6,9 +6,10 @@ using DataStructures
 using Distributions
 using LinearAlgebra
 using TypedTables
+using HDF5
 using ..Newtrinos
 
-export AtmFluxConfig, HKKM, Barr, BarrEnergyBands
+export AtmFluxConfig, HKKM, Barr, BarrEnergyBands, Daemonflux, Daemon
 
 const datadir = @__DIR__ 
 
@@ -18,7 +19,7 @@ const datadir = @__DIR__
 Abstract type for atmospheric neutrino flux predictions.
 
 Each subtype provides a recipe for computing the unoscillated neutrino flux as a function
-of energy and zenith angle. Currently the only implementation is [`HKKM`](@ref).
+of energy and zenith angle. Implementations are [`HKKM`](@ref) and [`Daemonflux`](@ref).
 """
 abstract type NominalFluxModel end
 
@@ -45,8 +46,8 @@ end
 Abstract type for atmospheric flux systematic uncertainty models.
 
 Each subtype defines a set of nuisance parameters and a function that modifies the
-nominal flux to account for systematic uncertainties. Implementations are [`Barr`](@ref)
-and [`BarrEnergyBands`](@ref).
+nominal flux to account for systematic uncertainties. Implementations are [`Barr`](@ref),
+[`BarrEnergyBands`](@ref) and [`Daemon`](@ref).
 """
 abstract type FluxSystematicsModel end
 
@@ -613,6 +614,129 @@ function get_sys_flux(cfg::BarrEnergyBands)
 
         return (nue=flux_nue3, numu=flux_numu3, nuebar=flux_nuebar3, numubar=flux_numubar3)
 
+    end
+end
+
+
+# ------------------------------------------------------------------------------------------------------------------
+# daemonflux (Yañez & Fedynitch, Phys. Rev. D 107, 123037 (2023)): atmospheric-muon-calibrated flux with a
+# data-driven covariance. Tables of the calibrated flux and of its relative derivatives with respect to the 24
+# daemonflux parameters (`daemonflux/daemonflux_generic.h5`, written by `daemonflux/make_daemonflux_tables.py`).
+# ------------------------------------------------------------------------------------------------------------------
+
+const DAEMON_FLAVOURS = (:numu, :numubar, :nue, :nuebar)
+
+"""
+    Daemonflux <: NominalFluxModel
+
+The muon-calibrated atmospheric neutrino flux of daemonflux (J. P. Yañez, A. Fedynitch, Phys. Rev. D 107, 123037
+(2023); MCEq with the GSF cosmic-ray model and the DDM hadronic model, both calibrated on atmospheric muon data) at
+its "generic" location, tabulated for 0.112 GeV < E < 10 TeV.
+
+The generic location has no geomagnetic effects, so the flux is the same for up- and down-going directions
+(``\\cos\\theta_z \\to |\\cos\\theta_z|``); below a few GeV the site-specific [`HKKM`](@ref) tables are more
+appropriate as nominal flux.
+
+# Fields
+- `fname::String = "daemonflux/daemonflux_generic.h5"`: table file (relative to the `physics/` data directory).
+"""
+@kwdef struct Daemonflux <: NominalFluxModel
+    fname::String = "daemonflux/daemonflux_generic.h5"
+end
+
+"""
+    Daemon <: FluxSystematicsModel
+
+daemonflux uncertainties: the flux is varied linearly in the 24 daemonflux parameters (hadron-production knobs
+for π±, K±, p and n in four projectile-energy ranges, and six GSF cosmic-ray-flux modes),
+
+``\\Phi(E, \\cos\\theta_z; p) = \\Phi_0(E, \\cos\\theta_z)\\,\\bigl(1 + \\sum_k p_k R_k(E, |\\cos\\theta_z|)\\bigr)``,
+
+where ``R_k`` is the relative change of the daemonflux flux for a one-standard-deviation shift of parameter `k`, per
+flavour. The parameters form one vector `atm_flux_daemon` (in units of their calibrated standard deviations,
+nominal 0) with the correlated prior `MvNormal(0, C)`, `C` the correlation matrix of the daemonflux calibration
+(see [`daemon_parameter_names`](@ref)). The relative variations are applied to whichever nominal flux is configured
+([`HKKM`](@ref) or [`Daemonflux`](@ref)); like daemonflux itself this is exactly linear in the parameters.
+
+# Fields
+- `fname::String = "daemonflux/daemonflux_generic.h5"`: table file (relative to the `physics/` data directory).
+"""
+@kwdef struct Daemon <: FluxSystematicsModel
+    fname::String = "daemonflux/daemonflux_generic.h5"
+end
+
+# read the daemonflux table; arrays are indexed [log10 E, cos z] (and [.., parameter] for the derivatives)
+function read_daemon_table(fname)
+    h5open(joinpath(datadir, fname)) do f
+        log10e = read(f["log10_energy"])
+        cz = read(f["coszen"])
+        names = String.(read(f["parameters"]))
+        corr = permutedims(read(f["correlation"]))
+        flux = NamedTuple{DAEMON_FLAVOURS}(Tuple(permutedims(read(f["$fl/flux"])) for fl in DAEMON_FLAVOURS))
+        rel = NamedTuple{DAEMON_FLAVOURS}(Tuple(permutedims(read(f["$fl/relative_derivative"]), (2, 1, 3)) for fl in DAEMON_FLAVOURS))
+        (; log10e, cz, names, corr, flux, rel)
+    end
+end
+
+"""
+    daemon_parameter_names(cfg::Daemon=Daemon()) -> Vector{String}
+
+Names of the daemonflux parameters, in the order of the entries of `atm_flux_daemon`.
+"""
+daemon_parameter_names(cfg::Daemon=Daemon()) = read_daemon_table(cfg.fname).names
+
+# bilinear interpolation on the (log10 E, cos z) grid, constant beyond the tabulated range
+function _daemon_interp(grid_x, grid_y, x, y)
+    clampx = clamp(x, grid_x[1], grid_x[end]); clampy = clamp(y, grid_y[1], grid_y[end])
+    i = clamp(searchsortedlast(grid_x, clampx), 1, length(grid_x) - 1)
+    j = clamp(searchsortedlast(grid_y, clampy), 1, length(grid_y) - 1)
+    tx = (clampx - grid_x[i]) / (grid_x[i+1] - grid_x[i]); ty = (clampy - grid_y[j]) / (grid_y[j+1] - grid_y[j])
+    (i, j, tx, ty)
+end
+_bilinear(A, (i, j, tx, ty)) = (1 - tx) * (1 - ty) * A[i, j] + tx * (1 - ty) * A[i+1, j] + (1 - tx) * ty * A[i, j+1] + tx * ty * A[i+1, j+1]
+
+function get_nominal_flux(cfg::Daemonflux)
+    t = read_daemon_table(cfg.fname)
+    logflux = map(f -> log.(f), t.flux)   # interpolate the logarithm of the steeply falling flux
+    function nominal_flux(energy, coszen)
+        e_fine_meshgrid = vec(energy .* ones(length(coszen))')
+        cz_fine_meshgrid = vec(ones(length(energy)) .* coszen')
+        flux = FlexTable(true_energy=e_fine_meshgrid, log10_true_energy=log10.(e_fine_meshgrid), true_coszen=cz_fine_meshgrid)
+        w = _daemon_interp.(Ref(t.log10e), Ref(t.cz), flux.log10_true_energy, abs.(flux.true_coszen))
+        for key in DAEMON_FLAVOURS
+            setproperty!(flux, key, exp.(_bilinear.(Ref(logflux[key]), w)))
+        end
+        Table(flux)
+    end
+end
+
+get_params(cfg::Daemon) = (atm_flux_daemon = zeros(length(daemon_parameter_names(cfg))),)
+
+# dense correlation matrix (see `solar_flux.ssm_prior` on cholesky of Symmetric and fit-cache hashes)
+get_priors(cfg::Daemon) = (atm_flux_daemon = MvNormal(zeros(length(daemon_parameter_names(cfg))),
+                                                      Matrix(Symmetric(read_daemon_table(cfg.fname).corr))),)
+
+function get_sys_flux(cfg::Daemon)
+    t = read_daemon_table(cfg.fname)
+    n = length(t.names)
+    # relative derivatives on the grid of a given nominal flux table, computed once per table (experiments that
+    # rebuild their nominal table on every call, e.g. with an energy-scale parameter, recompute them each time)
+    cache = IdDict{Any, NamedTuple}()
+    lk = ReentrantLock()
+    function derivatives(flux)
+        lock(lk) do
+            haskey(cache, flux.true_energy) || length(cache) < 8 || empty!(cache)
+            get!(cache, flux.true_energy) do
+                w = _daemon_interp.(Ref(t.log10e), Ref(t.cz), flux.log10_true_energy, abs.(flux.true_coszen))
+                NamedTuple{DAEMON_FLAVOURS}(Tuple([_bilinear(view(t.rel[fl], :, :, k), wi) for wi in w, k in 1:n] for fl in DAEMON_FLAVOURS))
+            end
+        end
+    end
+    function sys_flux(flux, params)
+        R = derivatives(flux)
+        p = params.atm_flux_daemon
+        (nue = flux.nue .* (1 .+ R.nue * p), numu = flux.numu .* (1 .+ R.numu * p),
+         nuebar = flux.nuebar .* (1 .+ R.nuebar * p), numubar = flux.numubar .* (1 .+ R.numubar * p))
     end
 end
 
