@@ -634,10 +634,19 @@ the cached result is returned. Otherwise the result is computed and saved.
 # Returns
 A 3-tuple `(llh, log_posterior, result)` — see [`find_mle`](@ref).
 """
+# Cache key of a fit. ContentHashes cannot serialise `Char`, which every `MvNormal` prior contains (the `uplo` field of its
+# Cholesky factor, e.g. in the correlated solar-flux prior `solar_norms`): such priors are hashed with their multivariate
+# normals replaced by mean and covariance. Priors without them keep their previous keys.
+_hash_key(prior) = prior
+function _hash_key(prior::ValueShapes.NamedTupleDist)
+    any(d -> d isa Distributions.AbstractMvNormal, values(prior)) || return prior
+    NamedTuple{keys(prior)}(map(d -> d isa Distributions.AbstractMvNormal ? (:MvNormal, collect(mean(d)), Matrix(cov(d))) : d, values(prior)))
+end
+
 function find_mle_cached(likelihood, prior, params, cache_dir; adsel = AutoPolyesterForwardDiff())
     opt_result = nothing
 
-    h = ContentHashes.hash([prior, params])
+    h = ContentHashes.hash([_hash_key(prior), params])
 
     if !isnothing(cache_dir)
         fname = joinpath(cache_dir, "$h.jld2")
