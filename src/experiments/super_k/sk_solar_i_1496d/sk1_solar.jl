@@ -11,8 +11,10 @@ Super-Kamiokande I solar, 1496 days.
 J. Hosaka et al., Phys. Rev. D 73, 112001 (2006), hep-ex/0508053: 5.0–5.5 and 16–20 MeV all-zenith rates and
 5.5–16 MeV rates in day, five mantle and one core solar zenith bins (44 data points), recoil total energy.
 
-SK-I energy resolution (hep-ex/0508053), energy scale ±0.64%, resolution ±2.5%, energy-independent
-systematics 2.8% (SK-IV paper, arXiv:2312.12907, Table of systematics per phase).
+SK-I energy resolution (hep-ex/0508053), energy-independent systematics 2.8% (SK-IV paper, arXiv:2312.12907, Table of
+systematics per phase). Energy-scale and resolution systematics: SK's per-bin shape factors of the paper's table of
+energy-correlated errors (`sk1_energy_correlated.csv`); the response-based ±0.64% / ±2.5% (`scale_unc`, `reso_unc`) is
+not used then.
 
 See `Newtrinos.sk_solar_common.SKSolar` for the likelihood.
 """
@@ -27,6 +29,7 @@ const PHASE = SKPhase(
     norm_unc = 0.028,
     phi_b8_mc = 5.79e6,
     phi_hep_mc = 7.88e3,
+    correlated_file = joinpath(@__DIR__, "sk1_energy_correlated.csv"),
     # the six zenith classes of the data, each subdivided into 16 bins for the Earth regeneration average
     night_edges = vcat([range(a, b, length=17)[1:end-1] for (a, b) in zip([0, 0.16, 0.33, 0.50, 0.67, 0.84], [0.16, 0.33, 0.50, 0.67, 0.84, 1.0])]..., [1.0]),
 )

@@ -25,6 +25,10 @@ Description of one Super-Kamiokande solar data set.
 - `scale_unc`, `reso_unc`: fractional energy-scale and resolution uncertainties.
 - `norm_unc`: energy-independent rate systematics not contained in the per-bin errors.
 - `phi_b8_mc`, `phi_hep_mc`: ⁸B and hep fluxes [cm⁻² s⁻¹] assumed for the expected rates.
+- `correlated_file`: optional CSV of SK's own energy-correlated systematics per energy bin (columns `E_lo, E_hi, es_plus,
+  es_minus, er_plus, er_minus`: rate change [%] for ±1σ of the energy scale and resolution). If given, the energy-scale
+  and resolution pulls multiply the expected rate of each bin by SK's shape factor (as in SK's own χ², quadratic through
+  the ±1σ values) instead of refolding the response with a shifted scale or resolution.
 - `night_edges`: solar cos θ_z night binning (SK convention, 0 to 1) used to average the
   Earth regeneration; must contain all zenith bin edges of the data samples. The default 80 bins
   converge the likelihood to Δln L ≲ 0.01 (20 bins: up to 0.45 at Δm²₂₁ ≈ 5×10⁻⁵ eV²).
@@ -40,6 +44,7 @@ Description of one Super-Kamiokande solar data set.
     norm_unc::Float64
     phi_b8_mc::Float64
     phi_hep_mc::Float64
+    correlated_file::Union{Nothing, String} = nothing
     night_edges::Vector{Float64} = collect(range(0, 1, length=81))
 end
 
@@ -150,13 +155,27 @@ function get_assets(phase::SKPhase, physics; daynight::Symbol=:spectra, site=not
     rate0_b8 = solar_common.es_rates(resp, sf.spectrum(:b8, E, sf.params) .* (phase.phi_b8_mc / sf.nominal.b8), ones(length(E)))
     rate0_hep = solar_common.es_rates(resp, sf.spectrum(:hep, E, sf.params) .* (phase.phi_hep_mc / sf.nominal.hep), ones(length(E)))
 
+    # SK's energy-correlated shape factors per energy bin (fractions), if tabulated for this phase
+    corr = nothing
+    if phase.correlated_file !== nothing
+        c, ch = readdlm(phase.correlated_file, ',', Float64, '\n'; header=true, comments=true)
+        ccol(name) = c[:, findfirst(==(name), vec(ch))]
+        function row(b)
+            k = findfirst(k -> isapprox(c[k, 1], first(bins[b]); atol=1e-6), axes(c, 1))
+            k === nothing && error("$(phase.name): no correlated systematics for the bin starting at $(first(bins[b])) MeV")
+            k
+        end
+        idx = [row(b) for b in eachindex(bins)]
+        corr = map(n -> ccol(n)[idx] ./ 100, (es_plus = "es_plus", es_minus = "es_minus", er_plus = "er_plus", er_minus = "er_minus"))
+    end
+
     (
         observed = rate,
         cov = Symmetric(Matrix(cov)),
         samples = (E_lo = E_lo, E_hi = E_hi, zenith = zen, cz_lo = cz_lo, cz_hi = cz_hi),
         bins = bins, bin_of = bin_of, W = W,
         mc_b8 = mc_b8, mc_hep = mc_hep, rate0_b8 = rate0_b8, rate0_hep = rate0_hep,
-        resp = resp, site = site,
+        resp = resp, site = site, corr = corr,
     )
 end
 
@@ -186,12 +205,20 @@ function get_expected(phase::SKPhase, params, physics, assets,
                       Pe = solar_probabilities(physics, assets.site, assets.resp.E, params))
     sf, resp = physics.solar_flux, assets.resp
     pulls = (scale = params[param(phase, :escale)], reso = params[param(phase, :ereso)])
+    c = assets.corr
     # rates per energy bin (rows) and zenith column [day, night bins...] (columns)
     function rates(comp, rate0, mc)
-        r = solar_common.es_rates(resp, sf.spectrum(comp, resp.E, params), Pe[comp]; pulls...)
+        r = c === nothing ? solar_common.es_rates(resp, sf.spectrum(comp, resp.E, params), Pe[comp]; pulls...) :
+                            solar_common.es_rates(resp, sf.spectrum(comp, resp.E, params), Pe[comp])
         mc .* r ./ rate0
     end
     R = rates(:b8, assets.rate0_b8, assets.mc_b8) .+ rates(:hep, assets.rate0_hep, assets.mc_hep)
+    if c !== nothing
+        # SK's tabulated energy-scale and resolution shape factors per energy bin
+        f = solar_common.interp_pull(1.0, 1 .+ c.es_plus, 1 .+ c.es_minus, pulls.scale) .*
+            solar_common.interp_pull(1.0, 1 .+ c.er_plus, 1 .+ c.er_minus, pulls.reso)
+        R = R .* f
+    end
     norm = 1 + phase.norm_unc * params[param(phase, :norm)]
     norm .* [sum(assets.W[i, :] .* R[assets.bin_of[i], :]) for i in eachindex(assets.bin_of)]
 end

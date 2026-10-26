@@ -11,8 +11,10 @@ Super-Kamiokande II solar, 791 days.
 J. P. Cravens et al., Phys. Rev. D 78, 032002 (2008), arXiv:0803.4312: day and night rates, 7.5–20 MeV, and the
 all-zenith 7.0–7.5 MeV rate (33 data points), recoil total energy.
 
-SK-II energy resolution (arXiv:0803.4312), energy scale ±1.4%, resolution ±2.5%, energy-independent
-systematics 4.8% (SK-IV paper); energy-uncorrelated systematics derived from the SK-IV paper appendix.
+SK-II energy resolution (arXiv:0803.4312), energy-independent systematics 4.8% (SK-IV paper); energy-uncorrelated
+systematics derived from the SK-IV paper appendix. Energy-scale and resolution systematics: SK's per-bin shape factors
+of the SK-II data release (`sk2_energy_correlated.csv`); the response-based ±1.4% / ±2.5% (`scale_unc`, `reso_unc`) is
+not used then.
 
 See `Newtrinos.sk_solar_common.SKSolar` for the likelihood.
 """
@@ -27,6 +29,7 @@ const PHASE = SKPhase(
     norm_unc = 0.048,
     phi_b8_mc = 5.79e6,
     phi_hep_mc = 7.88e3,
+    correlated_file = joinpath(@__DIR__, "sk2_energy_correlated.csv"),
 )
 
 default_physics() = solar_common.default_physics()
