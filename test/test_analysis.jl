@@ -470,6 +470,19 @@ DensityInterface.logdensityof(::ArgumentErrorDensity, x) = throw(ArgumentError("
             llh3, lp3, r3 = Newtrinos.find_mle_cached(likelihood, prior, params_new, cache_dir)
             @test length(readdir(cache_dir)) == 2
         end
+
+        # a multivariate-normal prior (as the correlated solar-flux prior) can be hashed for the cache
+        fwd2(v) = MvNormal(v, I(2))
+        likelihood2 = likelihoodof(x -> fwd2(x.v), observed)
+        prior2 = distprod(v = MvNormal([1.0, 1.0], [1.0 0.3; 0.3 1.0]))
+        mktempdir() do cache_dir
+            llh1, _, r1 = Newtrinos.find_mle_cached(likelihood2, prior2, (v = [1.0, 1.0],), cache_dir)
+            @test length(readdir(cache_dir)) == 1
+            llh2, _, r2 = Newtrinos.find_mle_cached(likelihood2, prior2, (v = [1.0, 1.0],), cache_dir)
+            @test length(readdir(cache_dir)) == 1
+            @test llh1 ≈ llh2
+        end
+        @test Newtrinos._hash_key(prior) === prior     # priors without MvNormal keep their cache keys
     end
 
     @testset "_generate_grid" begin
