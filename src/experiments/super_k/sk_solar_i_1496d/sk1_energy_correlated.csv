@@ -1,0 +1,27 @@
+# Super-Kamiokande I energy-correlated systematic uncertainties [%] of the rate per energy bin for +1 sigma and -1 sigma
+# of the energy scale (es) and energy resolution (er); total recoil electron energy [MeV].
+# Source: Hosaka et al., Phys. Rev. D 73, 112001 (2006), arXiv:hep-ex/0508053, table "Energy correlated systematic errors for each of
+# the 21 energy bins" (the table lists -1 sigma first, as the signs at high energy show: a larger energy scale or a wider resolution
+# raises the rate of the highest bins).
+E_lo,E_hi,es_plus,es_minus,er_plus,er_minus
+5.0,5.5,0,0.1,-0.2,0.2
+5.5,6.0,0.1,-0.1,-0.2,0.2
+6.0,6.5,0.2,-0.3,-0.2,0.2
+6.5,7.0,0.4,-0.5,-0.2,0.2
+7.0,7.5,0.6,-0.7,-0.2,0.2
+7.5,8.0,0.9,-0.9,-0.2,0.2
+8.0,8.5,1.1,-1.1,-0.2,0.2
+8.5,9.0,1.4,-1.4,-0.1,0.1
+9.0,9.5,1.8,-1.7,-0.1,0.1
+9.5,10.0,2.1,-1.9,0,0
+10.0,10.5,2.5,-2.3,0.1,-0.1
+10.5,11.0,2.8,-2.6,0.2,-0.3
+11.0,11.5,3.2,-3,0.4,-0.5
+11.5,12.0,3.6,-3.4,0.7,-0.8
+12.0,12.5,4.1,-3.8,0.9,-1.1
+12.5,13.0,4.5,-4.3,1.3,-1.4
+13.0,13.5,5,-4.8,1.7,-1.9
+13.5,14.0,5.5,-5.4,2.2,-2.4
+14.0,15.0,6.3,-6.3,3.1,-3.3
+15.0,16.0,7.6,-7.7,4.7,-4.9
+16.0,20.0,10.2,-9.9,8.2,-8.1

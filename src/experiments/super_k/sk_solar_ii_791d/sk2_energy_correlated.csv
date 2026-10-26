@@ -1,0 +1,22 @@
+# Super-Kamiokande II energy-correlated systematic uncertainties [%] of the rate per energy bin for +1 sigma and -1 sigma
+# of the energy scale (es) and energy resolution (er); total recoil electron energy [MeV].
+# Source: SK-II solar data release (ecorrerr.txt, "Energy correlated systematic errors for SK-II"), www-sk.icrr.u-tokyo.ac.jp/sk/lowe/sk2_data/,
+# retrieved from the Internet Archive (capture 2013-05-14); Cravens et al., Phys. Rev. D 78, 032002 (2008).
+E_lo,E_hi,es_plus,es_minus,er_plus,er_minus
+7.0,7.5,+1.07,-1.02,-0.42,+0.41
+7.5,8.0,+1.71,-1.54,-0.36,+0.36
+8.0,8.5,+2.34,-2.08,-0.27,+0.28
+8.5,9.0,+2.96,-2.62,-0.15,+0.17
+9.0,9.5,+3.57,-3.18,0.0,-0.02
+9.5,10.0,+4.17,-3.75,+0.15,-0.18
+10.0,10.5,+4.77,-4.32,+0.36,-0.37
+10.5,11.0,+5.36,-4.90,+0.60,-0.57
+11.0,11.5,+5.95,-5.48,+0.87,-0.80
+11.5,12.0,+6.55,-6.06,+1.18,-1.04
+12.0,12.5,+7.16,-6.63,+1.52,-1.30
+12.5,13.0,+7.78,-7.20,+1.89,-1.57
+13.0,13.5,+8.43,-7.76,+2.30,-1.87
+13.5,14.0,+9.09,-8.31,+2.74,-2.20
+14.0,15.0,+10.15,-9.12,+3.47,-2.76
+15.0,16.0,+11.68,-10.16,+4.59,-3.68
+16.0,20.0,+15.95,-12.83,+8.18,-7.40

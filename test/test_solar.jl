@@ -368,6 +368,17 @@ end
     δ = [1e-6, 1e-11, 1e-6, 1e-6]
     g_fd = [(f(y0 .+ δ .* (1:4 .== i)) - f(y0 .- δ .* (1:4 .== i))) / 2δ[i] for i in 1:4]
     @test g ≈ g_fd rtol=1e-4
+    # SK-I and SK-II: SK's tabulated energy-correlated shape factors (SK-II data release / SK-I paper table)
+    for (m, E_lo, es_plus, er_minus) in ((Newtrinos.sk2_solar, 16.0, 0.1595, -0.0740), (Newtrinos.sk1_solar, 16.0, 0.102, -0.081))
+        skx = m.configure(physics)
+        px = Newtrinos.get_params((; skx))
+        ax = skx.assets
+        i = findfirst(==(E_lo), ax.samples.E_lo)
+        n = m.PHASE.name
+        e0 = m.get_expected(px, skx.physics, ax)
+        @test m.get_expected(merge(px, NamedTuple{(Symbol(n, "_escale"),)}((1.0,))), skx.physics, ax)[i] / e0[i] ≈ 1 + es_plus rtol=1e-9
+        @test m.get_expected(merge(px, NamedTuple{(Symbol(n, "_ereso"),)}((-1.0,))), skx.physics, ax)[i] / e0[i] ≈ 1 + er_minus rtol=1e-9
+    end
     # day and night samples merged per energy bin (for use with the amplitude-fit day/night term)
     skc = Newtrinos.sk4_solar.configure(physics; daynight = :combined)
     @test length(skc.assets.observed) == length(sk.assets.observed) ÷ 2
