@@ -1,4 +1,5 @@
 module dayabay_rewrite
+
 using DataFrames
 using CSV
 using LinearAlgebra
@@ -472,6 +473,45 @@ function get_params(datadir = @__DIR__)
     lsnl_scale_nom = dict["parameters"]["lsnl_scale_a"][1]
     lsnl_pull = lsnl_scale_nom .* ones(4)
 
+
+
+    ## reactor params specific to DayaBay setup
+    ## reactor thermal power
+    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_thermal_power_uncertainty.yaml"))
+    reactor_thermal_power_scale = data["parameters"]["thermal_power_scale"][1] .* ones(6)
+
+    ## fission fraction scales
+    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions_scale.yaml"), dicttype=OrderedDict{String,Any})
+    fraction_scale = data["parameters"]["fission_fractions_scale"]
+    #println(fraction_scale)
+
+    ## neq scale
+    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_nonequilibrium_correction.yaml"))
+    mu = file["parameters"]["nonequilibrium_scale"][1]
+
+    neq_scale_R1 = ones(4) .* mu
+    neq_scale_R2 = ones(4) .* mu
+    neq_scale_R3 = ones(4) .* mu
+    neq_scale_R4 = ones(4) .* mu
+    neq_scale_R5 = ones(4) .* mu
+    neq_scale_R6 = ones(4) .* mu
+
+    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_snf.yaml"))
+    mu = file["parameters"]["snf_scale"][1]
+
+    snf_scale = ones(6) .* mu
+
+    names = data["correlations"]["fission_fractions_scale"]["names"]
+    #println(names)
+    fission_fractions_scale_R1 = collect([Float64(fraction_scale[name][1]) for name in names])
+    fission_fractions_scale_R2 = collect([Float64(fraction_scale[name][1]) for name in names])
+    fission_fractions_scale_R3 = collect([Float64(fraction_scale[name][1]) for name in names])
+    fission_fractions_scale_R4 = collect([Float64(fraction_scale[name][1]) for name in names])
+    fission_fractions_scale_R5 = collect([Float64(fraction_scale[name][1]) for name in names])
+    fission_fractions_scale_R6 = collect([Float64(fraction_scale[name][1]) for name in names])
+    spectrum_pulls = zeros(19)
+    
+
     params = (;
         amc_unc_scale,
         acc_scale,
@@ -491,6 +531,20 @@ function get_params(datadir = @__DIR__)
         eff_eres_AD34,
         lsnl_pull,
         iav_offdiag_scale,
+         reactor_thermal_power_scale,
+        neq_scale_R1,
+        neq_scale_R2,
+        neq_scale_R3,
+        neq_scale_R4,
+        neq_scale_R5,
+        neq_scale_R6,
+        snf_scale,
+        fission_fractions_scale_R1,
+        fission_fractions_scale_R2,
+        fission_fractions_scale_R3,
+        fission_fractions_scale_R4,
+        fission_fractions_scale_R5,
+        fission_fractions_scale_R6,
     )
     return params
 end
@@ -595,15 +649,71 @@ function get_priors(datadir = @__DIR__)
     lsnl_scale_unc = dict["parameters"]["lsnl_scale_a"][2]
     lsnl_pull = Distributions.MvNormal(lsnl_scale_nom .* ones(4), lsnl_scale_unc^2 .* ones(4))
 
+
+    ### reactor priors specific to DayaBay setup
+    ## reactor thermal power uncertainty
+    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_thermal_power_uncertainty.yaml"))
+    mu = data["parameters"]["thermal_power_scale"][1]
+    sigma = data["parameters"]["thermal_power_scale"][2] * mu * 0.01  # percent
+    reactor_thermal_power_scale = Distributions.MvNormal(mu .* ones(6), Diagonal(sigma.^2 .* ones(6)))
+
+    ## fission fraction scale
+    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions_scale.yaml"), dicttype=OrderedDict{String,Any})
+    fraction_scale = data["parameters"]["fission_fractions_scale"]
+
+    isotopes = ["U235", "U238", "Pu239", "Pu241"]
+    scale = zeros((4, 4))
+    for i in 1:4
+        for j in 1:4
+            scale[i, j] = fraction_scale[isotopes[i]][1] * fraction_scale[isotopes[i]][2] * fraction_scale[isotopes[j]][1] * fraction_scale[isotopes[j]][2] * 0.01 * 0.01   # percent
+        end
+    end
+
+    mu = collect([Float64(fraction_scale[name][1]) for name in isotopes])
+    corr_mat = hcat(data["correlations"]["fission_fractions_scale"]["matrix"]...)
+
+
+    cov_mat = corr_mat .* scale
+    fission_fractions_scale_R1 = Distributions.MvNormal(mu, cov_mat)
+    fission_fractions_scale_R2 = Distributions.MvNormal(mu, cov_mat)
+    fission_fractions_scale_R3 = Distributions.MvNormal(mu, cov_mat)
+    fission_fractions_scale_R4 = Distributions.MvNormal(mu, cov_mat)
+    fission_fractions_scale_R5 = Distributions.MvNormal(mu, cov_mat)
+    fission_fractions_scale_R6 = Distributions.MvNormal(mu, cov_mat)
+
+    # free parameters (official: unbounded); exp(±1) is far outside any fitted value
+    spectrum_pulls = Distributions.Uniform.(-ones(19), ones(19))
+
+    ## non-equilibrium correction
+    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_nonequilibrium_correction.yaml"))
+    mu = file["parameters"]["nonequilibrium_scale"][1] .* ones(4)
+    sigma = mu .* file["parameters"]["nonequilibrium_scale"][2] .* 0.01 # percent
+
+
+    neq_scale_R1 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+    neq_scale_R2 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+    neq_scale_R3 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+    neq_scale_R4 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+    neq_scale_R5 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+    neq_scale_R6 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+
+    # snf correction
+    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_snf.yaml"))
+    mu = file["parameters"]["snf_scale"][1] .* ones(6)
+    sigma = mu .* file["parameters"]["snf_scale"][2] .* 0.01   # percent
+    snf_scale = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+
+    
+
     priors = (
-        amc_unc_scale=amc_unc_scale,  # done
-        acc_scale=acc_scale,   # done
-        lihe_unc_scale=lihe_unc_scale,  # done
-        fast_n_unc_scale=fast_n_unc_scale,   # done
-        alpha_n_rate=alpha_n_rate,   # done
-        eres_a=eres_a,  # done
-        eres_b=eres_b,  # done
-        eres_c=eres_c,  # done
+        amc_unc_scale=amc_unc_scale,
+        acc_scale=acc_scale,
+        lihe_unc_scale=lihe_unc_scale,
+        fast_n_unc_scale=fast_n_unc_scale,
+        alpha_n_rate=alpha_n_rate,
+        eres_a=eres_a,
+        eres_b=eres_b,
+        eres_c=eres_c,
         eff_eres_AD11=eff_eres_AD11,
         eff_eres_AD12=eff_eres_AD12,
         eff_eres_AD21=eff_eres_AD21,
@@ -613,7 +723,21 @@ function get_priors(datadir = @__DIR__)
         eff_eres_AD33=eff_eres_AD33,
         eff_eres_AD34=eff_eres_AD34,
         lsnl_pull,
-        iav_offdiag_scale=iav_offdiag_scale,   # done
+        iav_offdiag_scale=iav_offdiag_scale,
+        reactor_thermal_power_scale,
+        neq_scale_R1,
+        neq_scale_R2,
+        neq_scale_R3,
+        neq_scale_R4,
+        neq_scale_R5,
+        neq_scale_R6,
+        snf_scale,
+        fission_fractions_scale_R1,
+        fission_fractions_scale_R2,
+        fission_fractions_scale_R3,
+        fission_fractions_scale_R4,
+        fission_fractions_scale_R5,
+        fission_fractions_scale_R6,
     )
 end
 
@@ -771,11 +895,12 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     df_exp = assets.df_exp
     detector_list = assets.detector_list
 
-    xsec = physics.xsec.xsec
     n_protons = get_proton_number(datadir)
 
     iav_func = get_iav_matrix(datadir)
     lsnl = get_lsnl_correction(datadir)
+
+    nominal_thermal_power = assets.nominal_thermal_power
 
 
     osc = physics.osc
@@ -815,7 +940,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     lsnl_mask = fine_binning_Edep[1:end-1] .>= lsnl_min_energy - 1e-9
 
     # the reactor fluxes on the integration mesh depend only on the reactor parameters: computed once per evaluation
-    # and shared by all AD-periods; (main × correction + neq, snf) per reactor
+    # and shared by all AD-periods; (main × correction + neq, snf / nom_thermal_power) per reactor
     mesh_flux = physics.flux.flux_on_mesh(E_nu_mesh)
     ffs_symbols = [Symbol("fission_fractions_scale_R$(i)") for i=1:6]
     neq_symbols = [Symbol("neq_scale_R$(i)") for i=1:6]
@@ -919,7 +1044,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         # convert the cross section from e-41cm2 to m2 -> multiply by 1e-4
         flux_norm = 1e-45 * n_p .* P_th_seconds .* invL2
 
-        spec_prefac_snf = 1e-45 * n_p * sum(output.eff_livetime_seconds) .* invL2
+        spec_prefac_snf = nominal_thermal_power * 1e-45 * n_p * sum(output.eff_livetime_seconds) .* invL2
         function neutrino_counts(params, fluxes, P)
             # value type promoted over all parameter inputs, so intermediate
             # arrays stay dual even when only a subset of the parameters is dual
