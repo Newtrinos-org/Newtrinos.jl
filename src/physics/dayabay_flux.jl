@@ -40,7 +40,7 @@ end
     average::Bool
 end
 
-const N_pulls = 20
+const N_pulls = 19
 
 
 function configure(cfg::ReactorFluxConfig = ReactorFluxConfig())

@@ -25,6 +25,8 @@ import ..Newtrinos
 end
 
 function default_physics()
+    #osc = Newtrinos.osc.configure(propagation=Neutrinos.osc.Spray(averaging= :uniform, ))
+    #osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(propagation=Newtrinos.osc.Damping(0.08)))
     osc = Newtrinos.osc.configure()
     xsec = Newtrinos.ibd_xsec.configure(Newtrinos.ibd_xsec.VogelBeacomO1())
     flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average=true))
@@ -59,24 +61,21 @@ function get_params()
     efficiency = 0.7401
 
 
-    #take fractions from dayabay,
-    #use fraction_scale separately? re-use from dayabay model?
-    # one entry per isotope
-    # one set of parameter for all reactor cores assumed
-    juno_fission_fraction_scale = ones(4)
-
+    
     # spent nuclear fuel, assumes correlation within plant, uncorrelated between plants
     juno_taishan_snf_scale = 1.0
     juno_yangjiang_snf_scale = 1.0
     juno_dayabay_snf_scale = 1.0
-
+    
     #neq, assumes correlation within plant, uncorrelated between plants
     juno_taishan_neq_scale = ones(4)
     juno_yangjiang_neq_scale = ones(4)
     juno_dayabay_neq_scale = ones(4)
-
-    juno_fission_fractions_scale = ones(4)
-
+    
+    #take fractions from dayabay,
+    #use fraction_scale separately? re-use from dayabay model?
+    # one entry per isotope
+    # one set of parameter for all reactor cores assumed
     juno_taishan_ffs = ones(4)
     juno_yangjiang_ffs = ones(4)
     juno_dayabay_ffs = ones(4)
@@ -88,7 +87,7 @@ function get_params()
     e_scale = 1.0
     e_bias = 0.0
 
-    global_norm = 1.0
+    global_rate = 36.02
     lsnl_pull = 0.0
 
 
@@ -120,8 +119,9 @@ function get_params()
         juno_eres_unc_scale = eres_unc_scale,
         juno_e_scale = e_scale,
         juno_e_bias = e_bias,
-        juno_global_norm = global_norm,
+        juno_global_rate = global_rate,
         juno_lsnl_pull = lsnl_pull,
+        juno_lsnl_scale = 0.,
     )
 
 end
@@ -184,13 +184,13 @@ function get_priors()
     thermal_power_scale = MvNormal(tps_mu, Diagonal(tps_sigma.^2))
     #thermal_power_scale = Normal(1, 0.01)
 
-    global_norm = Uniform(0, 2)
+    global_rate = Normal(36.02, 0.81)
 
-    eres_unc_scale = Normal(0., 2.)
+    eres_unc_scale = Normal(0., 1.)
     # assume 0.5% energy scale uncertainty as per 59day Juno paper
-    e_scale = Normal(1, 0.005)
+    e_scale = Normal(1.0, 0.05)
 
-    unc = 0.005
+    unc = 0.05
     e_bias = Normal(0, unc)
 
 
@@ -220,8 +220,9 @@ function get_priors()
         juno_e_scale = e_scale,
         juno_e_bias = e_bias,
         juno_eres_unc_scale = eres_unc_scale,
-        juno_global_norm = global_norm,
+        juno_global_rate = global_rate,
         juno_lsnl_pull = lsnl_pull,
+        juno_lsnl_scale = Normal(0.0, 0.1),
     )
 end
 
@@ -251,12 +252,13 @@ end
 
 
 function get_eres()
-    data = readdlm(joinoath(@__DIR__, "207_days/eres_207_days.txt"), skipstart=19)
+    data = readdlm(joinpath(@__DIR__, "207_days/eres_207_days.txt"), skipstart=19)
     E = data[:, 1]
     # mul
     rel_eres_nom = data[:, 2] .* 0.01
     # reuse refine_lsnl, it multiplies the nominal curve with energy
     # which is exactly what we want here to get the absolute energy resolution
+    #rel_eres_p = data[:, 4] .* 0.01
     x, nom = refine_lsnl(E, rel_eres_nom)
     nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
     function _eres(E)
@@ -296,7 +298,7 @@ function get_assets(datadir = @__DIR__)
         load_factor = [0.90, 0.86, 0.95, 0.90, 0.88, 0.90, 0.92, 1.02, 0.93],
     )
 
-    # https://pris-stats.iaea.org/reactor/918, assume for Taishan1 that the shut off early summer 2025 is nor representative
+    # https://pris-stats.iaea.org/reactor/918, assume for Taishan1 that the shut off early summer 2025 is not representative
     # dayabay1 94.466, dayabay2 90.80, lingao 1 91.50, lingao 2 98.92, lingao 3 92.50, lingao 4 90.99
 
 
@@ -320,7 +322,8 @@ function get_assets(datadir = @__DIR__)
     bipo = convert(Vector{Float64}, data[:, 11])
     other = convert(Vector{Float64}, data[:, 12])
     signal_mle = convert(Vector{Float64}, data[:, 7])
-
+    #observed = round.(Int64, signal_mle .* hist_to_count)
+    #observed = signal_mle .* hist_to_count
     lihe_counts = lihe .* hist_to_count
     geo_counts = geo .* hist_to_count
     world_reactor_counts = world_reactor .* hist_to_count
@@ -388,7 +391,7 @@ function nue_survival(E, L, params)
 end
 
 
-const lsnl_min_energy = 0.5    # MeV, lower end of the refined LSNL curves
+const lsnl_min_energy = 0.7    # MeV, lower end of the refined LSNL curves
 
 """
     refine_lsnl(E, f; refine_times = 4, newmin = 0.5, newmax = 12.1)
@@ -397,7 +400,7 @@ LSNL curve processing of the official model (`refine_lsnl_data`): the relative c
 absolute Evis(Escint), interpolated with a cubic spline on a `refine_times` finer grid and extrapolated linearly (with
 the outermost fine segments) to [`newmin`, `newmax`]. Returns the fine Escint grid and Evis on it.
 """
-function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}; refine_times = 4, newmin = 0.5, newmax = 12.1)
+function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}; refine_times = 4, newmin = 0.7, newmax = 12.0)
     xfine = collect(range(E[1], E[end], length = (length(E) - 1) * refine_times + 1))
     yfine = Newtrinos.Helpers.not_a_knot_spline(E, f .* E, xfine)
     step = xfine[2] - xfine[1]
@@ -582,8 +585,13 @@ function get_forward_model(physics, assets; debug = false)
     standard_osc = oc.flavour isa Newtrinos.osc.ThreeFlavour && oc.interaction isa Newtrinos.osc.Vacuum &&
                    oc.propagation isa Newtrinos.osc.Basic && oc.states isa Newtrinos.osc.All
     function survival_probabilities(params)
-        standard_osc || return [osc.osc_prob(E_nu_GeV, L, params, anti=true)[:, :, 1, 1] for L in baselines_km]
-        [nue_survival(E_nu_GeV, L, params) for L in baselines_km]
+        standard_osc || return [osc.osc_prob(E_nu_GeV, [L], params, anti=true)[:, 1, 1, 1] for L in baselines_km]
+        [nue_survival(E_nu_GeV, [L], params)[:] for L in baselines_km]
+    end
+
+    function osc_probabilities(params)
+        standard_osc || return [osc.osc_prob(E_fine_c ./ 1e3, [L], params, anti=true)[:, 1, 1, 1] for L in baselines_km]
+        [nue_survival(E_fine_c ./ 1e3, [L], params)[:] for L in baselines_km]
     end
 
     P_th_seconds = nominal_thermal_power .* livetime_seconds
@@ -668,16 +676,22 @@ function get_forward_model(physics, assets; debug = false)
         interm_spec .*= integral_weights
         spec = vec(sum(reshape(interm_spec, NQ, NFc), dims = 1))
 
-        E_vis_edges = lsnl(E_fine, params.juno_lsnl_pull) .* params.juno_e_scale .+ params.juno_e_bias
+        f_lsnl = lsnl(E_fine, params.juno_lsnl_pull) ./ E_fine
+        # E_vis_edges = f_lsnl .* (E_fine .+ params.juno_e_bias) .* params.juno_e_scale
+        E_vis_edges = E_fine .* ((1 + params.juno_lsnl_scale) .* f_lsnl .+ params.juno_e_bias) .* params.juno_e_scale
         evis_spectrum = project_to_bins(E_vis_edges, spec .* lsnl_mask, E_fine)
+        #scaled_eres = eres(params.juno_eres_a, params.juno_eres_b, params.juno_eres_c)
         scaled_eres = zeros(T, length(sigma_E))
         scaled_eres .+= sigma_E .* (1 + 0.05 * params.juno_eres_unc_scale)
         erec_spectrum = smear_bin_centres(evis_spectrum, scaled_eres, E_fine)
-        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency .* params.juno_global_norm
+        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency
+        factor = params.juno_global_rate / (sum(coarse_counts) / livetime_days)
+        coarse_counts .*= factor
         if debug
-            return coarse_counts, bg
+            return coarse_counts, bg, E_nu_GeV , survival_probabilities(params)
         end
 
+        #return MvNormal(coarse_counts, Diagonal(sqrt.(coarse_counts)))# distprod(Poisson.(coarse_counts))# .+ bg))
         return distprod(Poisson.(coarse_counts .+ bg))
     end
 end
