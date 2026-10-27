@@ -40,6 +40,8 @@ end
     average::Bool
 end
 
+const N_pulls = 20
+
 
 function configure(cfg::ReactorFluxConfig = ReactorFluxConfig())
     ReactorFlux(
@@ -65,7 +67,7 @@ function get_params(flux::DayaBayFlux; datadir = datadir)
 
     energy_per_fission = [data["U235"][1], data["U238"][1], data["Pu239"][1], data["Pu241"][1]]
 
-    spectrum_pulls = zeros(19)
+    spectrum_pulls = zeros(N_pulls)
 
     params = (;
         energy_per_fission,
@@ -84,7 +86,7 @@ function get_priors(flux::DayaBayFlux; datadir = datadir)
     mu = [data["U235"][1], data["U238"][1], data["Pu239"][1], data["Pu241"][1]]
     var = [data["U235"][2], data["U238"][2], data["Pu239"][2], data["Pu241"][2]].^2
     energy_per_fission = Distributions.MvNormal(mu, Diagonal(var))
-    spectrum_pulls = Distributions.Uniform.(-ones(19), ones(19))
+    spectrum_pulls = Distributions.Uniform.(-ones(N_pulls), ones(N_pulls))
 
     priors = (;
         energy_per_fission,
@@ -235,7 +237,12 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false)
     GJ_to_MeV = 1e9 / elementary_charge * 1e-6 # reactor thermal power in GW, energy per fission in MeV
 
     # free spectrum correction: one parameter per edge of the official segmentation
-    spec_edges = convert(Array{Float64, 1}, readdlm(joinpath(datadir, "dayabay_data/parameters/reactor_antineutrino_spectrum_edges.tsv"))[2:end])
+    if N_pulls == 19
+        spec_edges = convert(Array{Float64, 1}, readdlm(joinpath(datadir, "dayabay_data/parameters/reactor_antineutrino_spectrum_edges.tsv"))[2:end])
+    
+    else
+        spec_edges = LinRange(1.8, 8.36, N_pulls)
+    end
 
     # SNF: fissions per second of a reactor at nominal thermal power, fission fractions and energies per fission
     default_params = get_params(cfg, datadir=datadir)
