@@ -774,13 +774,6 @@ function get_assets(physics; datadir = @__DIR__)
     loge_grid = LinRange(-1,3,201)
     cz_grid = LinRange(-1.0,1.0,101)
 
-    # Bestfit from SK atm 2023 paper
-    params_nominal = Newtrinos.get_params(physics)
-    @reset params_nominal.Δm²₃₁ = 2.475e-3
-    @reset params_nominal.θ₂₃ = asin(sqrt(0.45))
-    @reset params_nominal.θ₁₃ = asin(sqrt(0.02))
-    @reset params_nominal.δCP = -1.89
-
     nominal_layers = physics.earth_layers.compute_layers()
     cz_midpoints = midpoints(cz_grid)
     paths = physics.earth_layers.compute_paths(cz_midpoints, nominal_layers)
@@ -817,7 +810,18 @@ function get_assets(physics; datadir = @__DIR__)
 
     xsec = xsec_setup(physics, E_mid)
 
-    nominal_weights = calc_weights(params_nominal, (;R, flux_nominal, flux_solar_ratio, paths, nominal_layers, loge_grid, cz_grid, cz_midpoints, xsec), physics)
+    # Reference of the MC: SK's best fit (SK atm 2023 paper) with the module's default physics (standard 3ν, nominal
+    # HKKM flux, NEUT cross sections), independent of the configured physics (BSM, shared flux or cross-section models)
+    ref = default_physics()
+    params_nominal = Newtrinos.get_params(ref)
+    @reset params_nominal.Δm²₃₁ = 2.475e-3
+    @reset params_nominal.θ₂₃ = asin(sqrt(0.45))
+    @reset params_nominal.θ₁₃ = asin(sqrt(0.02))
+    @reset params_nominal.δCP = -1.89
+    ref_layers = ref.earth_layers.compute_layers()
+    ref_assets = (; R, flux_nominal = ref.atm_flux.nominal_flux(E_mid, cz_midpoints), flux_solar_ratio, nominal_layers = ref_layers,
+                  loge_grid, cz_grid, cz_midpoints, xsec = xsec_setup(ref, E_mid))
+    nominal_weights = calc_weights(params_nominal, ref_assets, ref)
 
     # Build energy groups for reco bin overlap energy scale method
     sk_i_iii_mask = masks.sk_i_iii_bins

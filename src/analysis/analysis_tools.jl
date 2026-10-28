@@ -1,4 +1,5 @@
 using LinearAlgebra
+using TOML
 using Distributions
 using DensityInterface
 using InverseFunctions
@@ -190,9 +191,9 @@ end
 # ── Parameter & Prior Accessors ─────────────────────────────────────
 
 """
-    get_params(x) -> NamedTuple
+    get_params(x; start = :nominal) -> NamedTuple
 
-Extract nominal parameter values as a sorted NamedTuple.
+Extract parameter values as a sorted NamedTuple.
 
 Dispatches on the type of `x`:
 - `Physics`: returns `x.params` sorted by key.
@@ -204,25 +205,73 @@ Dispatches on the type of `x`:
 # Arguments
 - `x`: a [`Newtrinos.Physics`](@ref), [`Newtrinos.Experiment`](@ref),
   [`Wrapper`](@ref), or `NamedTuple` of such objects.
+- `start`: `:nominal` (default) for the nominal values, or `:best_fit` to replace each experiment's own parameters
+  (`x.params`, never those of its physics modules, e.g. the oscillation parameters) by the values stored for the
+  experiment's best fit in its default setup (see [`stored_best_fit`](@ref)). A good start point for joint fits;
+  parameters without a stored value keep their nominal value.
 
 # Returns
-A sorted `NamedTuple` of parameter name → nominal value.
+A sorted `NamedTuple` of parameter name → value.
 """
-function get_params(x::Newtrinos.Physics)
+function get_params(x::Newtrinos.Physics; start::Symbol = :nominal)
     sort_nt(x.params)
 end
 
-function get_params(x::Newtrinos.Experiment)
-    safe_merge(x.params, get_params(x.physics))
+function get_params(x::Newtrinos.Experiment; start::Symbol = :nominal)
+    own = x.params
+    if start === :best_fit
+        bf = stored_best_fit(x)
+        own = merge(own, NamedTuple(k => convert_like(own[k], bf[k]) for k in keys(own) if haskey(bf, k)))
+    elseif start !== :nominal
+        throw(ArgumentError("start must be :nominal or :best_fit, got :$start"))
+    end
+    safe_merge(own, get_params(x.physics))
 end
 
-function get_params(w::Newtrinos.Wrapper)
-    NamedTuple{Tuple(w.translated_keys)}(values(get_params(w.x)))
+function get_params(w::Newtrinos.Wrapper; start::Symbol = :nominal)
+    NamedTuple{Tuple(w.translated_keys)}(values(get_params(w.x; start)))
 end
 
-function get_params(modules::NamedTuple)
-    all_params = [get_params(m) for m in modules]
+function get_params(modules::NamedTuple; start::Symbol = :nominal)
+    all_params = [get_params(m; start) for m in modules]
     safe_merge(all_params...)
+end
+
+convert_like(nominal::Number, v) = convert(typeof(nominal), v)
+convert_like(nominal::AbstractArray, v) = convert(typeof(nominal), reshape(collect(v), size(nominal)))
+
+"""
+    module_dir(m::Module) -> String
+
+Source directory of the experiment module `m` (the directory of the file defining its `configure`), resolved
+relative to the installed Newtrinos package; `nothing` if `m` has no `configure`.
+"""
+function module_dir(m::Module)
+    isdefined(m, :configure) || return nothing
+    file = replace(string(first(methods(getproperty(m, :configure))).file), '\\' => '/')
+    i = findlast("/src/", file)
+    isnothing(i) && return dirname(file)
+    dirname(joinpath(pkgdir(Newtrinos), file[first(i)+1:end]))
+end
+
+"""
+    stored_best_fit(x::Experiment) -> NamedTuple
+
+Best-fit values of the experiment's own parameters in its default setup, read from `bestfit.toml` next to the module
+defining the experiment type (see [`module_dir`](@ref)); empty if there is no such file. The files are written by
+`src/utils/generate_bestfit.jl`.
+"""
+function stored_best_fit(x::Newtrinos.Experiment)
+    m = parentmodule(typeof(x))
+    dir = module_dir(m)
+    isnothing(dir) && return NamedTuple()
+    f = joinpath(dir, "bestfit.toml")
+    isfile(f) || return NamedTuple()
+    toml = TOML.parsefile(f)
+    name = get(get(toml, "meta", Dict()), "experiment", string(nameof(m)))
+    name == string(nameof(m)) || error("$f was written for experiment `$name`, not `$(nameof(m))`")
+    d = toml["params"]
+    NamedTuple(Symbol(k) => v for (k, v) in d)
 end
 
 """
