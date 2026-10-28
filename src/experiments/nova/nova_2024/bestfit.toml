@@ -1,0 +1,28 @@
+# written by src/utils/generate_bestfit.jl: best fit of `nova` alone in its default setup; [params] are read by
+# Newtrinos.get_params(...; start = :best_fit) as start values, [meta] is for information only
+[meta]
+date = "2026-10-15"
+experiment = "nova"
+log_likelihood = -327.0686822425979
+log_posterior = -283.0208320326052
+newtrinos_commit = "3c346d7"
+ordering = "NO"
+
+    [meta.oscillation]
+    "Δm²₂₁" = 8.999943436548803e-5
+    "Δm²₃₁" = 0.0025276140717037554
+    "δCP" = 2.825212314353859
+    "θ₁₂" = 0.7853981633973056
+    "θ₁₃" = 0.14558620591435867
+    "θ₂₃" = 0.8523225567512851
+
+[params]
+nova_hadronic_energy_scale = 1.0046856099489812
+nova_muon_energy_scale = 0.9998078334848833
+nova_nue_bkg_norm = 0.9583381960371775
+nova_nue_signal_norm = 0.9993984500175078
+nova_nue_xsec_ratio_nu = 0.9997560948278923
+nova_nue_xsec_ratio_nubar = 1.0000937045737057
+nova_numu_norm = 0.9887986757799011
+nova_rhc_hadronic_energy_scale = 1.0002483874295214
+nova_rhc_norm = 1.0073321747101482

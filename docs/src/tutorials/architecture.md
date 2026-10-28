@@ -28,7 +28,10 @@ Theory predictions with no experiment knowledge. Each module returns a struct `<
 - **`osc.jl`** — Neutrino oscillation probability engine. Exposes `osc_prob(E, paths, params)`, which returns oscillation probabilities for a given energy array and set of matter-layer traversal paths.
 - **`earth_layers.jl`** — PREM Earth density model. Exposes `compute_layers(params)` (returns concentric density shells) and `compute_paths(cz, layers)` (returns per-baseline layer traversals for a cosine-zenith array).
 - **`atm_flux.jl`** — Atmospheric neutrino fluxes (HKKM with Barr systematics). Exposes `nominal_flux(params)` (unoscillated flux on an energy–angle grid) and `sys_flux(params)` (flux modified by systematic parameters).
-- **`xsec.jl`** — Neutrino cross-section models. Exposes `scale(params)`, a scale factor applied to the interaction cross-section.
+- **`xsec.jl`** — Neutrino cross-section models with one reweighting interface, `weights(E; flavour, anti, current, target, generator, process)` (closures `params -> weights`). The model is chosen in the physics configuration: the experiments' defaults reproduce the publications, and `CorrelatedXsec` reweights all experiments to one nominal model with shared, correlated parameters for global fits.
+- **`solar_flux.jl`**, **`solar_xsec.jl`** — Standard solar model (B23: fluxes, spectra, production regions, correlated flux priors) and the ν–e scattering and ³⁷Cl/⁷¹Ga capture cross sections. The solar oscillation probabilities are `solar_prob` of the oscillation module.
+- **`reactor_flux.jl`** — Reactor ν̄e fluxes from first principles (Huber–Mueller spectra, IAEA PRIS reactor database, Bugey-4 anchoring) and IBD detection; used by KamLAND, JUNO and TAO.
+- **`dayabay_flux.jl`**, **`ibd_xsec.jl`** — Reactor flux model of the full Daya Bay analysis and IBD cross sections (Strumia–Vissani, Vogel–Beacom).
 - **`cevns_xsec.jl`**, **`sns_flux.jl`** — COHERENT-specific physics (CEvNS cross-section and SNS neutrino flux). Self-contained; used only by the COHERENT experiments.
 
 All physics modules are configured via `configure(cfg)` (or `configure()` for defaults). The oscillation module supports a rich set of sub-models selected through `OscillationConfig`:
@@ -37,7 +40,7 @@ All physics modules are configured via `configure(cfg)` (or `configure()` for de
 |---|---|
 | Flavour | `ThreeFlavour`, `Sterile`, `ADD`, `Darkdim_*` |
 | Interaction | `Vacuum`, `SI`, `NSI` |
-| Propagation | `Basic`, `Decoherent`, `Damping` |
+| Propagation | `Basic`, `Spray` (averaging over energy and production height), `Decoherent`, `Damping` |
 
 See the [Physics API Reference](../api/physics.md) for the full list of types and functions.
 
@@ -62,10 +65,20 @@ Experiments are grouped by their physics requirements:
 
 | Group | Experiments | Physics required |
 |---|---|---|
-| Atmospheric | `deepcore`, `ic_upgrade`, `super_k`, `orca` | `osc`, `atm_flux`, `earth_layers`, `xsec` |
-| Reactor | `dayabay`, `kamland`, `juno`, `tao` | `osc` |
-| Accelerator | `minos` | `osc`, `xsec` |
+| Atmospheric | `deepcore`, `deepcore_3y`, `ic_upgrade`, `super_k`, `orca` | `osc`, `atm_flux`, `earth_layers`, `xsec` |
+| Accelerator | `t2k`, `nova`, `minos` | `osc`, `xsec` |
+| Reactor | `dayabay`, `juno`, `tao` | `osc` |
+| Reactor | `dayabay_rewrite` | `osc`, `dayabay_flux`, `ibd_xsec` |
+| Reactor | `kamland` | `osc`, `reactor_flux` |
+| Solar | `chlorine`, `gallex_gno`, `sage`, `sno`, `sk1_solar`–`sk4_solar`, `sk_solar`, `sk_solar_dn`, `borexino_*` | `osc`, `solar_flux`, `solar_xsec`, `earth_layers` |
 | COHERENT | `coherent_csi`, `coherent_lAr` | self-contained (no external physics input) |
+| Neutrino mass | `katrin`, `gerda` | `osc` |
+
+See [Experiments](experiments.md) for the data sets.
+
+Parameters with the same name are shared between experiments: physics parameters (oscillation, flux, cross-section) are
+automatically common to all experiments that use the same physics, which is how correlated systematics enter joint
+fits.
 
 ---
 
@@ -94,6 +107,11 @@ For **Bayesian inference**, the molewhacker tools build an adaptive Gaussian mix
 init = Newtrinos.make_init_samples(posterior, nseeds=10)
 samples = Newtrinos.whack_many_moles(posterior, init, target_samplesize=10_000)
 ```
+
+For joint fits, `get_params(experiments; start = :best_fit)` starts each experiment's own nuisance parameters at the
+best fit of that experiment alone, stored in a `bestfit.toml` next to its module (written by
+`src/utils/generate_bestfit.jl`). Published Δχ² maps (e.g. of experiments without a public likelihood) can enter a
+joint fit as an experiment via `Newtrinos.chi2map`.
 
 The `Wrapper` type allows aliasing parameter names across experiments (e.g. sharing a single oscillation parameter between two experiments that use different internal names).
 

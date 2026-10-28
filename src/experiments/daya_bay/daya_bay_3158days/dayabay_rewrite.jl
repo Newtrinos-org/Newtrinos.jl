@@ -945,11 +945,12 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     ffs_symbols = [Symbol("fission_fractions_scale_R$(i)") for i=1:6]
     neq_symbols = [Symbol("neq_scale_R$(i)") for i=1:6]
     function reactor_fluxes(params)
-        map(1:6) do r
-            main, neq, snf, correction = mesh_flux(params.reactor_thermal_power_scale[r], params.energy_per_fission,
-                params[ffs_symbols[r]], params.spectrum_pulls, params[neq_symbols[r]], params.snf_scale[r], r)
-            (main .* correction .+ neq, snf)
-        end
+        flux_r(r; kw...) = mesh_flux(params.reactor_thermal_power_scale[r], params.energy_per_fission,
+            params[ffs_symbols[r]], params.spectrum_pulls, params[neq_symbols[r]], params.snf_scale[r], r; kw...)
+        # the free spectrum correction is common to all reactors: computed once
+        main1, neq1, snf1, correction = flux_r(1)
+        vcat([(main1 .* correction .+ neq1, snf1)],
+             [(main .* correction .+ neq, snf) for (main, neq, snf, _) in (flux_r(r; correction) for r in 2:6)])
     end
     # survival probabilities per AD (shared by its periods)
     baselines_km = Dict(ad => collect(df_exp[findfirst(df_exp[!, "AD"] .== ad), [:R1, :R2, :R3, :R4, :R5, :R6]]) ./ 1e3 for ad in unique(df_exp[!, "AD"]))
@@ -1095,7 +1096,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
                 # nominal flux and neq correction scale with sum(daily thermal power * daily eff livetime); the SNF is
                 # independent of the actual thermal power (spent fuel) and scales with the eff livetime
                 flux_r, snf_r = fluxes[r]
-                @. interm_spec += (flux_norm[r] * flux_r + spec_prefac_snf[r] * snf_r) * P[:, r]
+                @views @. interm_spec += (flux_norm[r] * flux_r + spec_prefac_snf[r] * snf_r) * P[:, r]
             end
             # integrate over each Edep bin: multiply with cross section × Jacobian × quadrature weights and sum
             interm_spec .*= integral_weights

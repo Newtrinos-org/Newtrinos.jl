@@ -242,7 +242,7 @@ Different production mechanisms yield neutrinos across many orders of magnitude 
 - **Energy range**: $\sim$100 MeV to $\sim$100 TeV
 - **Baseline**: 10 km (downward-going) to $\sim$13,000 km (upward-going, traversing the full Earth)
 - **Primary sensitivity**: $\theta_{23}$, $\Delta m^2_{31}$; matter effects for upward-going tracks
-- **Package experiments**: `deepcore`, `ic_upgrade`, `super_k`, `orca`
+- **Package experiments**: `deepcore`, `deepcore_3y`, `ic_upgrade`, `super_k`, `orca`
 
 The large range of baselines and the Earth's density profile make atmospheric neutrinos uniquely sensitive to both vacuum oscillations and the MSW effect simultaneously.
 
@@ -254,7 +254,11 @@ The large range of baselines and the Earth's density profile make atmospheric ne
 - **Baseline**: $\sim 1.5 \times 10^8$ km (Sun–Earth distance)
 - **Primary sensitivity**: $\theta_{12}$, $\Delta m^2_{21}$; adiabatic MSW resonance inside the Sun
 
-The SNO and Super-Kamiokande experiments established flavor conversion of solar $\nu_e$ via the MSW effect. Solar neutrinos are not currently implemented in Newtrinos.jl.
+The SNO and Super-Kamiokande experiments established flavor conversion of solar $\nu_e$ via the MSW effect.
+
+- **Package experiments**: `chlorine`, `gallex_gno`, `sage`, `sno`, `sk1_solar`–`sk4_solar` (or `sk_solar`), `sk_solar_dn`, `borexino_ph1`, `borexino_ph2`, `borexino_ph3`, `borexino_ph1_spectrum`, `borexino_ph2_spectrum`
+
+Newtrinos.jl computes the solar survival probability from the production regions of the B23 standard solar model (`solar_flux`) with MSW conversion in the Sun (adiabatic, or non-adiabatic level crossing where Parke's estimate is non-negligible) and Earth regeneration at night (`osc.solar_prob`).
 
 ### Reactor Neutrinos
 
@@ -263,9 +267,9 @@ The SNO and Super-Kamiokande experiments established flavor conversion of solar 
 - **Energy range**: $\sim$1–10 MeV
 - **Baselines**: $\sim$1 km (near detectors) to $\sim$200 km (far detectors)
 - **Primary sensitivity**: $\theta_{13}$ (near–far comparison, e.g. Daya Bay); $\theta_{12}$, $\Delta m^2_{21}$ at long baselines (KamLAND)
-- **Package experiments**: `dayabay`, `kamland`, `juno`, `tao`
+- **Package experiments**: `dayabay`, `dayabay_rewrite`, `kamland`, `juno`, `tao`
 
-Because $\bar\nu_e$ disappearance is a pure vacuum process at these energies, reactor experiments provide clean measurements of $\theta_{13}$ and $\Delta m^2_{21}$ without matter-effect complications.
+Matter effects are negligible at km baselines (Daya Bay, JUNO and TAO use vacuum oscillations) and small at KamLAND's ~180 km (included there), so reactor experiments provide clean measurements of $\theta_{13}$ and $\Delta m^2_{21}$.
 
 ### Accelerator Neutrinos
 
@@ -274,7 +278,7 @@ Because $\bar\nu_e$ disappearance is a pure vacuum process at these energies, re
 - **Energy range**: $\sim$100 MeV to $\sim$10 GeV
 - **Baselines**: 100 km to 1300 km (long-baseline experiments)
 - **Primary sensitivity**: $\theta_{23}$, $\Delta m^2_{31}$; $\theta_{13}$ and $\delta_{CP}$ via $\nu_e$ appearance
-- **Package experiments**: `minos`
+- **Package experiments**: `t2k`, `nova`, `minos`
 
 The controlled beam profile and near/far detector combinations allow precise extraction of oscillation parameters and are the primary tool for $\delta_{CP}$ measurements.
 

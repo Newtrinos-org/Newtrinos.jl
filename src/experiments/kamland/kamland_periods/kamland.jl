@@ -70,7 +70,8 @@ default_physics() = (osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConf
                      reactor_flux = Newtrinos.reactor_flux.configure())
 
 function configure(physics = default_physics(); dataset = :periods2013)
-    physics = (; physics.osc, physics.reactor_flux)
+    # a physics tuple shared with other experiments may lack the reactor flux: use the default then
+    physics = (; physics.osc, reactor_flux = haskey(physics, :reactor_flux) ? physics.reactor_flux : Newtrinos.reactor_flux.configure())
     ds = DATASETS[dataset]
     assets = get_assets(physics, ds)
     KamLAND(physics = physics, params = get_params(ds), priors = get_priors(ds), assets = assets,
