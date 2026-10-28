@@ -90,10 +90,6 @@ function get_params()
     global_rate = 36.02
     lsnl_pull = 0.0
 
-
-
-
-
     params = (
         juno_lihe_rate = lihe,
         juno_geo_rate = geo,
@@ -323,7 +319,7 @@ function get_assets(datadir = @__DIR__)
     other = convert(Vector{Float64}, data[:, 12])
     signal_mle = convert(Vector{Float64}, data[:, 7])
     #observed = round.(Int64, signal_mle .* hist_to_count)
-    #observed = signal_mle .* hist_to_count
+    observed = signal_mle .* hist_to_count
     lihe_counts = lihe .* hist_to_count
     geo_counts = geo .* hist_to_count
     world_reactor_counts = world_reactor .* hist_to_count
@@ -688,11 +684,11 @@ function get_forward_model(physics, assets; debug = false)
         factor = params.juno_global_rate / (sum(coarse_counts) / livetime_days)
         coarse_counts .*= factor
         if debug
-            return coarse_counts, bg, E_nu_GeV , survival_probabilities(params)
+            return coarse_counts, bg #, E_nu_GeV , survival_probabilities(params)
         end
 
-        #return MvNormal(coarse_counts, Diagonal(sqrt.(coarse_counts)))# distprod(Poisson.(coarse_counts))# .+ bg))
-        return distprod(Poisson.(coarse_counts .+ bg))
+        return MvNormal(coarse_counts, Diagonal(sqrt.(coarse_counts)))# distprod(Poisson.(coarse_counts))# .+ bg))
+        #return distprod(Poisson.(coarse_counts .+ bg))
     end
 end
 
