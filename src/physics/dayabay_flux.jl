@@ -24,6 +24,7 @@ abstract type FluxModel end
     flux_model::F = DayaBayFlux()
     datadir::String = datadir
     average::Bool = false
+    N_pulls::Int64 = 19
 end
 
 
@@ -40,23 +41,21 @@ end
     average::Bool
 end
 
-const N_pulls = 19
-
 
 function configure(cfg::ReactorFluxConfig = ReactorFluxConfig())
     ReactorFlux(
         cfg=cfg,
-        params = get_params(cfg.flux_model, datadir=cfg.datadir),
-        priors = get_priors(cfg.flux_model, datadir=cfg.datadir),
+        params = get_params(cfg.flux_model, datadir=cfg.datadir, N_pulls=cfg.N_pulls),
+        priors = get_priors(cfg.flux_model, datadir=cfg.datadir, N_pulls=cfg.N_pulls),
         flux = get_flux(cfg.flux_model, datadir=cfg.datadir, average=cfg.average),
-        flux_on_mesh = get_flux_on_mesh(cfg.flux_model, datadir=cfg.datadir, average=cfg.average),
+        flux_on_mesh = get_flux_on_mesh(cfg.flux_model, datadir=cfg.datadir, average=cfg.average, N_pulls=cfg.N_pulls),
         datadir = cfg.datadir,
         average=cfg.average,
     )
 end
 
 
-function get_params(flux::DayaBayFlux; datadir = datadir)
+function get_params(flux::DayaBayFlux; datadir = datadir, N_pulls = 19)
     # TODO: is this part of DayaBay experiment or the reactor flux itself? not sure where to put
     # currently I define that we need 6 fluxes in here, but this is specific to the experiment
     # re-using for e.g. Juno, we need a different number of reactors, for future Julian...
@@ -77,7 +76,7 @@ function get_params(flux::DayaBayFlux; datadir = datadir)
 end
 
 
-function get_priors(flux::DayaBayFlux; datadir = datadir)
+function get_priors(flux::DayaBayFlux; datadir = datadir, N_pulls = 19)
 
     ## energy per fission
     file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_energy_per_fission.yaml"))
@@ -206,7 +205,7 @@ snf_scale, reac_idx; correction)` gives `(main, neq, snf, correction)` at the an
 Everything that does not depend on the parameters (isotope spectra, NEQ and SNF corrections, interpolation weights of
 the free spectrum correction) is tabulated once for the mesh `E`.
 """
-function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false)
+function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, N_pulls = 19)
 
     # fixed ordering of isotopes
     names = (:U235, :U238, :Pu239, :Pu241)
@@ -242,11 +241,11 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false)
         spec_edges = convert(Array{Float64, 1}, readdlm(joinpath(datadir, "dayabay_data/parameters/reactor_antineutrino_spectrum_edges.tsv"))[2:end])
     
     else
-        spec_edges = LinRange(1.8, 8.36, N_pulls)
+        spec_edges = LinRange(1.8, 10, N_pulls)
     end
 
     # SNF: fissions per second of a reactor at nominal thermal power, fission fractions and energies per fission
-    default_params = get_params(cfg, datadir=datadir)
+    default_params = get_params(cfg, datadir=datadir, N_pulls=N_pulls)
     fissions_per_second_nom_bar_nom_th_power = GJ_to_MeV / sum(fractions .* default_params.energy_per_fission)
 
     function on_mesh(E::AbstractVector)

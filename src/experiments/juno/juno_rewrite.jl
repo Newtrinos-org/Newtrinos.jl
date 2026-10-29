@@ -12,8 +12,13 @@ using LinearAlgebra
 import ValueShapes
 using DelimitedFiles
 using OrderedCollections
+using StructArrays
+using ArraysOfArrays
 import YAML
 import ..Newtrinos
+
+const RHO = 2.84            # g/cm³
+const YE = 0.5
 
 @kwdef struct JUNO <: Newtrinos.Experiment
     physics::NamedTuple
@@ -28,8 +33,9 @@ function default_physics()
     #osc = Newtrinos.osc.configure(propagation=Neutrinos.osc.Spray(averaging= :uniform, ))
     #osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(propagation=Newtrinos.osc.Damping(0.08)))
     osc = Newtrinos.osc.configure()
+    #osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction = Newtrinos.osc.SI(), eigen_method = Newtrinos.BargerEigen()))
     xsec = Newtrinos.ibd_xsec.configure(Newtrinos.ibd_xsec.VogelBeacomO1())
-    flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average=true))
+    flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average=true, N_pulls=30))
     (; osc, xsec, flux)
 end
 
@@ -115,9 +121,13 @@ function get_params()
         juno_eres_unc_scale = eres_unc_scale,
         juno_e_scale = e_scale,
         juno_e_bias = e_bias,
-        juno_global_rate = global_rate,
+        # juno_global_rate = global_rate,
         juno_lsnl_pull = lsnl_pull,
-        juno_lsnl_scale = 0.,
+        #juno_lsnl_scale = 0.,
+        juno_taishan_tps = 1.0,
+        juno_yangjiang_tps = 1.0,
+        juno_dayabay_tps = 1.0,
+        juno_global_norm = 1.0,
     )
 
 end
@@ -154,43 +164,67 @@ function get_priors()
     #use fractions_scale separately? re-use from dayabay model?
     # one entry per isotope
     # one set of parameter for all reactor cores assumed
-    ffs_mu = ones(4)
-    ffs_sigma = ffs_mu .* 0.006
-    juno_taishan_ffs = MvNormal(ffs_mu, Diagonal(ffs_sigma.^2))
-    juno_yangjiang_ffs = MvNormal(ffs_mu, Diagonal(ffs_sigma.^2))
-    juno_dayabay_ffs = MvNormal(ffs_mu, Diagonal(ffs_sigma.^2))
+
+    ## fission fraction scale
+    data = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days/dayabay_data/parameters/reactor_fission_fractions_scale.yaml"), dicttype=OrderedDict{String,Any})
+    fraction_scale = data["parameters"]["fission_fractions_scale"]
+
+    isotopes = ["U235", "U238", "Pu239", "Pu241"]
+    scale = zeros((4, 4))
+    for i in 1:4
+        for j in 1:4
+            scale[i, j] = fraction_scale[isotopes[i]][1] * fraction_scale[isotopes[i]][2] * fraction_scale[isotopes[j]][1] * fraction_scale[isotopes[j]][2] * 0.01 * 0.01   # percent
+        end
+    end
+
+    mu = collect([Float64(fraction_scale[name][1]) for name in isotopes])
+    corr_mat = hcat(data["correlations"]["fission_fractions_scale"]["matrix"]...)
+
+    cov_mat = corr_mat .* scale
+    juno_taishan_ffs = MvNormal(mu, cov_mat)
+    juno_yangjiang_ffs = MvNormal(mu, cov_mat)
+    juno_dayabay_ffs = MvNormal(mu, cov_mat)
 
     # spent nuclear fuel, assumes correlation within plant, uncorrelated between plants
-    snf_mu = 1.
-    snf_sigma = snf_mu * 0.003
+    # snf correction
+    file = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days/dayabay_data/parameters/reactor_snf.yaml"))
+    snf_mu = Float64(file["parameters"]["snf_scale"][1])
+    snf_sigma = snf_mu * Float64(file["parameters"]["snf_scale"][2]) * 0.01   # percent
     juno_taishan_snf_scale = Normal(snf_mu, snf_sigma)
     juno_yangjiang_snf_scale = Normal(snf_mu, snf_sigma)
     juno_dayabay_snf_scale = Normal(snf_mu, snf_sigma)
 
     #neq, assumes correlation within plant, uncorrelated between plants
-    neq_mu = 1.0
-    neq_sigma = neq_mu * 0.003
-    juno_taishan_neq_scale = MvNormal(neq_mu .* ones(4), Diagonal(ones(4) .* neq_sigma^2))
-    juno_yangjiang_neq_scale = MvNormal(neq_mu .* ones(4), Diagonal(ones(4) .* neq_sigma^2))
-    juno_dayabay_neq_scale = MvNormal(neq_mu .* ones(4), Diagonal(ones(4) .* neq_sigma^2))
+    ## non-equilibrium correction
+    file = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days/dayabay_data/parameters/reactor_nonequilibrium_correction.yaml"))
+    mu = file["parameters"]["nonequilibrium_scale"][1] .* ones(4)
+    sigma = mu .* file["parameters"]["nonequilibrium_scale"][2] .* 0.01 # percent
+
+    juno_taishan_neq_scale = MvNormal(mu, Diagonal(sigma.^2))
+    juno_yangjiang_neq_scale = MvNormal(mu, Diagonal(sigma.^2))
+    juno_dayabay_neq_scale = MvNormal(mu, Diagonal(sigma.^2))
 
     tps_mu = ones(9)
-    # assume 5% uncertainty on per-core load factor, encoded in thermal power scale
-    tps_sigma = tps_mu .* 0.10
+    # assume 10% uncertainty for Taishan cores (outage sometime) and 3 % for all other cores
+    tps_sigma = [0.1, 0.1, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]
     thermal_power_scale = MvNormal(tps_mu, Diagonal(tps_sigma.^2))
     #thermal_power_scale = Normal(1, 0.01)
 
-    global_rate = Normal(36.02, 0.81)
+    #global_rate = Normal(36.02, 0.81)
 
     eres_unc_scale = Normal(0., 1.)
     # assume 0.5% energy scale uncertainty as per 59day Juno paper
-    e_scale = Normal(1.0, 0.05)
+    e_scale = Normal(1.0, 0.005)
 
     unc = 0.05
     e_bias = Normal(0, unc)
 
 
     lsnl_pull = Normal(0.0, 1.0)
+
+    taishan_tps = Normal(1.0, 0.05)
+    yangjiang_tps = Normal(1.0, 0.05)
+    dayabay_tps = Normal(1.0, 0.05)
 
     priors = (
         juno_lihe_rate = lihe,
@@ -212,19 +246,23 @@ function get_priors()
         juno_taishan_ffs = juno_taishan_ffs,
         juno_yangjiang_ffs = juno_yangjiang_ffs,
         juno_dayabay_ffs = juno_dayabay_ffs,
+        juno_taishan_tps = taishan_tps,
+        juno_yangjiang_tps = yangjiang_tps,
+        juno_dayabay_tps = dayabay_tps,
         juno_reactor_thermal_power_scale = thermal_power_scale,
         juno_e_scale = e_scale,
         juno_e_bias = e_bias,
         juno_eres_unc_scale = eres_unc_scale,
-        juno_global_rate = global_rate,
+        # juno_global_rate = global_rate,
         juno_lsnl_pull = lsnl_pull,
-        juno_lsnl_scale = Normal(0.0, 0.1),
+        #juno_lsnl_scale = Normal(0.0, 0.1),
+        juno_global_norm = Uniform(0, 2)
     )
 end
 
 
 function get_lsnl_correction()
-    lsnl = readdlm(joinpath(@__DIR__, "207_days/lsnl_207_days.txt"), skipstart=27)
+    lsnl = readdlm(joinpath(@__DIR__, "207_days/lsnl_207_days.txt"), skipstart=25)
     # TODO: add uncertainty through nuisance param
     E_lsnl = lsnl[:, 1]
     lsnl_nom = lsnl[:, 2]
@@ -251,7 +289,7 @@ function get_eres()
     data = readdlm(joinpath(@__DIR__, "207_days/eres_207_days.txt"), skipstart=19)
     E = data[:, 1]
     # mul
-    rel_eres_nom = data[:, 2] .* 0.01
+    rel_eres_nom = data[:, 3] .* 0.01
     # reuse refine_lsnl, it multiplies the nominal curve with energy
     # which is exactly what we want here to get the absolute energy resolution
     #rel_eres_p = data[:, 4] .* 0.01
@@ -291,12 +329,9 @@ function get_assets(datadir = @__DIR__)
         Baseline_m = 1e3 .* [52.77, 52.64, 52.74, 52.82, 52.41, 52.49, 52.11, 52.19, 215.0],
         IBD_Rate_per_day = [7.5, 7.6, 4.8, 4.7, 4.8, 4.8, 4.9, 4.9, 3.0], 
         Relative_Flux_percent = [16.0, 16.1, 10.1, 10.1, 10.3, 10.2, 10.4, 10.4, 6.4],
-        load_factor = [0.90, 0.86, 0.95, 0.90, 0.88, 0.90, 0.92, 1.02, 0.93],
+        # thanks claude: compiled from CNEA and IAEA data, translated and compiled into a table by our machine overlords
+        load_factor = [0.633, 0.431, 0.921, 0.946, 0.890, 0.886, 0.956, 0.912, 0.918], 
     )
-
-    # https://pris-stats.iaea.org/reactor/918, assume for Taishan1 that the shut off early summer 2025 is not representative
-    # dayabay1 94.466, dayabay2 90.80, lingao 1 91.50, lingao 2 98.92, lingao 3 92.50, lingao 4 90.99
-
 
     data = readdlm(joinpath(@__DIR__, "207_days/data_207_days.txt"), skipstart=29)
     Elow = convert(Vector{Float64}, data[:, 1])
@@ -311,6 +346,8 @@ function get_assets(datadir = @__DIR__)
     Ewidth = diff(Ebins)
     hist_to_count = Ewidth / 0.04
     observed = convert.(Int64, round.(hist_obs .* hist_to_count, digits=0))
+
+    
 
     lihe = convert(Vector{Float64}, data[:, 8])
     geo = convert(Vector{Float64}, data[:, 9])
@@ -332,6 +369,10 @@ function get_assets(datadir = @__DIR__)
     bipo_shape = bipo_counts ./ sum(bipo_counts)
     other_shape = other_counts ./ sum(other_counts)
 
+    # read in uncoscillated expectation
+    data = readdlm(joinpath(@__DIR__, "207_days/unoscillated_207_days.txt"), skipstart=14)
+    no_osc = convert.(Float64, data[:, 4]) .* hist_to_count
+    observed = no_osc
     reactor_config = Newtrinos.dayabay_flux.configure()
     energy_per_fission = reactor_config.params.energy_per_fission
     fractions = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days", "dayabay_data/parameters/reactor_fission_fractions.yaml"), dicttype=OrderedDict{String,Any})["parameters"]["fission_fractions"]
@@ -367,6 +408,7 @@ function get_assets(datadir = @__DIR__)
         hist_to_count,
         n_protons,
         signal_mle,
+        no_osc,
         observed
     )
 end
@@ -486,6 +528,9 @@ end
 
 function get_forward_model(physics, assets; debug = false)
 
+    layers = StructArray{Newtrinos.Layer}((radius = [6371.0], p_density = [RHO * YE], n_density = [RHO * (1 - YE)]))
+
+
     E_ana = assets.Ebins
     E_ana_c = assets.Ec
     E_fine = collect(E_ana[1]:0.02:E_ana[end])
@@ -560,6 +605,18 @@ function get_forward_model(physics, assets; debug = false)
         :juno_yangjiang_snf_scale,
         :juno_dayabay_snf_scale,
     ]
+
+    tps_symbols = [
+        :juno_taishan_tps,
+        :juno_taishan_tps,
+        :juno_yangjiang_tps,
+        :juno_yangjiang_tps,
+        :juno_yangjiang_tps,
+        :juno_yangjiang_tps,
+        :juno_yangjiang_tps,
+        :juno_yangjiang_tps,
+        :juno_dayabay_tps,
+    ]
     function reactor_fluxes(params)
         map(1:9) do r
             main, neq, snf, correction = mesh_flux(params.juno_reactor_thermal_power_scale[r], params.energy_per_fission,
@@ -570,6 +627,7 @@ function get_forward_model(physics, assets; debug = false)
     L = assets.reactors[!, "Baseline_m"]
     nominal_thermal_power = assets.reactors[!, "Power_GW_th"]
     baselines_km = L ./ 1e3
+    paths = [VectorOfVectors{Newtrinos.Path}([[Newtrinos.Path(_L, 1) ]]) for _L in baselines_km]
     L2 = 4 * pi .* L.^2;
     invL2 = inv.(L2);
     livetime_days = assets.nominal_livetime
@@ -580,15 +638,20 @@ function get_forward_model(physics, assets; debug = false)
     oc = osc.cfg
     standard_osc = oc.flavour isa Newtrinos.osc.ThreeFlavour && oc.interaction isa Newtrinos.osc.Vacuum &&
                    oc.propagation isa Newtrinos.osc.Basic && oc.states isa Newtrinos.osc.All
+    matter_osc =  oc.flavour isa Newtrinos.osc.ThreeFlavour && oc.interaction isa Newtrinos.osc.SI &&
+                   oc.propagation isa Newtrinos.osc.Basic && oc.states isa Newtrinos.osc.All
     function survival_probabilities(params)
+        matter_osc && return [osc.osc_prob(E_nu_GeV, path, layers, params, anti=true)[:, 1, 1, 1] for path in paths]
         standard_osc || return [osc.osc_prob(E_nu_GeV, [L], params, anti=true)[:, 1, 1, 1] for L in baselines_km]
-        [nue_survival(E_nu_GeV, [L], params)[:] for L in baselines_km]
+        [nue_survival(E_nu_GeV, L, params) for L in baselines_km]
     end
 
+    """
     function osc_probabilities(params)
         standard_osc || return [osc.osc_prob(E_fine_c ./ 1e3, [L], params, anti=true)[:, 1, 1, 1] for L in baselines_km]
         [nue_survival(E_fine_c ./ 1e3, [L], params)[:] for L in baselines_km]
     end
+    """
 
     P_th_seconds = nominal_thermal_power .* livetime_seconds
     n_p = assets.n_protons
@@ -662,32 +725,29 @@ function get_forward_model(physics, assets; debug = false)
 
         fluxes = reactor_fluxes(params)
         interm_spec = zeros(T, NF)
-        P = survival_probabilities(params)
+        # P = survival_probabilities(params)
         @inbounds for r in 1:9
             # nominal flux and neq correction scale with sum(daily thermal power * daily eff livetime); the SNF is
             # independent of the actual thermal power (spent fuel) and scales with the eff livetime
             flux_r, snf_r = fluxes[r]
-            @. interm_spec += (flux_norm[r] * flux_r + spec_prefac_snf[r] * snf_r) * P[r]
+            @. interm_spec += (flux_norm[r] * flux_r + spec_prefac_snf[r] * snf_r)#  * P[r]
         end
         interm_spec .*= integral_weights
         spec = vec(sum(reshape(interm_spec, NQ, NFc), dims = 1))
 
-        f_lsnl = lsnl(E_fine, params.juno_lsnl_pull) ./ E_fine
+        E_vis_edges = lsnl(E_fine, params.juno_lsnl_pull) .* params.juno_e_scale .+ params.juno_e_bias
         # E_vis_edges = f_lsnl .* (E_fine .+ params.juno_e_bias) .* params.juno_e_scale
-        E_vis_edges = E_fine .* ((1 + params.juno_lsnl_scale) .* f_lsnl .+ params.juno_e_bias) .* params.juno_e_scale
+        #E_vis_edges = E_fine .* (f_lsnl .+ params.juno_e_bias) .* params.juno_e_scale
         evis_spectrum = project_to_bins(E_vis_edges, spec .* lsnl_mask, E_fine)
-        #scaled_eres = eres(params.juno_eres_a, params.juno_eres_b, params.juno_eres_c)
         scaled_eres = zeros(T, length(sigma_E))
         scaled_eres .+= sigma_E .* (1 + 0.05 * params.juno_eres_unc_scale)
         erec_spectrum = smear_bin_centres(evis_spectrum, scaled_eres, E_fine)
-        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency
-        factor = params.juno_global_rate / (sum(coarse_counts) / livetime_days)
-        coarse_counts .*= factor
+        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency# .* params.juno_global_norm
         if debug
             return coarse_counts, bg #, E_nu_GeV , survival_probabilities(params)
         end
 
-        return MvNormal(coarse_counts, Diagonal(sqrt.(coarse_counts)))# distprod(Poisson.(coarse_counts))# .+ bg))
+        return MvNormal(coarse_counts, Diagonal(assets.no_osc))# distprod(Poisson.(coarse_counts))# .+ bg))
         #return distprod(Poisson.(coarse_counts .+ bg))
     end
 end
