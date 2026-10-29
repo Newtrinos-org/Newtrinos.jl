@@ -1,0 +1,81 @@
+# JUNO-TAO, arXiv:2610.23331v1, Fig. 33: measured IBD prompt-energy spectrum (reactor-on minus livetime-scaled
+# reactor-off; 31.3 days reactor-on, 29.4 days reactor-off) compared with the Huber-Mueller prediction.
+# Extracted from the vector graphics in the PDF (page 38); axis calibration from the tick marks.
+#
+# Columns:
+#  E_lo, E_hi, E_c  reconstructed-energy bin (MeV), 0.2 MeV wide
+#  data             background-subtracted IBD counts per 0.2 MeV (can be negative where the signal vanishes)
+#  data_err         statistical error bar (symmetric), counts per 0.2 MeV
+#  prediction       nominal Huber-Mueller prediction (blue histogram), counts per 0.2 MeV
+#  ratio            data / prediction, as plotted in the lower panels
+#  ratio_err        error bar of the ratio (= data_err / prediction)
+#  band_lo, band_hi edges of the shaded "prediction systematic uncertainty" band, in ratio units (around 1)
+#  ratio_src        where the ratio was read: 'zoom' = lowest panel (finest scale), 'mid' = middle panel,
+#                   'calc' = not drawn in either panel (prediction ~ 0), computed as data/prediction
+#
+# Precision: coordinates are exact to the PDF's precision (about 0.001 count in the top panel, 1e-4 in the ratio).
+# Up to 9.1 MeV the plotted ratio agrees with data/prediction from the top panel to within 2e-4 (relative).
+# Above 9.1 MeV, where the prediction is below ~5 counts, the plotted ratio differs from data/prediction by
+# 2-40% (the figure's ratio appears to use a slightly different prediction there); the 'ratio' column keeps the
+# plotted value where one is drawn. 'calc' ratios above 11 MeV divide by a prediction of < 0.2 counts and are
+# not meaningful.
+# The prediction in the first and last bin is drawn as a half-width step (plot edge); the value is the step height.
+# The prediction is normalised to the data: both integrate to the same total.
+# Totals: data 76778 events, prediction 76778 events (1.1-11.9 MeV).
+#
+#E_lo   E_hi    E_c     data       data_err   prediction  ratio     ratio_err  band_lo   band_hi   ratio_src
+1.00   1.20    1.10    1496.73    52.19      1480.91     1.0107    0.0352     0.9042    1.0958    zoom
+1.20   1.40    1.30    2187.23    58.30      2106.42     1.0384    0.0277     0.9498    1.0503    zoom
+1.40   1.60    1.50    2559.43    62.16      2642.64     0.9685    0.0235     0.9753    1.0247    zoom
+1.60   1.80    1.70    3163.15    65.67      3121.01     1.0135    0.0210     0.9802    1.0198    zoom
+1.80   2.00    1.90    3691.13    68.63      3559.65     1.0369    0.0193     0.9739    1.0261    zoom
+2.00   2.20    2.10    3818.09    73.24      3920.66     0.9738    0.0187     0.9679    1.0321    zoom
+2.20   2.40    2.30    4291.70    74.54      4181.13     1.0265    0.0178     0.9641    1.0359    zoom
+2.40   2.60    2.50    4368.62    71.02      4354.45     1.0033    0.0163     0.9617    1.0383    zoom
+2.60   2.80    2.70    4513.82    72.45      4431.70     1.0185    0.0163     0.9618    1.0383    zoom
+2.80   3.00    2.90    4223.17    69.15      4389.44     0.9621    0.0158     0.9636    1.0364    zoom
+3.00   3.20    3.10    4309.59    69.20      4284.18     1.0059    0.0162     0.9644    1.0357    zoom
+3.20   3.40    3.30    4152.79    68.01      4112.12     1.0099    0.0165     0.9686    1.0314    zoom
+3.40   3.60    3.50    3871.77    66.16      3875.36     0.9991    0.0171     0.9740    1.0261    zoom
+3.60   3.80    3.70    3581.23    63.81      3594.65     0.9963    0.0178     0.9801    1.0199    zoom
+3.80   4.00    3.90    3379.23    61.94      3305.66     1.0223    0.0187     0.9833    1.0168    zoom
+4.00   4.20    4.10    3006.54    59.04      3047.83     0.9865    0.0194     0.9858    1.0142    zoom
+4.20   4.40    4.30    2802.39    57.61      2797.58     1.0017    0.0206     0.9880    1.0120    zoom
+4.40   4.60    4.50    2665.25    56.44      2552.20     1.0443    0.0221     0.9887    1.0113    zoom
+4.60   4.80    4.70    2396.66    52.96      2285.85     1.0485    0.0232     0.9815    1.0185    zoom
+4.80   5.00    4.90    2040.89    50.72      2037.34     1.0018    0.0249     0.9781    1.0219    zoom
+5.00   5.20    5.10    1881.76    48.49      1821.95     1.0328    0.0266     0.9646    1.0355    zoom
+5.20   5.40    5.30    1560.48    45.16      1583.21     0.9856    0.0285     0.9468    1.0532    zoom
+5.40   5.60    5.50    1371.63    41.79      1356.49     1.0112    0.0308     0.9385    1.0615    zoom
+5.60   5.80    5.70    1174.82    39.28      1169.24     1.0048    0.0336     0.9346    1.0654    zoom
+5.80   6.00    5.90    952.47     36.95      1011.96     0.9412    0.0365     0.9242    1.0758    zoom
+6.00   6.20    6.10    839.20     35.51      863.79      0.9715    0.0411     0.9018    1.0982    zoom
+6.20   6.40    6.30    656.26     32.29      710.39      0.9238    0.0454     0.8671    1.1329    zoom
+6.40   6.60    6.50    522.53     30.00      563.35      0.9275    0.0532     0.8301    1.1699    zoom
+6.60   6.80    6.70    342.64     27.96      433.17      0.7910    0.0383     0.7976    1.2024    zoom
+6.80   7.00    6.90    325.12     26.13      327.49      0.9928    0.0798     0.7699    1.2301    zoom
+7.00   7.20    7.10    216.17     25.25      242.07      0.8930    0.1043     0.7400    1.2600    zoom
+7.20   7.40    7.30    157.71     22.99      177.45      0.8888    0.1197     0.7061    1.2939    zoom
+7.40   7.60    7.50    82.70      22.79      126.39      0.6544    0.1803     0.6715    1.3285    mid
+7.60   7.80    7.70    79.36      22.96      88.26       0.8992    0.1902     0.6484    1.3516    zoom
+7.80   8.00    7.90    37.55      22.62      62.68       0.5993    0.3608     0.6421    1.3579    mid
+8.00   8.20    8.10    -9.43      19.97      45.14       -0.2084   0.4421     0.6322    1.3679    mid
+8.20   8.40    8.30    26.53      17.45      32.01       0.8287    0.2973     0.6182    1.3818    zoom
+8.40   8.60    8.50    30.61      15.50      22.63       1.3521    0.5793     0.6130    1.3870    zoom
+8.60   8.80    8.70    4.54       13.54      16.44       0.2774    0.8223     0.6117    1.3883    mid
+8.80   9.00    8.90    -0.05      12.86      12.00       -0.0026   1.0703     0.6007    1.3993    mid
+9.00   9.20    9.10    15.62      12.61      8.70        1.7929    0.5793     0.5902    1.4098    zoom
+9.20   9.40    9.30    0.88       12.98      6.31        0.1422    2.0495     0.5792    1.4208    mid
+9.40   9.60    9.50    -14.92     12.09      4.56        -3.2506   2.6375     0.5720    1.4280    mid
+9.60   9.80    9.70    3.75       11.95      3.39        1.1052    0.5793     0.5705    1.4295    zoom
+9.80   10.00   9.90    19.29      11.86      2.51        7.6352    4.6890     0.5593    1.4407    mid
+10.00  10.20   10.10   8.89       10.51      1.91        4.6243    5.4507     0.5388    1.4612    mid
+10.20  10.40   10.30   -16.58     11.55      1.41        -11.7969  8.2178     0.4997    1.5003    calc
+10.40  10.60   10.50   2.69       10.53      0.90        2.9428    10.7120    0.4614    1.5386    mid
+10.60  10.80   10.70   -8.05      11.15      0.60        -13.4684  18.6645    0.4289    1.5711    calc
+10.80  11.00   10.90   6.29       11.30      0.40        14.9320   11.5847    0.3740    1.6260    mid
+11.00  11.20   11.10   -12.11     11.07      0.24        -49.6569  45.3676    0.3063    1.6937    calc
+11.20  11.40   11.30   -7.44      10.25      0.13        -57.2022  78.7941    0.1924    1.8076    calc
+11.40  11.60   11.50   12.69      10.99      0.07        186.8873  161.8275   0.1253    1.8747    calc
+11.60  11.80   11.70   0.76       10.33      0.03        16.0334   11.5847    0.0705    1.9295    mid
+11.80  12.00   11.90   -5.71      10.75      0.00        nan       nan        -0.0559   2.0559    calc
