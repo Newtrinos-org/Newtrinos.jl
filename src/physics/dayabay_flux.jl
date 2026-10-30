@@ -241,7 +241,7 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, 
         spec_edges = convert(Array{Float64, 1}, readdlm(joinpath(datadir, "dayabay_data/parameters/reactor_antineutrino_spectrum_edges.tsv"))[2:end])
     
     else
-        spec_edges = LinRange(1.8, 10, N_pulls)
+        spec_edges = LinRange(1.8, 9.0, N_pulls)
     end
 
     # SNF: fissions per second of a reactor at nominal thermal power, fission fractions and energies per fission
