@@ -85,6 +85,8 @@ include("experiments/borexino/borexino_phase1_spectrum/borexino_ph1_spectrum.jl"
 # include("experiments/juno/juno.jl")
 include("experiments/juno/juno_rewrite.jl")
 include("experiments/juno/tao.jl")
+include("experiments/juno/tao_rewrite.jl")
+include("experiments/juno/tao_leakage.jl")
 include("experiments/gerda/gerda.jl")
 include("experiments/katrin/katrin.jl")
 end
