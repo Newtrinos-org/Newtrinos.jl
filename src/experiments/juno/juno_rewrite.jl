@@ -35,7 +35,7 @@ function default_physics()
     osc = Newtrinos.osc.configure()
     #osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction = Newtrinos.osc.SI(), eigen_method = Newtrinos.BargerEigen()))
     xsec = Newtrinos.ibd_xsec.configure(Newtrinos.ibd_xsec.VogelBeacomO1())
-    flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average=true, N_pulls=30))
+    flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average=true, N_pulls=19))
     (; osc, xsec, flux)
 end
 
@@ -219,7 +219,6 @@ function get_priors()
     unc = 0.05
     e_bias = Normal(0, unc)
 
-
     lsnl_pull = Normal(0.0, 1.0)
 
     taishan_tps = Normal(1.0, 0.05)
@@ -355,8 +354,8 @@ function get_assets(datadir = @__DIR__)
     bipo = convert(Vector{Float64}, data[:, 11])
     other = convert(Vector{Float64}, data[:, 12])
     signal_mle = convert(Vector{Float64}, data[:, 7])
-    #observed = round.(Int64, signal_mle .* hist_to_count)
-    observed = signal_mle .* hist_to_count
+    observed = round.(Int64, signal_mle .* hist_to_count)
+    #observed = signal_mle .* hist_to_count
     lihe_counts = lihe .* hist_to_count
     geo_counts = geo .* hist_to_count
     world_reactor_counts = world_reactor .* hist_to_count
@@ -372,7 +371,7 @@ function get_assets(datadir = @__DIR__)
     # read in uncoscillated expectation
     data = readdlm(joinpath(@__DIR__, "207_days/unoscillated_207_days.txt"), skipstart=14)
     no_osc = convert.(Float64, data[:, 4]) .* hist_to_count
-    observed = no_osc
+    #observed = no_osc
     reactor_config = Newtrinos.dayabay_flux.configure()
     energy_per_fission = reactor_config.params.energy_per_fission
     fractions = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days", "dayabay_data/parameters/reactor_fission_fractions.yaml"), dicttype=OrderedDict{String,Any})["parameters"]["fission_fractions"]
@@ -725,12 +724,12 @@ function get_forward_model(physics, assets; debug = false)
 
         fluxes = reactor_fluxes(params)
         interm_spec = zeros(T, NF)
-        # P = survival_probabilities(params)
+        P = survival_probabilities(params)
         @inbounds for r in 1:9
             # nominal flux and neq correction scale with sum(daily thermal power * daily eff livetime); the SNF is
             # independent of the actual thermal power (spent fuel) and scales with the eff livetime
             flux_r, snf_r = fluxes[r]
-            @. interm_spec += (flux_norm[r] * flux_r + spec_prefac_snf[r] * snf_r)#  * P[r]
+            @. interm_spec += (flux_norm[r] * flux_r + spec_prefac_snf[r] * snf_r)  * P[r]
         end
         interm_spec .*= integral_weights
         spec = vec(sum(reshape(interm_spec, NQ, NFc), dims = 1))
@@ -741,14 +740,14 @@ function get_forward_model(physics, assets; debug = false)
         evis_spectrum = project_to_bins(E_vis_edges, spec .* lsnl_mask, E_fine)
         scaled_eres = zeros(T, length(sigma_E))
         scaled_eres .+= sigma_E .* (1 + 0.05 * params.juno_eres_unc_scale)
-        erec_spectrum = smear_bin_centres(evis_spectrum, scaled_eres, E_fine)
+        erec_spectrum = Newtrinos.Helpers.smear_erf(evis_spectrum, scaled_eres, E_fine)
         coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency# .* params.juno_global_norm
         if debug
             return coarse_counts, bg #, E_nu_GeV , survival_probabilities(params)
         end
 
-        return MvNormal(coarse_counts, Diagonal(assets.no_osc))# distprod(Poisson.(coarse_counts))# .+ bg))
-        #return distprod(Poisson.(coarse_counts .+ bg))
+        #return MvNormal(coarse_counts, Diagonal(assets.observed))# distprod(Poisson.(coarse_counts))# .+ bg))
+        return distprod(Poisson.(coarse_counts .+ bg))
     end
 end
 
