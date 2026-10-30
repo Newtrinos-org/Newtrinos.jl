@@ -475,6 +475,7 @@ function get_plot(physics, assets)
     
     function plot(params)
         m = mean(get_forward_model(physics, assets)(params))
+        s = sqrt.(var(get_forward_model(physics, assets)(params)))
 
         f = Figure()
         ax = Axis(f[1, 1])
@@ -482,9 +483,29 @@ function get_plot(physics, assets)
         errorbars!(ax, Ec, obs, obs_err, color=:black, label="observed")  
         scatter!(ax, Ec, obs, markersize = 10, color=:black, label="observed")
         stephist!(ax, Ec, weights=m, bins=Ebins, label="Expected")
-
+        barplot!(ax, Ec, m.+s, width=diff(Ebins), gap=0, fillto=m .- s, alpha=0.5, label="standard deviation")
+        ax.ylabel = "Counts"
+        ax.title = "TAO, 31.1days"
        
+        ax.xticksvisible = false
+        ax.xticklabelsvisible = false
+
+        ax2 = Axis(f[2,1])
+        plot!(ax2, Ec, assets.observed ./ m, color=:black, label="Observed")
+        hlines!(ax2, 1, label="Expected")
+        barplot!(ax2, Ec, 1 .+ s ./ m, width=diff(Ebins), gap=0, fillto= 1 .- s./m, alpha=0.5, label="Standard Deviation")
+        ylims!(ax2, 0.9, 1.1)
+
         axislegend(ax, merge=true)
+
+        rowsize!(f.layout, 1, Relative(3/4))
+        rowgap!(f.layout, 1, 0)
+        
+        ax2.xlabel="E [MeV]"
+        ax2.ylabel="Counts/Expected"
+    
+        xlims!(ax, minimum(Ebins), maximum(Ebins))
+        xlims!(ax2, minimum(Ebins), maximum(Ebins))
 
         return f
     end
