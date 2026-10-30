@@ -140,7 +140,7 @@ function get_priors()
 
     #tao_eres_unc_scale = Normal(0.0, 1.0)
     tao_e_bias = Normal(0., 1.)
-    tao_e_scale = Normal(1., 0.05)
+    tao_e_scale = Normal(1., 0.006)
 
     tao_norm = Uniform(0, 10)
 
@@ -184,9 +184,9 @@ function get_assets(datadir = @__DIR__)
     # convert to counts, data is counts / 0.2MeV
     hist_to_count = diff(Ebins)
     Ewidth = diff(Ebins)
-    observed = convert(Vector{Float64}, data[:, 4]) .* hist_to_count
-    observed_err = convert(Vector{Float64}, data[:, 5]) .* hist_to_count
-  
+    observed = convert(Vector{Float64}, data[:, 4])# .* hist_to_count
+    observed_err = convert(Vector{Float64}, data[:, 5])# .* hist_to_count
+
 
     n_protons = 2e29
     nominal_livetime = 31.3
@@ -222,7 +222,6 @@ function get_assets(datadir = @__DIR__)
         observed_err,
         nominal_thermal_power,
         Baseline_m,
-        load_factor,
     )
 end
 
@@ -306,17 +305,24 @@ function get_forward_model(physics, assets; debug = false)
 
     # load energy leakage and lsnl
     _T = Newtrinos.TAOLeakage.load_leakage_templates(joinpath(@__DIR__, "tao_data/tao_leakage_templates.txt"))
-    lsnl = Newtrinos.TAOLeakage.load_tao_positron_nl(joinpath(@__DIR__, "tao_data/TAO_Fig26_leakage_matrix.txt"))
-    R = Newtrinos.TAOLeakage.LeakResponse(_T, 1.0:0.01:12.0, 1.0:0.01:12.00; nl=lsnl)
+    lsnl = Newtrinos.TAOLeakage.load_tao_positron_nl(joinpath(@__DIR__, "tao_data/TAO_Fig25b_nonlinearity.txt"))
+    # do not confuse energy scales:
+    # first entry is visible energy, second entry is true prompt energy, not true neutrino energy!
+    R = Newtrinos.TAOLeakage.LeakResponse(_T, 1.0:0.02:12.0, 0.7:0.02:13.00; nl=lsnl)
 
     E_ana = assets.Ebins
     E_ana_c = assets.Ec
-    E_fine = collect(E_ana[1]:0.01:E_ana[end])
+
+
+    #deposited energy, Edep + 0.782 ≈ Enu
+    E_fine = R.etrue_edges
     E_fine_c = (E_fine[1:end-1] + E_fine[2:end]) / 2
 
-    final_rebin_idx = rebin_index(E_fine, E_ana)
+    E_vis_edges = R.evis_edges
+    E_vis_c = (E_vis_edges[1:end-1] + E_vis_edges[2:end]) / 2
 
-    load_factor = assets.load_factor
+    final_rebin_idx = rebin_index(E_vis_edges, E_ana)
+
     # IBD integration as in the official model: in each deposited energy bin a two-fold Gauss-Legendre quadrature
     # over Edep (order 5) and the positron angle cosθ ∈ [-1, 1] (order 3), with exact kinematics Eν(Edep, cosθ),
     # the first order cross section dσ/dcosθ and the Jacobian dEν/dEdep
@@ -364,7 +370,7 @@ function get_forward_model(physics, assets; debug = false)
     n_p = assets.n_protons
 
     #           e-41cm2 -> m2
-    flux_norm = 1e-45 * n_p * P_th_seconds * invL2 * load_factor
+    flux_norm = 1e-45 * n_p * P_th_seconds * invL2
     spec_prefac_snf = 1e-45 * n_p * P_th_seconds * invL2
 
     function forward_model(params)
@@ -398,9 +404,9 @@ function get_forward_model(physics, assets; debug = false)
         #as for the dayabat IAV matrix (same physical concept)
         #this also applies the lsnl directly, hence the binning stays the same in this step
         evis_spectrum = Newtrinos.TAOLeakage.fold(R, spec; pull=params.tao_lsnl_pull, scale=params.tao_e_scale, band=:symmetric)  
-        E_vis_edges = E_fine
         
-        scaled_eres = eres(E_fine_c, params.tao_eres_a, params.tao_eres_b, params.tao_eres_c)
+        # evaluate eres at Evis or Etrue?
+        scaled_eres = eres(E_vis_c, params.tao_eres_a, params.tao_eres_b, params.tao_eres_c)
         erec_spectrum = smear_bin_centres(evis_spectrum, scaled_eres, E_vis_edges)
         coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_norm#  .* params.tao_efficiency
 
@@ -423,9 +429,9 @@ function get_plot(physics, assets)
         f = Figure()
         ax = Axis(f[1, 1])
 
-        errorbars!(ax, Ec, obs ./ assets.hist_to_count, obs_err ./ assets.hist_to_count, color=:black, label="observed")  
-        scatter!(ax, Ec, obs ./ assets.hist_to_count, markersize = 10, color=:black, label="observed")
-        stephist!(ax, Ec, weights=m./assets.hist_to_count, bins=Ebins, label="Expected")
+        errorbars!(ax, Ec, obs, obs_err, color=:black, label="observed")  
+        scatter!(ax, Ec, obs, markersize = 10, color=:black, label="observed")
+        stephist!(ax, Ec, weights=m, bins=Ebins, label="Expected")
 
        
         axislegend(ax, merge=true)
