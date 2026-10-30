@@ -48,20 +48,11 @@ end
 
 function get_params()
 
-    tao_efficiency = 0.466
-    tao_eres_a = 0.02580
-    tao_eres_b = 0.01036
-    tao_eres_c = 0.01477
-
     tao_taishan_ffs = ones(4)
-
     tao_taishan_snf_scale = 0.0
-
     tao_taishan_neq_scale = zeros(4)
-
     tao_reactor_thermal_power_scale = 1.0
 
-    #tao_eres_unc_scale = 1.0
     tao_e_bias = 0.0
     tao_e_scale = 1.0
 
@@ -70,12 +61,7 @@ function get_params()
     tao_eres_pull = 0.0
 
     params = (;
-        #tao_efficiency,
-        #tao_eres_a,
-        #tao_eres_b,
-        #tao_eres_c,
         tao_eres_pull,
-        #tao_eres_unc_scale,
         tao_e_bias,
         tao_e_scale,
         tao_taishan_ffs,
@@ -89,15 +75,6 @@ function get_params()
 end
 
 function get_priors()
-
-    # TODO fix errs
-    tao_eres_a = Normal(0.02580, 0.02580 * 0.01)
-    tao_eres_b = Normal(0.01036, 0.01036 * 0.01)
-    tao_eres_c = Normal(0.01477, 0.01477 * 0.01)
-
-    efficiency_mu = 0.466
-    efficiency_sigma = 0.050
-    tao_efficiency = Normal(efficiency_mu, efficiency_sigma)
 
     ## fission fraction scale
     data = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days/dayabay_data/parameters/reactor_fission_fractions_scale.yaml"), dicttype=OrderedDict{String,Any})
@@ -116,32 +93,24 @@ function get_priors()
 
     cov_mat = corr_mat .* scale
     tao_taishan_ffs = MvNormal(mu, cov_mat)
-    # spent nuclear fuel, assumes correlation within plant, uncorrelated between plants
     # snf correction
     file = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days/dayabay_data/parameters/reactor_snf.yaml"))
     snf_mu = Float64(file["parameters"]["snf_scale"][1])
     snf_sigma = snf_mu * Float64(file["parameters"]["snf_scale"][2]) * 0.01   # percent
-    #tao_taishan_snf_scale = Normal(snf_mu, snf_sigma)
     tao_taishan_snf_scale = 0.
 
-    #neq, assumes correlation within plant, uncorrelated between plants
     ## non-equilibrium correction
     file = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days/dayabay_data/parameters/reactor_nonequilibrium_correction.yaml"))
     mu = file["parameters"]["nonequilibrium_scale"][1] .* ones(4)
     sigma = mu .* file["parameters"]["nonequilibrium_scale"][2] .* 0.01 # percent
 
-    #tao_taishan_neq_scale = MvNormal(mu, Diagonal(sigma.^2))
     tao_taishan_neq_scale = zeros(4)
    
     tps_mu = 1.0
-    # assume 10% uncertainty for Taishan cores (outage sometime) and 3 % for all other cores
     tps_sigma = tps_mu * 0.02
     tao_reactor_thermal_power_scale = Normal(tps_mu, tps_sigma)
     tao_reactor_thermal_power_scale = 1.0
-    tao_efficiency = 0.466
 
-    #tao_eres_unc_scale = Normal(0.0, 1.0)
-    #tao_e_bias = Normal(0., 0.05)
     tao_e_bias = 0.0
     tao_e_scale = Normal(1., 0.006)
 
@@ -151,12 +120,7 @@ function get_priors()
     tao_eres_pull = Normal(0.0, 1.0)
 
     priors = (;
-        #tao_efficiency,
-        #tao_eres_a,
-        #tao_eres_b,
-        #tao_eres_c,
         tao_eres_pull,
-        #tao_eres_unc_scale,
         tao_e_bias,
         tao_e_scale,
         tao_taishan_ffs,
@@ -172,11 +136,8 @@ end
 function get_assets(datadir = @__DIR__)
     @info "Loading tao data"
 
-
     nominal_thermal_power = 4.6
     Baseline_m = 43.2
-    load_factor = 0.633# , 0.431 
-
 
     data = readdlm(joinpath(@__DIR__, "tao_data/tao_data.txt"), skipstart=26)
     Elow = convert(Vector{Float64}, data[:, 1])
@@ -186,35 +147,15 @@ function get_assets(datadir = @__DIR__)
     Ec = convert(Vector{Float64}, data[:, 3])
 
     # observed has negative entries bc expected background is subtracted -> stat. fluctuations mean negative entries
-    # convert to counts, data is counts / 0.2MeV
     hist_to_count = diff(Ebins)
     Ewidth = diff(Ebins)
-    observed = convert(Vector{Float64}, data[:, 4])# .* hist_to_count
-    observed_err = convert(Vector{Float64}, data[:, 5])# .* hist_to_count
+    observed = convert(Vector{Float64}, data[:, 4])
+    observed_err = convert(Vector{Float64}, data[:, 5])
 
-
-    n_protons = 2e29
+    n_protons = 2e29 # estimate from claude
     nominal_livetime = 31.3
     nominal_livetime_seconds = nominal_livetime * 60 * 60 * 24
 
-    reactor_config = Newtrinos.dayabay_flux.configure()
-    energy_per_fission = reactor_config.params.energy_per_fission
-    fractions = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days", "dayabay_data/parameters/reactor_fission_fractions.yaml"), dicttype=OrderedDict{String,Any})["parameters"]["fission_fractions"]
-    fractions = NamedTuple((Symbol(key),value) for (key,value) in fractions)
-
-    file = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days", "dayabay_data/parameters/antineutrinos_per_fission_huber_mueller.yaml"))
-    nu_per_f = file["parameters"]["antineutrinos_per_fission"]
-    nu_per_fission = NamedTuple((Symbol(key), value) for (key, value) in nu_per_f)
-    # also convert from MeV to GJ
-    elementary_charge = 1.602176634e-19
-
-        #           Giga   Joule -> eV        Mega
-    GJ_to_MeV = 1e9 / elementary_charge * 1e-6 # reactor thermal power in GW, energy per fission in MeV
-
-    #multipliy: rate -> thermal power, divide: thermal power -> rate
-    nom_conversion_factor = sum([energy_per_fission[i] * fractions[iso] for (i, iso) in enumerate(keys(fractions))]) / sum([fractions[iso] * nu_per_fission[iso] for (i, iso) in enumerate(keys(fractions))]) / GJ_to_MeV
-
-    
     assets = (;
         nominal_livetime,
         nominal_livetime_seconds,
@@ -280,28 +221,21 @@ end
 function get_eres()
     data = readdlm(joinpath(@__DIR__, "tao_data/tao_energy_resolution.txt"), skipstart=27)
     E = data[:, 1]
-    # mul
-    rel_eres_nom = data[:, 3] .* 0.01
-    rel_eres_p = data[:, 5] .* 0.01
-    rel_eres_m = data[:, 4] .* 0.01
+    rel_eres_nom = data[:, 3]
+    rel_eres_p = data[:, 5]
+    rel_eres_m = data[:, 4]
+    # use average pull, band is approximately symmetric around nominal curve
+    difference = (rel_eres_p .- rel_eres_m) ./ 2
+    eres_diff = rel_eres_nom .+ difference
     # reuse refine_lsnl, it multiplies the nominal curve with energy
     # which is exactly what we want here to get the absolute energy resolution
-    #rel_eres_p = data[:, 4] .* 0.01
     x, nom = refine_lsnl(E, rel_eres_nom)
     nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
-
-    m = nom - refine_lsnl(E, rel_eres_m)[2]
-    m_itp = linear_interpolation(x, m, extrapolation_bc = Line())
-    p = refine_lsnl(E, rel_eres_p)[2] - nom
-    p_itp = linear_interpolation(x, p, extrapolation_bc = Line())
-    
+    pull_term = refine_lsnl(E, eres_diff)[2] - nom
+    pull_itp = linear_interpolation(x, pull_term, extrapolation_bc = Line())
 
     function _eres(E, pull)
-        if pull > 0
-            return @. nom_itp(E) + pull * p_itp(E)
-        else
-            return @. nom_itp(E) + pull * m_itp(E)
-        end
+        return @. nom_itp(E) + pull * pull_itp(E)
     end
 end
 
@@ -458,7 +392,7 @@ function get_forward_model(physics, assets; debug = false)
         
         scaled_eres = eres(E_vis_c, params.tao_eres_pull)
         erec_spectrum = smear_bin_centres(evis_spectrum, scaled_eres, E_vis_edges)
-        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_norm#  .* params.tao_efficiency
+        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_norm
 
         return MvNormal(coarse_counts, Diagonal(assets.observed_err.^2))
     end
@@ -485,7 +419,7 @@ function get_plot(physics, assets)
         stephist!(ax, Ec, weights=m, bins=Ebins, label="Expected")
         barplot!(ax, Ec, m.+s, width=diff(Ebins), gap=0, fillto=m .- s, alpha=0.5, label="standard deviation")
         ax.ylabel = "Counts"
-        ax.title = "TAO, 31.1days"
+        ax.title = "TAO, 31.3 days"
        
         ax.xticksvisible = false
         ax.xticklabelsvisible = false
