@@ -67,12 +67,14 @@ function get_params()
 
     tao_norm = 1.0
     tao_lsnl_pull = 0.0
+    tao_eres_pull = 0.0
 
     params = (;
-        tao_efficiency,
-        tao_eres_a,
-        tao_eres_b,
-        tao_eres_c,
+        #tao_efficiency,
+        #tao_eres_a,
+        #tao_eres_b,
+        #tao_eres_c,
+        tao_eres_pull,
         #tao_eres_unc_scale,
         tao_e_bias,
         tao_e_scale,
@@ -139,18 +141,21 @@ function get_priors()
     tao_efficiency = 0.466
 
     #tao_eres_unc_scale = Normal(0.0, 1.0)
-    tao_e_bias = Normal(0., 1.)
+    #tao_e_bias = Normal(0., 0.05)
+    tao_e_bias = 0.0
     tao_e_scale = Normal(1., 0.006)
 
     tao_norm = Uniform(0, 10)
 
     tao_lsnl_pull = Normal(0.0, 1.0)
+    tao_eres_pull = Normal(0.0, 1.0)
 
     priors = (;
-        tao_efficiency,
-        tao_eres_a,
-        tao_eres_b,
-        tao_eres_c,
+        #tao_efficiency,
+        #tao_eres_a,
+        #tao_eres_b,
+        #tao_eres_c,
+        tao_eres_pull,
         #tao_eres_unc_scale,
         tao_e_bias,
         tao_e_scale,
@@ -225,6 +230,27 @@ function get_assets(datadir = @__DIR__)
     )
 end
 
+"""
+    refine_lsnl(E, f; refine_times = 4, newmin = 0.5, newmax = 12.1)
+
+LSNL curve processing of the official model (`refine_lsnl_data`): the relative curve f = Evis/Escint is converted to the
+absolute Evis(Escint), interpolated with a cubic spline on a `refine_times` finer grid and extrapolated linearly (with
+the outermost fine segments) to [`newmin`, `newmax`]. Returns the fine Escint grid and Evis on it.
+"""
+function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}; refine_times = 4, newmin = 0.7, newmax = 12.0)
+    xfine = collect(range(E[1], E[end], length = (length(E) - 1) * refine_times + 1))
+    yfine = Newtrinos.Helpers.not_a_knot_spline(E, f .* E, xfine)
+    step = xfine[2] - xfine[1]
+    xleft = collect(newmin:step:xfine[1]-step*1e-9)
+    stepright = xfine[end] - xfine[end-1]
+    xright = collect(xfine[end]:stepright:newmax+stepright*1e-6)[2:end]
+    sl = (yfine[2] - yfine[1]) / (xfine[2] - xfine[1])
+    sr = (yfine[end] - yfine[end-1]) / (xfine[end] - xfine[end-1])
+    yleft = @. yfine[1] + sl * (xleft - xfine[1])
+    yright = @. yfine[end] + sr * (xright - xfine[end])
+    vcat(xleft, xfine, xright), vcat(yleft, yfine, yright)
+end
+
 
 
 """
@@ -251,8 +277,32 @@ function project_to_bins(image_edges, counts, target_edges)
     out
 end
 
-function eres(E, a, b, c)
-    sigma_E = @. sqrt(a^2 * E + b^2 * E^2 + c^2)
+function get_eres()
+    data = readdlm(joinpath(@__DIR__, "tao_data/tao_energy_resolution.txt"), skipstart=27)
+    E = data[:, 1]
+    # mul
+    rel_eres_nom = data[:, 3] .* 0.01
+    rel_eres_p = data[:, 5] .* 0.01
+    rel_eres_m = data[:, 4] .* 0.01
+    # reuse refine_lsnl, it multiplies the nominal curve with energy
+    # which is exactly what we want here to get the absolute energy resolution
+    #rel_eres_p = data[:, 4] .* 0.01
+    x, nom = refine_lsnl(E, rel_eres_nom)
+    nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
+
+    m = nom - refine_lsnl(E, rel_eres_m)[2]
+    m_itp = linear_interpolation(x, m, extrapolation_bc = Line())
+    p = refine_lsnl(E, rel_eres_p)[2] - nom
+    p_itp = linear_interpolation(x, p, extrapolation_bc = Line())
+    
+
+    function _eres(E, pull)
+        if pull > 0
+            return @. nom_itp(E) + pull * p_itp(E)
+        else
+            return @. nom_itp(E) + pull * m_itp(E)
+        end
+    end
 end
 
 """
@@ -307,12 +357,12 @@ function get_forward_model(physics, assets; debug = false)
     _T = Newtrinos.TAOLeakage.load_leakage_templates(joinpath(@__DIR__, "tao_data/tao_leakage_templates.txt"))
     lsnl = Newtrinos.TAOLeakage.load_tao_positron_nl(joinpath(@__DIR__, "tao_data/TAO_Fig25b_nonlinearity.txt"))
     # do not confuse energy scales:
-    # first entry is visible energy, second entry is true prompt energy, not true neutrino energy!
+    # first entry is true prompt energy (not true neutrino energy!), second entry is visible energy
     R = Newtrinos.TAOLeakage.LeakResponse(_T, 1.0:0.02:12.0, 0.7:0.02:13.00; nl=lsnl)
 
     E_ana = assets.Ebins
-    E_ana_c = assets.Ec
 
+    eres = get_eres()
 
     #deposited energy, Edep + 0.782 ≈ Enu
     E_fine = R.etrue_edges
@@ -375,9 +425,10 @@ function get_forward_model(physics, assets; debug = false)
 
     function forward_model(params)
         T = promote_type(
-                eltype(params.tao_eres_a),
-                eltype(params.tao_eres_b),
-                eltype(params.tao_eres_c),
+                #eltype(params.tao_eres_a),
+                #eltype(params.tao_eres_b),
+                #eltype(params.tao_eres_c),
+                eltype(params.tao_eres_pull),
                 eltype(params.tao_reactor_thermal_power_scale),
                 eltype(params.tao_taishan_ffs),
                 eltype(params.tao_taishan_neq_scale),
@@ -405,8 +456,7 @@ function get_forward_model(physics, assets; debug = false)
         #this also applies the lsnl directly, hence the binning stays the same in this step
         evis_spectrum = Newtrinos.TAOLeakage.fold(R, spec; pull=params.tao_lsnl_pull, scale=params.tao_e_scale, bias=params.tao_e_bias, band=:symmetric)  
         
-        # evaluate eres at Evis or Etrue?
-        scaled_eres = eres(E_vis_c, params.tao_eres_a, params.tao_eres_b, params.tao_eres_c)
+        scaled_eres = eres(E_vis_c, params.tao_eres_pull)
         erec_spectrum = smear_bin_centres(evis_spectrum, scaled_eres, E_vis_edges)
         coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_norm#  .* params.tao_efficiency
 
