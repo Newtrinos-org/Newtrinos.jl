@@ -240,29 +240,6 @@ function get_eres()
 end
 
 """
-    smear_bin_centres(counts, σ, edges; nσ = 8)
-
-Energy resolution as in the official model (`HistSmearNormalMatrixBC`): the events of each bin i are smeared with a
-Gaussian of width σ[i] around its centre, evaluated at the centres of the bins of the same binning (times the bin
-width).
-"""
-function smear_bin_centres(counts, σ, edges; nσ = 8)
-    T = promote_type(eltype(counts), eltype(σ))
-    c = (edges[1:end-1] .+ edges[2:end]) ./ 2
-    out = zeros(T, length(c))
-    @inbounds for i in eachindex(counts, σ)
-        iszero(counts[i]) && continue
-        lo = searchsortedfirst(c, c[i] - nσ * σ[i])
-        hi = searchsortedlast(c, c[i] + nσ * σ[i])
-        norm = counts[i] / (sqrt(2π) * σ[i])
-        for j in lo:hi
-            out[j] += norm * (edges[j+1] - edges[j]) * exp(-0.5 * ((c[j] - c[i]) / σ[i])^2)
-        end
-    end
-    out
-end
-
-"""
     rebin_index(fine_edges, coarse_edges)
 
 Index of the coarse bin each fine bin falls into (0 outside); the coarse edges must be a subset of the fine ones.
@@ -391,7 +368,7 @@ function get_forward_model(physics, assets; debug = false)
         evis_spectrum = Newtrinos.TAOLeakage.fold(R, spec; pull=params.tao_lsnl_pull, scale=params.tao_e_scale, bias=params.tao_e_bias, band=:symmetric)  
         
         scaled_eres = eres(E_vis_c, params.tao_eres_pull)
-        erec_spectrum = smear_bin_centres(evis_spectrum, scaled_eres, E_vis_edges)
+        erec_spectrum = Newtrinos.Helpers.smear_erf(evis_spectrum, scaled_eres, E_vis_edges)
         coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_norm
 
         return MvNormal(coarse_counts, Diagonal(assets.observed_err.^2))
