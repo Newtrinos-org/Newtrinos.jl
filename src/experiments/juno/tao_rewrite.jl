@@ -55,9 +55,9 @@ function get_params()
 
     tao_taishan_ffs = ones(4)
 
-    tao_taishan_snf_scale = 1.0
+    tao_taishan_snf_scale = 0.0
 
-    tao_taishan_neq_scale = ones(4)
+    tao_taishan_neq_scale = zeros(4)
 
     tao_reactor_thermal_power_scale = 1.0
 
@@ -403,7 +403,7 @@ function get_forward_model(physics, assets; debug = false)
         #different to juno implementation, for TAO we smear the flux to different bins
         #as for the dayabat IAV matrix (same physical concept)
         #this also applies the lsnl directly, hence the binning stays the same in this step
-        evis_spectrum = Newtrinos.TAOLeakage.fold(R, spec; pull=params.tao_lsnl_pull, scale=params.tao_e_scale, band=:symmetric)  
+        evis_spectrum = Newtrinos.TAOLeakage.fold(R, spec; pull=params.tao_lsnl_pull, scale=params.tao_e_scale, bias=params.tao_e_bias, band=:symmetric)  
         
         # evaluate eres at Evis or Etrue?
         scaled_eres = eres(E_vis_c, params.tao_eres_a, params.tao_eres_b, params.tao_eres_c)

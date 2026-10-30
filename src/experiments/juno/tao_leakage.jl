@@ -5,8 +5,11 @@ Energy-leakage + non-linearity response for the TAO detector (JUNO-TAO, arXiv:26
 for an arbitrary positron non-linearity curve and usable inside automatic differentiation.
 
 Model: for a positron with true energy E_true = T_e+ + 1.022 MeV, the visible energy is
-    E_vis = E_peak(E_true) + delta,   E_peak = E_true * f_e+(E_true),
-where delta <= 0 is the energy lost by leakage. The distribution of delta was extracted from Fig. 26 as six
+    E_vis = E_peak(E_true) + delta,   E_peak = scale * E_true * f_e+(E_true) + bias,
+where delta <= 0 is the energy lost by leakage, `scale` is a multiplicative energy scale and `bias` an additive
+energy offset (MeV). The bias shifts the whole distribution of each E_true bin (peak and leakage tail) by the
+same amount, which is exact for an additive offset. The scale multiplies the peak position; the leakage offsets
+delta are not rescaled (for a 0.6% scale this is a <~6 keV effect on the tail). The distribution of delta was extracted from Fig. 26 as six
 templates in E_true bands (`TAO_leakage_templates.txt`), interpolated linearly in E_true between band centres.
 Changing the non-linearity curve moves the full-containment peak and the whole leakage tail with it.
 
@@ -241,10 +244,10 @@ nvis(R::LeakResponse) = length(R.evis_edges) - 1
 # ---------------------------------------------------------------------------------------------------------
 
 """
-    peak_positions(R, f) -> Vector
-    peak_positions(R; pull=0, scale=1, band=:asymmetric) -> Vector
+    peak_positions(R, f; bias=0) -> Vector
+    peak_positions(R; pull=0, scale=1, bias=0, band=:asymmetric) -> Vector
 
-Full-containment peak E_true*f(E_true) at the E_true bin edges (`R.integrate == true`, length ntrue+1) or bin
+Full-containment peak E_true*f(E_true) + bias (bias in MeV) at the E_true bin edges (`R.integrate == true`, length ntrue+1) or bin
 centres (`R.integrate == false`, length ntrue). Entries for inactive bins (centre below `Emin`) are unused.
 The keyword form uses the precomputed TAO table (`LeakResponse(...; nl=...)`); `f` can be any callable.
 `band` is `:asymmetric` or `:symmetric`, as in `positron_nl`.
@@ -252,29 +255,29 @@ The keyword form uses the precomputed TAO table (`LeakResponse(...; nl=...)`); `
 _evalpoints(R::LeakResponse) = R.integrate ? R.etrue_edges : R.Ec
 _firstpoint(R::LeakResponse) = R.jfirst            # same index for edges (lower edge of bin jfirst) and centres
 
-function peak_positions(R::LeakResponse, f)
+function peak_positions(R::LeakResponse, f; bias::Real=0)
     X = _evalpoints(R)
-    P = typeof(float(X[end] * f(X[end])))
+    P = typeof(float(X[end] * f(X[end]) + bias))
     p = zeros(P, length(X))
     @inbounds for j in _firstpoint(R):length(X)
-        p[j] = X[j] * f(X[j])
+        p[j] = X[j] * f(X[j]) + bias
     end
     return p
 end
 
-function peak_positions(R::LeakResponse; pull::Real=0, scale::Real=1, band::Symbol=:asymmetric)
+function peak_positions(R::LeakResponse; pull::Real=0, scale::Real=1, bias::Real=0, band::Symbol=:asymmetric)
     isempty(R.nom) && error("LeakResponse was built without a PositronNL table; pass `nl=` or use peak_positions(R, f)")
     sym = _is_symmetric(band)
     X = _evalpoints(R)
-    P = typeof(float(scale * (1.0 + _pull_shift(pull, 1.0, 1.0))))
+    P = typeof(float(scale * (1.0 + _pull_shift(pull, 1.0, 1.0)) + bias))
     p = zeros(P, length(X))
     if sym
         @inbounds for j in _firstpoint(R):length(X)
-            p[j] = X[j] * scale * (R.nom[j] + pull * ((R.up[j] + R.dn[j]) / 2))
+            p[j] = X[j] * scale * (R.nom[j] + pull * ((R.up[j] + R.dn[j]) / 2)) + bias
         end
     else
         @inbounds for j in _firstpoint(R):length(X)
-            p[j] = X[j] * scale * (R.nom[j] + _pull_shift(pull, R.up[j], R.dn[j]))
+            p[j] = X[j] * scale * (R.nom[j] + _pull_shift(pull, R.up[j], R.dn[j])) + bias
         end
     end
     return p
@@ -389,37 +392,38 @@ function fold!(out::AbstractVector, R::LeakResponse, spectrum::AbstractVector, p
 end
 
 """
-    fold(R, spectrum; pull=0, scale=1, band=:asymmetric) -> Vector
-    fold(R, spectrum, f) -> Vector
+    fold(R, spectrum; pull=0, scale=1, bias=0, band=:asymmetric) -> Vector
+    fold(R, spectrum, f; bias=0) -> Vector
 
 Visible-energy spectrum from a true-energy spectrum (events per E_true bin), using the TAO positron
 non-linearity moved by `pull`/`scale` (needs `LeakResponse(...; nl=...)`) or any curve `f(E) = E_vis/E_true`.
+`scale` multiplies and `bias` (MeV) is added to the peak position: E_peak = scale * E_true * f(E_true) + bias.
 `band = :symmetric` uses the average band width for the pull (smooth at pull = 0); see `positron_nl`.
 Events falling outside the E_vis grid (e.g. below a 0.7-MeV threshold) are dropped, as in the selection.
 """
-function fold(R::LeakResponse, spectrum::AbstractVector; pull::Real=0, scale::Real=1,
+function fold(R::LeakResponse, spectrum::AbstractVector; pull::Real=0, scale::Real=1, bias::Real=0,
               band::Symbol=:asymmetric)
-    peaks = peak_positions(R; pull=pull, scale=scale, band=band)
+    peaks = peak_positions(R; pull=pull, scale=scale, bias=bias, band=band)
     out = zeros(promote_type(eltype(peaks), eltype(spectrum)), nvis(R))
     return fold!(out, R, spectrum, peaks)
 end
 
-function fold(R::LeakResponse, spectrum::AbstractVector, f)
-    peaks = peak_positions(R, f)
+function fold(R::LeakResponse, spectrum::AbstractVector, f; bias::Real=0)
+    peaks = peak_positions(R, f; bias=bias)
     out = zeros(promote_type(eltype(peaks), eltype(spectrum)), nvis(R))
     return fold!(out, R, spectrum, peaks)
 end
 
 """
-    response_matrix(R; pull=0, scale=1, band=:asymmetric) -> Matrix
-    response_matrix(R, f) -> Matrix
+    response_matrix(R; pull=0, scale=1, bias=0, band=:asymmetric) -> Matrix
+    response_matrix(R, f; bias=0) -> Matrix
 
 Dense matrix M[i, j] = P(E_vis bin i | E_true bin j). Use `fold` inside fits; build the matrix only when it
 is needed explicitly (it is ~(nvis x ntrue) numbers, and with dual numbers much larger).
 """
-response_matrix(R::LeakResponse; pull::Real=0, scale::Real=1, band::Symbol=:asymmetric) =
-    _matrix(R, peak_positions(R; pull=pull, scale=scale, band=band))
-response_matrix(R::LeakResponse, f) = _matrix(R, peak_positions(R, f))
+response_matrix(R::LeakResponse; pull::Real=0, scale::Real=1, bias::Real=0, band::Symbol=:asymmetric) =
+    _matrix(R, peak_positions(R; pull=pull, scale=scale, bias=bias, band=band))
+response_matrix(R::LeakResponse, f; bias::Real=0) = _matrix(R, peak_positions(R, f; bias=bias))
 
 function _matrix(R::LeakResponse, peaks::AbstractVector)
     M = zeros(eltype(peaks), nvis(R), ntrue(R))
@@ -434,20 +438,22 @@ end
 # ---------------------------------------------------------------------------------------------------------
 
 """
-    leak_nl_matrix(T, etrue_edges, evis_edges, f; Emin=1.022, integrate=true)
-    leak_nl_matrix(T, nl, etrue_edges, evis_edges; pull=0, scale=1, band=:asymmetric, Emin=1.022, integrate=true)
+    leak_nl_matrix(T, etrue_edges, evis_edges, f; bias=0, Emin=1.022, integrate=true)
+    leak_nl_matrix(T, nl, etrue_edges, evis_edges; pull=0, scale=1, bias=0, band=:asymmetric, Emin=1.022,
+                   integrate=true)
 
 Dense response matrix, as in the previous version. Builds a `LeakResponse` on every call; inside a fit,
 construct the `LeakResponse` once and use `fold`.
 """
-leak_nl_matrix(T::LeakageTemplates, etrue_edges, evis_edges, f; Emin::Real=1.022, integrate::Bool=true) =
-    response_matrix(LeakResponse(T, etrue_edges, evis_edges; Emin=Emin, integrate=integrate), f)
+leak_nl_matrix(T::LeakageTemplates, etrue_edges, evis_edges, f; bias::Real=0, Emin::Real=1.022,
+               integrate::Bool=true) =
+    response_matrix(LeakResponse(T, etrue_edges, evis_edges; Emin=Emin, integrate=integrate), f; bias=bias)
 
 leak_nl_matrix(T::LeakageTemplates, nl::PositronNL, etrue_edges, evis_edges;
-               pull::Real=0, scale::Real=1, band::Symbol=:asymmetric, Emin::Real=1.022,
+               pull::Real=0, scale::Real=1, bias::Real=0, band::Symbol=:asymmetric, Emin::Real=1.022,
                integrate::Bool=true) =
     response_matrix(LeakResponse(T, etrue_edges, evis_edges; nl=nl, Emin=Emin, integrate=integrate);
-                    pull=pull, scale=scale, band=band)
+                    pull=pull, scale=scale, bias=bias, band=band)
 
 end # module
 
@@ -461,6 +467,7 @@ end # module
 #
 # vis = fold(R, spectrum_true; pull=θ.tao_nl_pull, scale=θ.tao_escale)  # inside the likelihood
 # vis = fold(R, spectrum_true; pull=θ.tao_nl_pull, band=:symmetric)    # pull by the average band width
+# vis = fold(R, spectrum_true; scale=θ.tao_escale, bias=θ.tao_ebias)   # E_peak = scale*E*f(E) + bias (MeV)
 # vis = fold(R, spectrum_true, E -> my_nl(E, θ))                       # any custom curve
 #
 # using ForwardDiff
