@@ -61,24 +61,26 @@ function get_params()
 
     tao_reactor_thermal_power_scale = 1.0
 
-    tao_eres_unc_scale = 1.0
+    #tao_eres_unc_scale = 1.0
     tao_e_bias = 0.0
     tao_e_scale = 1.0
 
     tao_norm = 1.0
+    tao_lsnl_pull = 0.0
 
     params = (;
         tao_efficiency,
         tao_eres_a,
         tao_eres_b,
         tao_eres_c,
-        tao_eres_unc_scale,
+        #tao_eres_unc_scale,
         tao_e_bias,
         tao_e_scale,
         tao_taishan_ffs,
         tao_taishan_snf_scale,
         tao_taishan_neq_scale,
         tao_reactor_thermal_power_scale,
+        tao_lsnl_pull,
         tao_norm,
     )
 
@@ -87,9 +89,9 @@ end
 function get_priors()
 
     # TODO fix errs
-    tao_eres_a = Normal(0.02580, 0.02580 * 0.03)
-    tao_eres_b = Normal(0.01036, 0.01036 * 0.03)
-    tao_eres_c = Normal(0.01477, 0.01477 * 0.03)
+    tao_eres_a = Normal(0.02580, 0.02580 * 0.01)
+    tao_eres_b = Normal(0.01036, 0.01036 * 0.01)
+    tao_eres_c = Normal(0.01477, 0.01477 * 0.01)
 
     efficiency_mu = 0.466
     efficiency_sigma = 0.050
@@ -117,7 +119,8 @@ function get_priors()
     file = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days/dayabay_data/parameters/reactor_snf.yaml"))
     snf_mu = Float64(file["parameters"]["snf_scale"][1])
     snf_sigma = snf_mu * Float64(file["parameters"]["snf_scale"][2]) * 0.01   # percent
-    tao_taishan_snf_scale = Normal(snf_mu, snf_sigma)
+    #tao_taishan_snf_scale = Normal(snf_mu, snf_sigma)
+    tao_taishan_snf_scale = 0.
 
     #neq, assumes correlation within plant, uncorrelated between plants
     ## non-equilibrium correction
@@ -125,31 +128,37 @@ function get_priors()
     mu = file["parameters"]["nonequilibrium_scale"][1] .* ones(4)
     sigma = mu .* file["parameters"]["nonequilibrium_scale"][2] .* 0.01 # percent
 
-    tao_taishan_neq_scale = MvNormal(mu, Diagonal(sigma.^2))
+    #tao_taishan_neq_scale = MvNormal(mu, Diagonal(sigma.^2))
+    tao_taishan_neq_scale = zeros(4)
    
     tps_mu = 1.0
     # assume 10% uncertainty for Taishan cores (outage sometime) and 3 % for all other cores
     tps_sigma = tps_mu * 0.02
     tao_reactor_thermal_power_scale = Normal(tps_mu, tps_sigma)
+    tao_reactor_thermal_power_scale = 1.0
+    tao_efficiency = 0.466
 
-    tao_eres_unc_scale = Normal(1.0, 1.0)
+    #tao_eres_unc_scale = Normal(0.0, 1.0)
     tao_e_bias = Normal(0., 1.)
-    tao_e_scale = Normal(1., 1.)
+    tao_e_scale = Normal(1., 0.05)
 
-    tao_norm = Uniform(0, Inf)
+    tao_norm = Uniform(0, 10)
+
+    tao_lsnl_pull = Normal(0.0, 1.0)
 
     priors = (;
         tao_efficiency,
         tao_eres_a,
         tao_eres_b,
         tao_eres_c,
-        tao_eres_unc_scale,
+        #tao_eres_unc_scale,
         tao_e_bias,
         tao_e_scale,
         tao_taishan_ffs,
         tao_taishan_snf_scale,
         tao_taishan_neq_scale,
         tao_reactor_thermal_power_scale,
+        tao_lsnl_pull,
         tao_norm,
     )
 end
@@ -199,6 +208,7 @@ function get_assets(datadir = @__DIR__)
 
     #multipliy: rate -> thermal power, divide: thermal power -> rate
     nom_conversion_factor = sum([energy_per_fission[i] * fractions[iso] for (i, iso) in enumerate(keys(fractions))]) / sum([fractions[iso] * nu_per_fission[iso] for (i, iso) in enumerate(keys(fractions))]) / GJ_to_MeV
+
     
     assets = (;
         nominal_livetime,
@@ -294,9 +304,14 @@ end
 
 function get_forward_model(physics, assets; debug = false)
 
+    # load energy leakage and lsnl
+    _T = Newtrinos.TAOLeakage.load_leakage_templates(joinpath(@__DIR__, "tao_data/tao_leakage_templates.txt"))
+    lsnl = Newtrinos.TAOLeakage.load_tao_positron_nl(joinpath(@__DIR__, "tao_data/TAO_Fig26_leakage_matrix.txt"))
+    R = Newtrinos.TAOLeakage.LeakResponse(_T, 1.0:0.01:12.0, 1.0:0.01:12.00; nl=lsnl)
+
     E_ana = assets.Ebins
     E_ana_c = assets.Ec
-    E_fine = collect(E_ana[1]:0.02:E_ana[end])
+    E_fine = collect(E_ana[1]:0.01:E_ana[end])
     E_fine_c = (E_fine[1:end-1] + E_fine[2:end]) / 2
 
     final_rebin_idx = rebin_index(E_fine, E_ana)
@@ -361,7 +376,7 @@ function get_forward_model(physics, assets; debug = false)
                 eltype(params.tao_taishan_ffs),
                 eltype(params.tao_taishan_neq_scale),
                 eltype(params.tao_taishan_snf_scale),
-                eltype(params.tao_eres_unc_scale),
+                #eltype(params.tao_eres_unc_scale),
                 eltype(params.tao_e_bias),
                 eltype(params.tao_e_scale),
                 eltype(params.spectrum_pulls),
@@ -374,22 +389,22 @@ function get_forward_model(physics, assets; debug = false)
         flux_r, snf_r = fluxes
         @. interm_spec += (flux_norm * flux_r + spec_prefac_snf * snf_r)
 
+        #bin-wise integrated spec in Eprompt
         interm_spec .*= integral_weights
         spec = vec(sum(reshape(interm_spec, NQ, NFc), dims = 1))
+
+        #fold through energy leakage and lsnl -> visible energy
+        #different to juno implementation, for TAO we smear the flux to different bins
+        #as for the dayabat IAV matrix (same physical concept)
+        #this also applies the lsnl directly, hence the binning stays the same in this step
+        evis_spectrum = Newtrinos.TAOLeakage.fold(R, spec; pull=params.tao_lsnl_pull, scale=params.tao_e_scale, band=:symmetric)  
         E_vis_edges = E_fine
-        # insert tao leakage here
-        # TODO
-        evis_spectrum = project_to_bins(E_vis_edges, spec, E_fine)
         
-        scaled_eres = eres(E_fine_c, params.tao_eres_a, params.tao_eres_b, params.tao_eres_c) .* (1 + 0.05 * params.tao_eres_unc_scale)
-        erec_spectrum = smear_bin_centres(evis_spectrum, scaled_eres, E_fine)
-        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_norm .* params.tao_efficiency
-        if debug
-            return coarse_counts, bg
-        end
+        scaled_eres = eres(E_fine_c, params.tao_eres_a, params.tao_eres_b, params.tao_eres_c)
+        erec_spectrum = smear_bin_centres(evis_spectrum, scaled_eres, E_vis_edges)
+        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_norm#  .* params.tao_efficiency
 
         return MvNormal(coarse_counts, Diagonal(assets.observed_err.^2))
-        #return distprod(Poisson.(coarse_counts .+ bg))
     end
 end
 

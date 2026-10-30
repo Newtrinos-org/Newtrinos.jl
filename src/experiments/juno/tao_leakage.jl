@@ -18,6 +18,13 @@ Design for speed and ForwardDiff.jl:
     column's leakage window are touched (the template spans 3.06 MeV), never the full dense matrix.
   * `fold`/`fold!` apply the response directly to a spectrum without materialising a matrix, which is what
     keeps gradients cheap: no 615x565 matrix of dual numbers is allocated.
+  * Bin integration over E_true (default, `integrate=true`): each E_true bin is treated as a flat distribution
+    between its edges, so its full-containment peak is spread uniformly between E_peak(E_lo) and E_peak(E_hi)
+    instead of being placed at the image of the bin centre. Because the template contains a spike narrower
+    than the bins, point evaluation at bin centres maps each bin to a single E_vis bin; with a non-linearity
+    slope dE_peak/dE_true != 1 some E_vis bins then receive two peaks and others none, giving a periodic,
+    grid-dependent ripple. Bin integration tiles the E_vis axis exactly and removes it. It is done
+    analytically with the second cumulative of the template (piecewise quadratic), at the same cost.
   * All code is generic in the number type: `ForwardDiff.Dual` (in the non-linearity parameters, in the input
     spectrum, or both) propagates. No dependency on ForwardDiff itself.
 
@@ -161,11 +168,15 @@ end
 # =========================================================================================================
 
 """
-    LeakResponse(T, etrue_edges, evis_edges; nl=nothing, Emin=1.022)
+    LeakResponse(T, etrue_edges, evis_edges; nl=nothing, Emin=1.022, integrate=true)
 
 Precompute everything that does not depend on fit parameters for fixed E_true / E_vis grids:
-the template mixture (CDF) for every active E_true bin, and, if a `PositronNL` table is given, its nominal
-value and band widths at every bin centre (enabling the fast `pull`/`scale` path).
+the template mixture (CDF and its integral) for every active E_true bin, and, if a `PositronNL` table is given,
+its nominal value and band widths at the evaluation points (enabling the fast `pull`/`scale` path).
+
+`integrate=true` (default) averages the response over each E_true bin (flat spectrum within the bin), which
+removes the grid-dependent ripple described in the module docstring. `integrate=false` reproduces the previous
+behaviour (evaluation at bin centres).
 
 `evis_edges` must be increasing; a uniform grid enables O(1) bin lookup. Make its upper edge large enough
 for E_true*f(E_true) (about 13 MeV for E_true up to 12 MeV). Columns with bin centre below `Emin` are empty.
@@ -182,14 +193,16 @@ struct LeakResponse
     uniform_vis::Bool
     v0::Float64
     dv::Float64
-    nom::Vector{Float64}            # non-linearity at Ec (empty if no table given)
-    up::Vector{Float64}
+    nom::Vector{Float64}            # non-linearity at the evaluation points (empty if no table given):
+    up::Vector{Float64}             #   E_true bin edges if `integrate`, else bin centres
     dn::Vector{Float64}
+    integrate::Bool                 # average over each E_true bin (true) or evaluate at its centre (false)
+    G::Matrix{Float64}              # (n+1) x ntrue integral of the template CDF, G(x) = int_{δ0}^{x} F
 end
 
 function LeakResponse(T::LeakageTemplates, etrue_edges::AbstractVector{<:Real},
                       evis_edges::AbstractVector{<:Real}; nl::Union{Nothing,PositronNL}=nothing,
-                      Emin::Real=1.022)
+                      Emin::Real=1.022, integrate::Bool=true)
     te = collect(Float64, etrue_edges); ve = collect(Float64, evis_edges)
     (issorted(te) && issorted(ve)) || error("bin edges must be increasing")
     ntrue = length(te) - 1
@@ -202,16 +215,22 @@ function LeakResponse(T::LeakageTemplates, etrue_edges::AbstractVector{<:Real},
         w = clamp((Ec[j] - c[k]) / (c[k+1] - c[k]), 0.0, 1.0)
         @views cdf[:, j] .= (1 - w) .* T.cdf[:, k] .+ w .* T.cdf[:, k+1]
     end
+    G = zeros(T.n + 1, ntrue)
+    for j in jfirst:ntrue, k in 1:T.n
+        G[k+1, j] = G[k, j] + T.dδ * (cdf[k, j] + cdf[k+1, j]) / 2
+    end
     dvs = diff(ve)
     uniform = maximum(abs.(dvs .- dvs[1])) < 1e-9 * max(1.0, abs(dvs[1]))
+    Ep = integrate ? te : Ec                     # where the non-linearity is evaluated
     if nl === nothing
         nom = Float64[]; up = Float64[]; dn = Float64[]
     else
-        nom = [_interp(nl.E, nl.nom, E) for E in Ec]
-        up  = [_interp(nl.E, nl.hi, E) for E in Ec] .- nom
-        dn  = nom .- [_interp(nl.E, nl.lo, E) for E in Ec]
+        nom = [_interp(nl.E, nl.nom, E) for E in Ep]
+        up  = [_interp(nl.E, nl.hi, E) for E in Ep] .- nom
+        dn  = nom .- [_interp(nl.E, nl.lo, E) for E in Ep]
     end
-    return LeakResponse(te, ve, Ec, jfirst, T.δ0, T.dδ, T.n, cdf, uniform, ve[1], dvs[1], nom, up, dn)
+    return LeakResponse(te, ve, Ec, jfirst, T.δ0, T.dδ, T.n, cdf, uniform, ve[1], dvs[1], nom, up, dn,
+                        integrate, G)
 end
 
 ntrue(R::LeakResponse) = length(R.Ec)
@@ -225,15 +244,20 @@ nvis(R::LeakResponse) = length(R.evis_edges) - 1
     peak_positions(R, f) -> Vector
     peak_positions(R; pull=0, scale=1, band=:asymmetric) -> Vector
 
-Full-containment peak E_true*f(E_true) at every E_true bin centre (entries before `R.jfirst` are unused).
+Full-containment peak E_true*f(E_true) at the E_true bin edges (`R.integrate == true`, length ntrue+1) or bin
+centres (`R.integrate == false`, length ntrue). Entries for inactive bins (centre below `Emin`) are unused.
 The keyword form uses the precomputed TAO table (`LeakResponse(...; nl=...)`); `f` can be any callable.
 `band` is `:asymmetric` or `:symmetric`, as in `positron_nl`.
 """
+_evalpoints(R::LeakResponse) = R.integrate ? R.etrue_edges : R.Ec
+_firstpoint(R::LeakResponse) = R.jfirst            # same index for edges (lower edge of bin jfirst) and centres
+
 function peak_positions(R::LeakResponse, f)
-    P = typeof(float(R.Ec[end] * f(R.Ec[end])))
-    p = zeros(P, ntrue(R))
-    @inbounds for j in R.jfirst:ntrue(R)
-        p[j] = R.Ec[j] * f(R.Ec[j])
+    X = _evalpoints(R)
+    P = typeof(float(X[end] * f(X[end])))
+    p = zeros(P, length(X))
+    @inbounds for j in _firstpoint(R):length(X)
+        p[j] = X[j] * f(X[j])
     end
     return p
 end
@@ -241,15 +265,16 @@ end
 function peak_positions(R::LeakResponse; pull::Real=0, scale::Real=1, band::Symbol=:asymmetric)
     isempty(R.nom) && error("LeakResponse was built without a PositronNL table; pass `nl=` or use peak_positions(R, f)")
     sym = _is_symmetric(band)
+    X = _evalpoints(R)
     P = typeof(float(scale * (1.0 + _pull_shift(pull, 1.0, 1.0))))
-    p = zeros(P, ntrue(R))
+    p = zeros(P, length(X))
     if sym
-        @inbounds for j in R.jfirst:ntrue(R)
-            p[j] = R.Ec[j] * scale * (R.nom[j] + pull * ((R.up[j] + R.dn[j]) / 2))
+        @inbounds for j in _firstpoint(R):length(X)
+            p[j] = X[j] * scale * (R.nom[j] + pull * ((R.up[j] + R.dn[j]) / 2))
         end
     else
-        @inbounds for j in R.jfirst:ntrue(R)
-            p[j] = R.Ec[j] * scale * (R.nom[j] + _pull_shift(pull, R.up[j], R.dn[j]))
+        @inbounds for j in _firstpoint(R):length(X)
+            p[j] = X[j] * scale * (R.nom[j] + _pull_shift(pull, R.up[j], R.dn[j]))
         end
     end
     return p
@@ -270,10 +295,31 @@ end
     return c0 + (u - k) * (c1 - c0)
 end
 
-# range of E_vis bins overlapping the leakage window [peak + δ0, peak + δ0 + n dδ]
-@inline function _vis_window(R::LeakResponse, peak)
-    lo = peak + R.δ0
-    hi = peak + R.δ0 + R.n * R.dδ
+# integral of the template CDF of column j, G(x) = int_{δ0}^{x} F (piecewise quadratic, generic in x)
+@inline function _G(R::LeakResponse, j::Int, x)
+    u = (x - R.δ0) / R.dδ
+    u <= 0 && return zero(u)
+    @inbounds if u >= R.n
+        return R.G[R.n+1, j] + (u - R.n) * R.dδ
+    end
+    k = floor(Int, u)
+    t = u - k
+    @inbounds c0 = R.cdf[k+1, j]
+    @inbounds c1 = R.cdf[k+2, j]
+    @inbounds g0 = R.G[k+1, j]
+    return g0 + R.dδ * (c0 * t + (c1 - c0) * t * t / 2)
+end
+
+# bin-averaged CDF: mean of F(v - p) for p uniform in [plo, phi]
+@inline function _H(R::LeakResponse, j::Int, v, plo, phi, inv_dp)
+    return (_G(R, j, v - plo) - _G(R, j, v - phi)) * inv_dp
+end
+
+# range of E_vis bins overlapping the leakage window [plo + δ0, phi + δ0 + n dδ]
+@inline _vis_window(R::LeakResponse, peak) = _vis_window(R, peak, peak)
+@inline function _vis_window(R::LeakResponse, plo, phi)
+    lo = plo + R.δ0
+    hi = phi + R.δ0 + R.n * R.dδ
     nv = nvis(R)
     if R.uniform_vis
         (hi <= R.v0 || lo >= R.v0 + nv * R.dv) && return 1, 0
@@ -286,6 +332,43 @@ end
     return max(ilo, 1), min(ihi, nv)
 end
 
+# apply column j: calls sink(i, value) for every E_vis bin i in the column's window
+@inline function _column(sink, R::LeakResponse, j::Int, peaks)
+    ve = R.evis_edges
+    if R.integrate
+        @inbounds plo = peaks[j]
+        @inbounds phi = peaks[j+1]
+        if phi < plo
+            plo, phi = phi, plo
+        end
+        dp = phi - plo
+        if dp > 1e-12
+            ilo, ihi = _vis_window(R, plo, phi)
+            ilo > ihi && return nothing
+            inv_dp = 1 / dp
+            Hprev = _H(R, j, ve[ilo], plo, phi, inv_dp)
+            @inbounds for i in ilo:ihi
+                Hnext = _H(R, j, ve[i+1], plo, phi, inv_dp)
+                sink(i, Hnext - Hprev)
+                Hprev = Hnext
+            end
+            return nothing
+        end
+        pk = (plo + phi) / 2                      # degenerate bin: fall back to point evaluation
+    else
+        @inbounds pk = peaks[j]
+    end
+    ilo, ihi = _vis_window(R, pk)
+    ilo > ihi && return nothing
+    Fprev = _F(R, j, ve[ilo] - pk)
+    @inbounds for i in ilo:ihi
+        Fnext = _F(R, j, ve[i+1] - pk)
+        sink(i, Fnext - Fprev)
+        Fprev = Fnext
+    end
+    return nothing
+end
+
 """
     fold!(out, R, spectrum, peaks) -> out
 
@@ -296,19 +379,11 @@ out[i] += sum_j P(E_vis bin i | E_true bin j) * spectrum[j], with column peaks `
 function fold!(out::AbstractVector, R::LeakResponse, spectrum::AbstractVector, peaks::AbstractVector)
     length(spectrum) == ntrue(R) || throw(DimensionMismatch("spectrum has length $(length(spectrum)), expected $(ntrue(R))"))
     length(out) == nvis(R) || throw(DimensionMismatch("out has length $(length(out)), expected $(nvis(R))"))
-    ve = R.evis_edges
+    length(peaks) == length(_evalpoints(R)) || throw(DimensionMismatch("peaks has the wrong length; use peak_positions(R, ...)"))
     @inbounds for j in R.jfirst:ntrue(R)
         s = spectrum[j]
         iszero(s) && continue
-        pk = peaks[j]
-        ilo, ihi = _vis_window(R, pk)
-        ilo > ihi && continue
-        Fprev = _F(R, j, ve[ilo] - pk)
-        for i in ilo:ihi
-            Fnext = _F(R, j, ve[i+1] - pk)
-            out[i] += (Fnext - Fprev) * s
-            Fprev = Fnext
-        end
+        _column((i, m) -> (@inbounds out[i] += m * s), R, j, peaks)
     end
     return out
 end
@@ -348,17 +423,8 @@ response_matrix(R::LeakResponse, f) = _matrix(R, peak_positions(R, f))
 
 function _matrix(R::LeakResponse, peaks::AbstractVector)
     M = zeros(eltype(peaks), nvis(R), ntrue(R))
-    ve = R.evis_edges
-    @inbounds for j in R.jfirst:ntrue(R)
-        pk = peaks[j]
-        ilo, ihi = _vis_window(R, pk)
-        ilo > ihi && continue
-        Fprev = _F(R, j, ve[ilo] - pk)
-        for i in ilo:ihi
-            Fnext = _F(R, j, ve[i+1] - pk)
-            M[i, j] = Fnext - Fprev
-            Fprev = Fnext
-        end
+    for j in R.jfirst:ntrue(R)
+        _column((i, m) -> (@inbounds M[i, j] = m), R, j, peaks)
     end
     return M
 end
@@ -368,18 +434,19 @@ end
 # ---------------------------------------------------------------------------------------------------------
 
 """
-    leak_nl_matrix(T, etrue_edges, evis_edges, f; Emin=1.022)
-    leak_nl_matrix(T, nl, etrue_edges, evis_edges; pull=0, scale=1, band=:asymmetric, Emin=1.022)
+    leak_nl_matrix(T, etrue_edges, evis_edges, f; Emin=1.022, integrate=true)
+    leak_nl_matrix(T, nl, etrue_edges, evis_edges; pull=0, scale=1, band=:asymmetric, Emin=1.022, integrate=true)
 
 Dense response matrix, as in the previous version. Builds a `LeakResponse` on every call; inside a fit,
 construct the `LeakResponse` once and use `fold`.
 """
-leak_nl_matrix(T::LeakageTemplates, etrue_edges, evis_edges, f; Emin::Real=1.022) =
-    response_matrix(LeakResponse(T, etrue_edges, evis_edges; Emin=Emin), f)
+leak_nl_matrix(T::LeakageTemplates, etrue_edges, evis_edges, f; Emin::Real=1.022, integrate::Bool=true) =
+    response_matrix(LeakResponse(T, etrue_edges, evis_edges; Emin=Emin, integrate=integrate), f)
 
 leak_nl_matrix(T::LeakageTemplates, nl::PositronNL, etrue_edges, evis_edges;
-               pull::Real=0, scale::Real=1, band::Symbol=:asymmetric, Emin::Real=1.022) =
-    response_matrix(LeakResponse(T, etrue_edges, evis_edges; nl=nl, Emin=Emin);
+               pull::Real=0, scale::Real=1, band::Symbol=:asymmetric, Emin::Real=1.022,
+               integrate::Bool=true) =
+    response_matrix(LeakResponse(T, etrue_edges, evis_edges; nl=nl, Emin=Emin, integrate=integrate);
                     pull=pull, scale=scale, band=band)
 
 end # module
