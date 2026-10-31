@@ -23,6 +23,8 @@ abstract type FluxModel end
 @kwdef struct ReactorFluxConfig{F<:FluxModel}
     flux_model::F = DayaBayFlux()
     datadir::String = datadir
+    average::Bool = false
+    N_pulls::Int64 = 19
 end
 
 
@@ -36,22 +38,24 @@ end
     flux::Function
     flux_on_mesh::Function
     datadir::String
+    average::Bool
 end
 
 
 function configure(cfg::ReactorFluxConfig = ReactorFluxConfig())
     ReactorFlux(
         cfg=cfg,
-        params = get_params(cfg.flux_model, datadir=cfg.datadir),
-        priors = get_priors(cfg.flux_model, datadir=cfg.datadir),
-        flux = get_flux(cfg.flux_model, datadir=cfg.datadir),
-        flux_on_mesh = get_flux_on_mesh(cfg.flux_model, datadir=cfg.datadir),
-        datadir = cfg.datadir
+        params = get_params(cfg.flux_model, datadir=cfg.datadir, N_pulls=cfg.N_pulls),
+        priors = get_priors(cfg.flux_model, datadir=cfg.datadir, N_pulls=cfg.N_pulls),
+        flux = get_flux(cfg.flux_model, datadir=cfg.datadir, average=cfg.average),
+        flux_on_mesh = get_flux_on_mesh(cfg.flux_model, datadir=cfg.datadir, average=cfg.average, N_pulls=cfg.N_pulls),
+        datadir = cfg.datadir,
+        average=cfg.average,
     )
 end
 
 
-function get_params(flux::DayaBayFlux; datadir = datadir)
+function get_params(flux::DayaBayFlux; datadir = datadir, N_pulls = 19)
     # TODO: is this part of DayaBay experiment or the reactor flux itself? not sure where to put
     # currently I define that we need 6 fluxes in here, but this is specific to the experiment
     # re-using for e.g. Juno, we need a different number of reactors, for future Julian...
@@ -62,65 +66,17 @@ function get_params(flux::DayaBayFlux; datadir = datadir)
 
     energy_per_fission = [data["U235"][1], data["U238"][1], data["Pu239"][1], data["Pu241"][1]]
 
-
-    ## reactor thermal power
-    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_thermal_power_uncertainty.yaml"))
-    reactor_thermal_power_scale = data["parameters"]["thermal_power_scale"][1] .* ones(6)
-
-    ## fission fraction scales
-    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions_scale.yaml"), dicttype=OrderedDict{String,Any})
-    fraction_scale = data["parameters"]["fission_fractions_scale"]
-    #println(fraction_scale)
-
-    ## neq scale
-    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_nonequilibrium_correction.yaml"))
-    mu = file["parameters"]["nonequilibrium_scale"][1]
-
-    neq_scale_R1 = ones(4) .* mu
-    neq_scale_R2 = ones(4) .* mu
-    neq_scale_R3 = ones(4) .* mu
-    neq_scale_R4 = ones(4) .* mu
-    neq_scale_R5 = ones(4) .* mu
-    neq_scale_R6 = ones(4) .* mu
-
-    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_snf.yaml"))
-    mu = file["parameters"]["snf_scale"][1]
-
-    snf_scale = ones(6) .* mu
-
-    names = data["correlations"]["fission_fractions_scale"]["names"]
-    #println(names)
-    fission_fractions_scale_R1 = collect([Float64(fraction_scale[name][1]) for name in names])
-    fission_fractions_scale_R2 = collect([Float64(fraction_scale[name][1]) for name in names])
-    fission_fractions_scale_R3 = collect([Float64(fraction_scale[name][1]) for name in names])
-    fission_fractions_scale_R4 = collect([Float64(fraction_scale[name][1]) for name in names])
-    fission_fractions_scale_R5 = collect([Float64(fraction_scale[name][1]) for name in names])
-    fission_fractions_scale_R6 = collect([Float64(fraction_scale[name][1]) for name in names])
-    spectrum_pulls = zeros(19)
+    spectrum_pulls = zeros(N_pulls)
 
     params = (;
         energy_per_fission,
-        reactor_thermal_power_scale,
-        neq_scale_R1,
-        neq_scale_R2,
-        neq_scale_R3,
-        neq_scale_R4,
-        neq_scale_R5,
-        neq_scale_R6,
-        snf_scale,
-        fission_fractions_scale_R1,
-        fission_fractions_scale_R2,
-        fission_fractions_scale_R3,
-        fission_fractions_scale_R4,
-        fission_fractions_scale_R5,
-        fission_fractions_scale_R6,
         spectrum_pulls,
     )
     return params
 end
 
 
-function get_priors(flux::DayaBayFlux; datadir = datadir)
+function get_priors(flux::DayaBayFlux; datadir = datadir, N_pulls = 19)
 
     ## energy per fission
     file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_energy_per_fission.yaml"))
@@ -129,83 +85,17 @@ function get_priors(flux::DayaBayFlux; datadir = datadir)
     mu = [data["U235"][1], data["U238"][1], data["Pu239"][1], data["Pu241"][1]]
     var = [data["U235"][2], data["U238"][2], data["Pu239"][2], data["Pu241"][2]].^2
     energy_per_fission = Distributions.MvNormal(mu, Diagonal(var))
-
-    ## reactor thermal power uncertainty
-    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_thermal_power_uncertainty.yaml"))
-    mu = data["parameters"]["thermal_power_scale"][1]
-    sigma = data["parameters"]["thermal_power_scale"][2] * mu * 0.01  # percent
-    reactor_thermal_power_scale = Distributions.MvNormal(mu .* ones(6), Diagonal(sigma.^2 .* ones(6)))
-
-    ## fission fraction scale
-    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions_scale.yaml"), dicttype=OrderedDict{String,Any})
-    fraction_scale = data["parameters"]["fission_fractions_scale"]
-
-    isotopes = ["U235", "U238", "Pu239", "Pu241"]
-    scale = zeros((4, 4))
-    for i in 1:4
-        for j in 1:4
-            scale[i, j] = fraction_scale[isotopes[i]][1] * fraction_scale[isotopes[i]][2] * fraction_scale[isotopes[j]][1] * fraction_scale[isotopes[j]][2] * 0.01 * 0.01   # percent
-        end
-    end
-
-    mu = collect([Float64(fraction_scale[name][1]) for name in isotopes])
-    corr_mat = hcat(data["correlations"]["fission_fractions_scale"]["matrix"]...)
-
-
-    cov_mat = corr_mat .* scale
-    fission_fractions_scale_R1 = Distributions.MvNormal(mu, cov_mat)
-    fission_fractions_scale_R2 = Distributions.MvNormal(mu, cov_mat)
-    fission_fractions_scale_R3 = Distributions.MvNormal(mu, cov_mat)
-    fission_fractions_scale_R4 = Distributions.MvNormal(mu, cov_mat)
-    fission_fractions_scale_R5 = Distributions.MvNormal(mu, cov_mat)
-    fission_fractions_scale_R6 = Distributions.MvNormal(mu, cov_mat)
-
-    # free parameters (official: unbounded); exp(±1) is far outside any fitted value
-    spectrum_pulls = Distributions.Uniform.(-ones(19), ones(19))
-
-    ## non-equilibrium correction
-    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_nonequilibrium_correction.yaml"))
-    mu = file["parameters"]["nonequilibrium_scale"][1] .* ones(4)
-    sigma = mu .* file["parameters"]["nonequilibrium_scale"][2] .* 0.01 # percent
-
-
-    neq_scale_R1 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
-    neq_scale_R2 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
-    neq_scale_R3 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
-    neq_scale_R4 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
-    neq_scale_R5 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
-    neq_scale_R6 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
-
-    # snf correction
-    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_snf.yaml"))
-    mu = file["parameters"]["snf_scale"][1] .* ones(6)
-    sigma = mu .* file["parameters"]["snf_scale"][2] .* 0.01   # percent
-    snf_scale = Distributions.MvNormal(mu, Diagonal(sigma.^2))
-
+    spectrum_pulls = Distributions.Uniform.(-ones(N_pulls), ones(N_pulls))
 
     priors = (;
         energy_per_fission,
-        reactor_thermal_power_scale,
-        neq_scale_R1,
-        neq_scale_R2,
-        neq_scale_R3,
-        neq_scale_R4,
-        neq_scale_R5,
-        neq_scale_R6,
-        snf_scale,
-        fission_fractions_scale_R1,
-        fission_fractions_scale_R2,
-        fission_fractions_scale_R3,
-        fission_fractions_scale_R4,
-        fission_fractions_scale_R5,
-        fission_fractions_scale_R6,
         spectrum_pulls,
     )
 
 end
 
 
-function extract_reactor_spectra(datadir = datadir)
+function extract_reactor_spectra(datadir = datadir; average = false)
     file = h5open(joinpath(datadir, "dayabay_data/reactor_antineutrino_spectra_hm.hdf5"))
     spec_Pu239 = Float64[]
     spec_Pu241 = Float64[]
@@ -252,6 +142,25 @@ function extract_reactor_spectra(datadir = datadir)
     foreach(x -> push!(R6_snf, x[2]), file["R6"][1:end])
     close(file)
 
+    if average
+        av = mean((R1_snf, R2_snf, R3_snf, R4_snf, R5_snf, R6_snf))
+        return_tup = (
+            Pu239=spec_Pu239,
+            Pu241=spec_Pu241,
+            U238=spec_U238,
+            U235=spec_U235,
+            E=E,
+            E_neq=E_neq,
+            neq_Pu239=neq_Pu239,
+            neq_Pu241=neq_Pu241,
+            neq_U235=neq_U235,
+            E_snf=E_snf,
+            snf=av
+        )
+
+        return return_tup
+    end
+
     return (
         Pu239=spec_Pu239,
         Pu241=spec_Pu241,
@@ -288,14 +197,15 @@ function exp_interpolator(x::Vector{Float64}, y::Vector{Float64})
 end
 
 """
-    get_flux_on_mesh(cfg; datadir)
+    get_flux_on_mesh(cfg; datadir, average)
 
 Returns `E -> flux` where `flux(thermal_power_scale, energy_per_fission, fission_fractions_scale, pulls, neq_scale,
-snf_scale, reac_idx)` gives `(main, neq, snf, correction)` at the antineutrino energies `E` (see [`get_flux`](@ref)).
+snf_scale, reac_idx; correction)` gives `(main, neq, snf, correction)` at the antineutrino energies `E` (see
+[`get_flux`](@ref)); the free spectrum correction depends only on `pulls` and can be passed in as `correction`.
 Everything that does not depend on the parameters (isotope spectra, NEQ and SNF corrections, interpolation weights of
 the free spectrum correction) is tabulated once for the mesh `E`.
 """
-function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir)
+function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, N_pulls = 19)
 
     # fixed ordering of isotopes
     names = (:U235, :U238, :Pu239, :Pu241)
@@ -303,7 +213,7 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir)
     fractions = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions.yaml"), dicttype=OrderedDict{String,Any})["parameters"]["fission_fractions"]
     fractions = [Float64(fractions[string(iso)]) for iso in names]
 
-    fluxes = extract_reactor_spectra(datadir)
+    fluxes = extract_reactor_spectra(datadir; average=average)
 
     # Huber-Mueller spectra [ν/fission/MeV], interpolated exponentially (log-linear) as in the official model
     isotope_shapes = [exp_interpolator(fluxes.E, fluxes.U235), exp_interpolator(fluxes.E, fluxes.U238),
@@ -311,12 +221,12 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir)
     # note: the Huber-Mueller spectra are per fission already; the number of antineutrinos per fission is only needed
     # to convert the reactor antineutrino rates into thermal power (in the experiment module)
 
-    # get nominal thermal power
-    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_thermal_power_nominal.yaml"))
-    nominal_thermal_power = file["parameters"]["nominal_thermal_power"]   # GW
-
     # snf correction (relative to the nominal spectrum, per reactor)
-    snf_rel_corr = [linear_interpolation(fluxes.E_snf, getproperty(fluxes, Symbol("R$(r)_snf")), extrapolation_bc = 0.0) for r in 1:6]
+    if average
+        snf_rel_corr = linear_interpolation(fluxes.E_snf, fluxes.snf, extrapolation_bc = 0.0)
+    else
+        snf_rel_corr = [linear_interpolation(fluxes.E_snf, getproperty(fluxes, Symbol("R$(r)_snf")), extrapolation_bc = 0.0) for r in 1:6]
+    end
     # neq correction (relative, per isotope; none for U238)
     neq_rel_corr = [linear_interpolation(fluxes.E_neq, fluxes.neq_U235, extrapolation_bc = 0.0), E -> 0.0,
                     linear_interpolation(fluxes.E_neq, fluxes.neq_Pu239, extrapolation_bc = 0.0),
@@ -327,11 +237,16 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir)
     GJ_to_MeV = 1e9 / elementary_charge * 1e-6 # reactor thermal power in GW, energy per fission in MeV
 
     # free spectrum correction: one parameter per edge of the official segmentation
-    spec_edges = convert(Array{Float64, 1}, readdlm(joinpath(datadir, "dayabay_data/parameters/reactor_antineutrino_spectrum_edges.tsv"))[2:end])
+    if N_pulls == 19
+        spec_edges = convert(Array{Float64, 1}, readdlm(joinpath(datadir, "dayabay_data/parameters/reactor_antineutrino_spectrum_edges.tsv"))[2:end])
+    else
+        spec_edges = collect(LinRange(1.8, 10, N_pulls))
+    end
+
 
     # SNF: fissions per second of a reactor at nominal thermal power, fission fractions and energies per fission
-    default_params = get_params(cfg, datadir=datadir)
-    fissions_per_second_nom = nominal_thermal_power * GJ_to_MeV / sum(fractions .* default_params.energy_per_fission)
+    default_params = get_params(cfg, datadir=datadir, N_pulls=N_pulls)
+    fissions_per_second_nom_bar_nom_th_power = GJ_to_MeV / sum(fractions .* default_params.energy_per_fission)
 
     function on_mesh(E::AbstractVector)
         #shape for each isotope
@@ -339,25 +254,49 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir)
         #relative NEQ correction for each isotope
         NEQ = [neq_rel_corr[i].(E) .* S[i] for i in 1:4]
         #relative SNF correction for each isotope for each reactor
-        SNF = [fissions_per_second_nom .* sum(fractions[i] .* S[i] for i in 1:4) .* snf_rel_corr[r].(E) for r in 1:6]
+        if average
+            SNF = fissions_per_second_nom_bar_nom_th_power .* sum(fractions[i] .* S[i] for i in 1:4) .* snf_rel_corr.(E)
+        else
+            SNF = [fissions_per_second_nom_bar_nom_th_power .* sum(fractions[i] .* S[i] for i in 1:4) .* snf_rel_corr[r].(E) for r in 1:6]
+        end
         # linear interpolation weights of the correction exponent between the edges (extrapolated outside)
-        k = [clamp(searchsortedlast(spec_edges, e), 1, length(spec_edges) - 1) for e in E]
-        t = [(e - spec_edges[kk]) / (spec_edges[kk+1] - spec_edges[kk]) for (e, kk) in zip(E, k)]
+        #=
+        ext_edges = vcat(collect(Float64, spec_edges), spec_edges[end] + (spec_edges[end] - spec_edges[end-1]))
+        n_ext = length(ext_edges)
+        k = [clamp(searchsortedlast(ext_edges, e), 1, n_ext - 1) for e in E]
+        t = [clamp((e - ext_edges[kk]) / (ext_edges[kk+1] - ext_edges[kk]), 0.0, 1.0) for (e, kk) in zip(E, k)]
 
-        function flux(thermal_power_scale, energy_per_fission, fission_fractions_scale, pulls, neq_scale, snf_scale, reac_idx)
+        function spectrum_correction(pulls)
+            N = length(pulls)
+            N == n_ext - 1 || throw(DimensionMismatch("expected $(n_ext - 1) spectrum pulls, got $N"))
+            p(i) = i <= N ? pulls[i] : zero(eltype(pulls))      # hidden extra pull, fixed to 0
+            return [exp(p(kk) + tt * (p(kk + 1) - p(kk))) for (kk, tt) in zip(k, t)]
+        end
+        =#
+
+        k = [clamp(searchsortedlast(spec_edges, e), 1, length(spec_edges) - 1) for e in E]
+        t = clamp.([(e - spec_edges[kk]) / (spec_edges[kk+1] - spec_edges[kk]) for (e, kk) in zip(E, k)], 0.0, 1.0)
+        spectrum_correction(pulls) = @. exp(pulls[k] + t * (pulls[k+1] - pulls[k]))
+        # `correction` can be passed in when it is shared by several reactors (it depends only on `pulls`)
+        function flux(thermal_power_scale, energy_per_fission, fission_fractions_scale, pulls, neq_scale, snf_scale, reac_idx;
+            correction = spectrum_correction(pulls))
             w = fission_fractions_scale .* fractions
             fissions_per_GJ = GJ_to_MeV * thermal_power_scale / sum(w .* energy_per_fission)
             main = fissions_per_GJ .* (w[1] .* S[1] .+ w[2] .* S[2] .+ w[3] .* S[3] .+ w[4] .* S[4])
             # skips 2nd entry (U238 has no NEQ correction!)
             neq = fissions_per_GJ .* (neq_scale[1] * w[1] .* NEQ[1] .+ neq_scale[3] * w[3] .* NEQ[3] .+ neq_scale[4] * w[4] .* NEQ[4])
-            correction = @. exp(pulls[k] + t * (pulls[k+1] - pulls[k]))
-            return main, neq, snf_scale .* SNF[reac_idx], correction
+            if average
+                SNF_fac = SNF
+            else
+                SNF_fac = SNF[reac_idx]
+            end
+            return main, neq, snf_scale .* SNF_fac, correction
         end
     end
 end
 
 """
-    get_flux(cfg; datadir)
+    get_flux(cfg; datadir, average)
 
 Returns `reactor_flux(E, thermal_power_scale, energy_per_fission, fission_fractions_scale, pulls, neq_scale,
 snf_scale, reac_idx) -> (main, neq, snf, correction)` at antineutrino energies `E` (number or vector): the
@@ -365,8 +304,8 @@ antineutrino spectrum per GW thermal power [ν/s/MeV/GW] and the extra flux from
 SNF flux [ν/s/MeV] of a reactor at nominal power, and the free spectrum correction, which multiplies only `main` (as
 in the official model). For repeated evaluation on a fixed mesh use [`get_flux_on_mesh`](@ref).
 """
-function get_flux(cfg::DayaBayFlux; datadir = datadir)
-    on_mesh = get_flux_on_mesh(cfg; datadir = datadir)
+function get_flux(cfg::DayaBayFlux; datadir = datadir, average = false)
+    on_mesh = get_flux_on_mesh(cfg; datadir = datadir, average = average)
     function reactor_flux(E, args...)
         E isa Number && return map(first, on_mesh([E])(args...))
         on_mesh(collect(Float64, E))(args...)
