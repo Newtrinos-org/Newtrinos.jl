@@ -146,15 +146,19 @@ function get_assets(datadir = @__DIR__)
     Ebins = unique(stack((Elow, Ehigh)))
     Ec = convert(Vector{Float64}, data[:, 3])
 
+    ana_mask = Ec .<= 8.0
     # observed has negative entries bc expected background is subtracted -> stat. fluctuations mean negative entries
     hist_to_count = diff(Ebins)
     Ewidth = diff(Ebins)
-    observed = convert(Vector{Float64}, data[:, 4])
+    
     observed_err = convert(Vector{Float64}, data[:, 5])
-
+    observed_all = convert(Vector{Float64}, data[:, 4])
+    observed = observed_all[ana_mask]
     n_protons = 2e29 # estimate from claude
     nominal_livetime = 31.3
     nominal_livetime_seconds = nominal_livetime * 60 * 60 * 24
+
+
 
     assets = (;
         nominal_livetime,
@@ -162,12 +166,13 @@ function get_assets(datadir = @__DIR__)
         Ebins,
         Ec,
         Ewidth,
-        hist_to_count,
         n_protons,
+        observed_all,
         observed,
         observed_err,
         nominal_thermal_power,
         Baseline_m,
+        ana_mask,
     )
 end
 
@@ -275,6 +280,8 @@ function get_forward_model(physics, assets; debug = false)
 
     eres = get_eres()
 
+    ana_mask = assets.ana_mask
+
     #deposited energy, Edep + 0.782 ≈ Enu
     E_fine = R.etrue_edges
     E_fine_c = (E_fine[1:end-1] + E_fine[2:end]) / 2
@@ -334,6 +341,7 @@ function get_forward_model(physics, assets; debug = false)
     flux_norm = 1e-45 * n_p * P_th_seconds * invL2
     spec_prefac_snf = 1e-45 * n_p * P_th_seconds * invL2
 
+
     function forward_model(params)
         T = promote_type(
                 #eltype(params.tao_eres_a),
@@ -370,8 +378,10 @@ function get_forward_model(physics, assets; debug = false)
         scaled_eres = eres(E_vis_c, params.tao_eres_pull)
         erec_spectrum = Newtrinos.Helpers.smear_erf(evis_spectrum, scaled_eres, E_vis_edges)
         coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_norm
-
-        return MvNormal(coarse_counts, Diagonal(assets.observed_err.^2))
+        if debug
+            return MvNormal(coarse_counts, Diagonal(assets.observed_err.^2))
+        end
+        return MvNormal(coarse_counts[ana_mask], Diagonal(assets.observed_err[ana_mask].^2))
     end
 end
 
@@ -379,14 +389,14 @@ end
 function get_plot(physics, assets)
     Ec = assets.Ec
     Ebins = assets.Ebins
-    obs = assets.observed
+    obs = assets.observed_all
     obs_err = assets.observed_err
 
     
     
     function plot(params)
-        m = mean(get_forward_model(physics, assets)(params))
-        s = sqrt.(var(get_forward_model(physics, assets)(params)))
+        m = mean(get_forward_model(physics, assets; debug=true)(params))
+        s = sqrt.(var(get_forward_model(physics, assets; debug=true)(params)))
 
         f = Figure()
         ax = Axis(f[1, 1])
@@ -402,7 +412,7 @@ function get_plot(physics, assets)
         ax.xticklabelsvisible = false
 
         ax2 = Axis(f[2,1])
-        plot!(ax2, Ec, assets.observed ./ m, color=:black, label="Observed")
+        plot!(ax2, Ec, obs ./ m, color=:black, label="Observed")
         hlines!(ax2, 1, label="Expected")
         barplot!(ax2, Ec, 1 .+ s ./ m, width=diff(Ebins), gap=0, fillto= 1 .- s./m, alpha=0.5, label="Standard Deviation")
         ylims!(ax2, 0.9, 1.1)

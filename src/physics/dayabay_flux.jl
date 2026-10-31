@@ -239,10 +239,10 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, 
     # free spectrum correction: one parameter per edge of the official segmentation
     if N_pulls == 19
         spec_edges = convert(Array{Float64, 1}, readdlm(joinpath(datadir, "dayabay_data/parameters/reactor_antineutrino_spectrum_edges.tsv"))[2:end])
-    
     else
-        spec_edges = LinRange(1.8, 9.0, N_pulls)
+        spec_edges = collect(LinRange(1.8, 10, N_pulls))
     end
+
 
     # SNF: fissions per second of a reactor at nominal thermal power, fission fractions and energies per fission
     default_params = get_params(cfg, datadir=datadir, N_pulls=N_pulls)
@@ -260,9 +260,22 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, 
             SNF = [fissions_per_second_nom_bar_nom_th_power .* sum(fractions[i] .* S[i] for i in 1:4) .* snf_rel_corr[r].(E) for r in 1:6]
         end
         # linear interpolation weights of the correction exponent between the edges (extrapolated outside)
-        k = [clamp(searchsortedlast(spec_edges, e), 1, length(spec_edges) - 1) for e in E]
-        t = [(e - spec_edges[kk]) / (spec_edges[kk+1] - spec_edges[kk]) for (e, kk) in zip(E, k)]
+        #=
+        ext_edges = vcat(collect(Float64, spec_edges), spec_edges[end] + (spec_edges[end] - spec_edges[end-1]))
+        n_ext = length(ext_edges)
+        k = [clamp(searchsortedlast(ext_edges, e), 1, n_ext - 1) for e in E]
+        t = [clamp((e - ext_edges[kk]) / (ext_edges[kk+1] - ext_edges[kk]), 0.0, 1.0) for (e, kk) in zip(E, k)]
 
+        function spectrum_correction(pulls)
+            N = length(pulls)
+            N == n_ext - 1 || throw(DimensionMismatch("expected $(n_ext - 1) spectrum pulls, got $N"))
+            p(i) = i <= N ? pulls[i] : zero(eltype(pulls))      # hidden extra pull, fixed to 0
+            return [exp(p(kk) + tt * (p(kk + 1) - p(kk))) for (kk, tt) in zip(k, t)]
+        end
+        =#
+
+        k = [clamp(searchsortedlast(spec_edges, e), 1, length(spec_edges) - 1) for e in E]
+        t = clamp.([(e - spec_edges[kk]) / (spec_edges[kk+1] - spec_edges[kk]) for (e, kk) in zip(E, k)], 0.0, 1.0)
         spectrum_correction(pulls) = @. exp(pulls[k] + t * (pulls[k+1] - pulls[k]))
         # `correction` can be passed in when it is shared by several reactors (it depends only on `pulls`)
         function flux(thermal_power_scale, energy_per_fission, fission_fractions_scale, pulls, neq_scale, snf_scale, reac_idx;
