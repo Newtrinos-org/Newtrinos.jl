@@ -62,8 +62,6 @@ function get_params()
      # alpha_n, fast_n, double_n, atmo, acc
      # MlE of 2609.37895
     other_rate = 0.05 + 0.02 + 0.13 + 0.11 + 0.07
-    # other_rate = 5.40
-    IBD_rate = 36.02
     efficiency = 0.7401
 
 
@@ -87,13 +85,10 @@ function get_params()
     juno_dayabay_ffs = ones(4)
 
     reactor_thermal_power_scale = ones(9)
-    # reactor_thermal_power_scale = 1.0
 
     eres_unc_scale = 0.0
     e_scale = 1.0
-    e_bias = 0.0
 
-    global_rate = 36.02
     lsnl_pull = 0.0
 
     params = (
@@ -108,10 +103,6 @@ function get_params()
         juno_taishan_neq_scale = juno_taishan_neq_scale,
         juno_yangjiang_neq_scale =juno_yangjiang_neq_scale,
         juno_dayabay_neq_scale = juno_dayabay_neq_scale,        
-        #juno_res_a = 0.0261,
-        #juno_res_b = 0.0082,
-        #juno_res_c = 0.0123,
-        #juno_IBD_rate = IBD_rate,
         
         juno_efficiency = efficiency,
         juno_reactor_thermal_power_scale = reactor_thermal_power_scale,
@@ -120,14 +111,10 @@ function get_params()
         juno_dayabay_ffs = juno_dayabay_ffs,
         juno_eres_unc_scale = eres_unc_scale,
         juno_e_scale = e_scale,
-        juno_e_bias = e_bias,
-        # juno_global_rate = global_rate,
         juno_lsnl_pull = lsnl_pull,
-        #juno_lsnl_scale = 0.,
-        juno_taishan_tps = 1.0,
-        juno_yangjiang_tps = 1.0,
-        juno_dayabay_tps = 1.0,
-        juno_global_norm = 1.0,
+        #juno_taishan_tps = 1.0,
+        #juno_yangjiang_tps = 1.0,
+        #juno_dayabay_tps = 1.0,
     )
 
 end
@@ -245,17 +232,13 @@ function get_priors()
         juno_taishan_ffs = juno_taishan_ffs,
         juno_yangjiang_ffs = juno_yangjiang_ffs,
         juno_dayabay_ffs = juno_dayabay_ffs,
-        juno_taishan_tps = taishan_tps,
-        juno_yangjiang_tps = yangjiang_tps,
-        juno_dayabay_tps = dayabay_tps,
+        #juno_taishan_tps = taishan_tps,
+        #juno_yangjiang_tps = yangjiang_tps,
+        #juno_dayabay_tps = dayabay_tps,
         juno_reactor_thermal_power_scale = thermal_power_scale,
         juno_e_scale = e_scale,
-        juno_e_bias = e_bias,
         juno_eres_unc_scale = eres_unc_scale,
-        # juno_global_rate = global_rate,
         juno_lsnl_pull = lsnl_pull,
-        #juno_lsnl_scale = Normal(0.0, 0.1),
-        juno_global_norm = Uniform(0, 2)
     )
 end
 
@@ -287,11 +270,9 @@ end
 function get_eres()
     data = readdlm(joinpath(@__DIR__, "207_days/eres_207_days.txt"), skipstart=19)
     E = data[:, 1]
-    # mul
     rel_eres_nom = data[:, 3] .* 0.01
     # reuse refine_lsnl, it multiplies the nominal curve with energy
     # which is exactly what we want here to get the absolute energy resolution
-    #rel_eres_p = data[:, 4] .* 0.01
     x, nom = refine_lsnl(E, rel_eres_nom)
     nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
     function _eres(E)
@@ -317,9 +298,6 @@ function get_assets(datadir = @__DIR__)
     nominal_livetime_seconds = nominal_livetime * 60 * 60 * 24
     n_protons = 1.442e33
 
-    Delta_E = 20e-3   # 20 keV bins
-
-    #fine_binning = collect(0:Delta_E:12)
  
     reactors = DataFrame(
         Reactor = ["Taishan", "Taishan", "Yangjiang", "Yangjiang", "Yangjiang", "Yangjiang", "Yangjiang", "Yangjiang", "Daya Bay"],
@@ -371,24 +349,7 @@ function get_assets(datadir = @__DIR__)
     # read in uncoscillated expectation
     data = readdlm(joinpath(@__DIR__, "207_days/unoscillated_207_days.txt"), skipstart=14)
     no_osc = convert.(Float64, data[:, 4]) .* hist_to_count
-    #observed = no_osc
-    reactor_config = Newtrinos.dayabay_flux.configure()
-    energy_per_fission = reactor_config.params.energy_per_fission
-    fractions = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days", "dayabay_data/parameters/reactor_fission_fractions.yaml"), dicttype=OrderedDict{String,Any})["parameters"]["fission_fractions"]
-    fractions = NamedTuple((Symbol(key),value) for (key,value) in fractions)
 
-    file = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days", "dayabay_data/parameters/antineutrinos_per_fission_huber_mueller.yaml"))
-    nu_per_f = file["parameters"]["antineutrinos_per_fission"]
-    nu_per_fission = NamedTuple((Symbol(key), value) for (key, value) in nu_per_f)
-    # also convert from MeV to GJ
-    elementary_charge = 1.602176634e-19
-
-        #           Giga   Joule -> eV        Mega
-    GJ_to_MeV = 1e9 / elementary_charge * 1e-6 # reactor thermal power in GW, energy per fission in MeV
-
-    #multipliy: rate -> thermal power, divide: thermal power -> rate
-    nom_conversion_factor = sum([energy_per_fission[i] * fractions[iso] for (i, iso) in enumerate(keys(fractions))]) / sum([fractions[iso] * nu_per_fission[iso] for (i, iso) in enumerate(keys(fractions))]) / GJ_to_MeV
-    
     assets = (;
         reactors,
         eres_a,
@@ -475,10 +436,6 @@ function project_to_bins(image_edges, counts, target_edges)
     out
 end
 
-#function eres(E, a, b, c)
-#    sigma_E = @. sqrt(a^2 * E^2 + b^2 * E + c^2)
-#end
-
 """
     smear_bin_centres(counts, σ, edges; nσ = 8)
 
@@ -531,7 +488,6 @@ function get_forward_model(physics, assets; debug = false)
 
 
     E_ana = assets.Ebins
-    E_ana_c = assets.Ec
     E_fine = collect(E_ana[1]:0.02:E_ana[end])
     E_fine_c = (E_fine[1:end-1] + E_fine[2:end]) / 2
 
@@ -568,8 +524,6 @@ function get_forward_model(physics, assets; debug = false)
     lsnl = get_lsnl_correction()
     eres = get_eres()
 
-    # the reactor fluxes on the integration mesh depend only on the reactor parameters: computed once per evaluation
-    # and shared by all AD-periods; (main × correction + neq, snf) per reactor
     mesh_flux = physics.flux.flux_on_mesh(E_nu_mesh)
     ffs_symbols = [
         :juno_taishan_ffs,
@@ -605,6 +559,7 @@ function get_forward_model(physics, assets; debug = false)
         :juno_dayabay_snf_scale,
     ]
 
+    #=
     tps_symbols = [
         :juno_taishan_tps,
         :juno_taishan_tps,
@@ -616,6 +571,7 @@ function get_forward_model(physics, assets; debug = false)
         :juno_yangjiang_tps,
         :juno_dayabay_tps,
     ]
+    =#
     function reactor_fluxes(params)
         map(1:9) do r
             main, neq, snf, correction = mesh_flux(params.juno_reactor_thermal_power_scale[r], params.energy_per_fission,
@@ -645,13 +601,6 @@ function get_forward_model(physics, assets; debug = false)
         [nue_survival(E_nu_GeV, L, params) for L in baselines_km]
     end
 
-    """
-    function osc_probabilities(params)
-        standard_osc || return [osc.osc_prob(E_fine_c ./ 1e3, [L], params, anti=true)[:, 1, 1, 1] for L in baselines_km]
-        [nue_survival(E_fine_c ./ 1e3, [L], params)[:] for L in baselines_km]
-    end
-    """
-
     P_th_seconds = nominal_thermal_power .* livetime_seconds
     n_p = assets.n_protons
 
@@ -666,15 +615,11 @@ function get_forward_model(physics, assets; debug = false)
     geo_shape = assets.geo_shape
     other_shape = assets.other_shape
 
-    # TODO: properly parameterise and move inside the forward model
     sigma_E = eres(E_fine_c)
 
 
     function forward_model(params)
         T = promote_type(
-                #eltype(params.juno_res_a),
-                #eltype(params.juno_res_b),
-                #eltype(params.juno_res_c),
                 eltype(params.juno_reactor_thermal_power_scale),
                 eltype(params.juno_taishan_ffs),
                 eltype(params.juno_yangjiang_ffs),
@@ -691,7 +636,6 @@ function get_forward_model(physics, assets; debug = false)
                 eltype(params.juno_bipo_rate),
                 eltype(params.juno_other_rate),
                 eltype(params.juno_eres_unc_scale),
-                eltype(params.juno_e_bias),
                 eltype(params.juno_e_scale),
                 eltype(params.juno_lsnl_pull),
                 eltype(params.spectrum_pulls),
@@ -734,16 +678,14 @@ function get_forward_model(physics, assets; debug = false)
         interm_spec .*= integral_weights
         spec = vec(sum(reshape(interm_spec, NQ, NFc), dims = 1))
 
-        E_vis_edges = lsnl(E_fine, params.juno_lsnl_pull) .* params.juno_e_scale .+ params.juno_e_bias
-        # E_vis_edges = f_lsnl .* (E_fine .+ params.juno_e_bias) .* params.juno_e_scale
-        #E_vis_edges = E_fine .* (f_lsnl .+ params.juno_e_bias) .* params.juno_e_scale
+        E_vis_edges = lsnl(E_fine, params.juno_lsnl_pull) .* params.juno_e_scale
         evis_spectrum = project_to_bins(E_vis_edges, spec .* lsnl_mask, E_fine)
         scaled_eres = zeros(T, length(sigma_E))
         scaled_eres .+= sigma_E .* (1 + 0.05 * params.juno_eres_unc_scale)
         erec_spectrum = Newtrinos.Helpers.smear_erf(evis_spectrum, scaled_eres, E_fine)
-        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency# .* params.juno_global_norm
+        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency
         if debug
-            return coarse_counts, bg #, E_nu_GeV , survival_probabilities(params)
+            return coarse_counts, bg
         end
 
         #return MvNormal(coarse_counts, Diagonal(assets.observed))# distprod(Poisson.(coarse_counts))# .+ bg))
@@ -753,73 +695,37 @@ end
 
 
 function get_plot(physics, assets)
-    function plot(params; data_to_plot::Vector, title_suffix::String = "")
-#
-        E_vis = assets.E_bins_visible
-        E_nu  = assets.visible_to_neutrino_interp.(E_vis)
+    function plot(params)
+       fwd = Newtrinos.juno_rewrite.get_forward_model(physics, assets, debug=true)
+        f = Figure()
+        ax = Axis(f[1, 1])
+        ax2 = Axis(f[2, 1])
+        Ec = assets.Ec
         
-        L_km  = assets.reactors.Baseline_m ./ 1e3
-        P = physics.osc.osc_prob(E_nu ./ 1e3, L_km, params; anti=true)
-        Pavg = vec(sum(P[:, :, 1, 1] .* assets.reactors.Flux_Factor', dims=2))
+        cols = Makie.wong_colors()
+        colors = (lihe=cols[1], geo=cols[4], bipo=cols[2], world=cols[3], other=:grey)
 
-        unosc_counts = assets.no_osc_interp.(E_nu) .* params.junotao_flux_scale .* params.juno_detection_epsilon
-        osc_unsmear = unosc_counts .* Pavg
-        total_model = get_expected(params, physics, assets)
-
-        bkg = Dict(
-            "Geo"      => assets.background_rate_interp.(E_vis) .* params.juno_geo_rate_norm .* assets.LIVETIME_DAYS,
-            "Accident" => assets.accidental_bkg_rate_interp.(E_vis) .* params.juno_accidental_norm .* assets.LIVETIME_DAYS,
-            "WorldR"   => assets.world_reactor_bkg_rate_interp.(E_vis) .* params.juno_world_reactor_norm .* assets.LIVETIME_DAYS,
-            "LiHe"     => assets.lihe_bkg_rate_interp.(E_vis) .* params.juno_lihe_norm .* assets.LIVETIME_DAYS,
-            "CO"       => assets.co_bkg_rate_interp.(E_vis) .* params.juno_co_norm .* assets.LIVETIME_DAYS,
-            "ATMNC"    => assets.atmnc_bkg_rate_interp.(E_vis) .* params.juno_atmnc_norm .* assets.LIVETIME_DAYS,
-            "FastN"    => assets.fast_neutron_bkg_rate_interp.(E_vis) .* params.juno_fast_neutron_norm .* assets.LIVETIME_DAYS,
-        )
-        
-        total_bkg = reduce(+, values(bkg))
-        smeared_signal = total_model .- total_bkg
-
-        fig = Figure(resolution=(1200, 1350), fontsize=14)
-
-        ax1 = Axis(fig[1, 1], title="No-osc vs Oscillated $title_suffix",
-                   xlabel="E₍vis₎ [MeV]", ylabel="Counts/bin")
-        lines!(ax1, E_vis, unosc_counts,  label="No-osc", linestyle=:dash, color=:black)
-        lines!(ax1, E_vis, osc_unsmear,  label="Osc unsmeared",  color=:blue)
-        axislegend(ax1)
-
-        ax2 = Axis(fig[1, 2], title="Oscillated + Backgrounds + Data",
-                   xlabel="E₍vis₎ [MeV]", ylabel="Counts/bin")
-        lines!(ax2, E_vis, smeared_signal, label="Signal (smeared)", color=:red, linewidth=2)
-        for (name, arr) in bkg
-            lines!(ax2, E_vis, arr, label=name, linestyle=:dot)
+        all_bg = zeros(size(Ec))
+        sig, bg = fwd(params)
+        for (k, h) in pairs(bg)
+            stephist!(ax, Ec, weights = h ./assets.hist_to_count, bins=assets.Ebins, label=String(k), color=colors[k])
+            all_bg .+= h
         end
-        lines!(ax2, E_vis, total_model, label="Signal + all bkgs", color=:magenta, linewidth=3)
 
-        scatter!(ax2, E_vis, data_to_plot, color=:black, label="Data being fit", markersize=3)
-        axislegend(ax2)
+        Ec = assets.Ec
+        stephist!(ax, Ec, weights = assets.signal_mle, bins=assets.Ebins, color=:pink, label="Juno signal")
+        scatter!(ax, Ec, assets.observed ./assets.hist_to_count, color=:grey, label="Observed")
+        stephist!(ax, Ec, weights=(sig .+ all_bg) ./ assets.hist_to_count, bins=assets.Ebins, color="red", label="Newtrinos.jl, signal+bg")
+        stephist!(ax, Ec, weights=sig ./ assets.hist_to_count, bins=assets.Ebins, label="Newtrinos.jl, signal")
+        stephist!(ax2, Ec, weights = sig ./ assets.observed, bins=assets.Ebins, label="Newtrinos.jl signal / Juno signal")
+        stephist!(ax2, Ec, weights = (sig .+ all_bg) ./ assets.observed, bins=assets.Ebins, label="Newtrinos.jl exp / observed")
 
-        ax3 = Axis(fig[2, 1], title="Unsmeared vs Smeared",
-                   xlabel="E₍vis₎ [MeV]", ylabel="Counts/bin")
-        lines!(ax3, E_vis, osc_unsmear, label="Unsmeared (osc)", color=:blue)
-        lines!(ax3, E_vis, smeared_signal, label="Smeared", color=:green)
-        axislegend(ax3)
+        axislegend(ax, position=:rt)
+        rowsize!(f.layout, 1, Relative(2/3))
+        ylims!(ax2, .9, 1.1)
+        f
 
-        ax4 = Axis(fig[2, 2], title="⟨Pₑₑ⟩ vs Eₙᵤ",
-                   xlabel="Eₙᵤ [MeV]", ylabel="⟨Pₑₑ⟩")
-        lines!(ax4, E_nu, Pavg, label="⟨Pₑₑ⟩", color=:orange, linewidth=2)
-        axislegend(ax4)
-
-        ax5 = Axis(fig[3, 1:2], title="Residuals",
-                   xlabel="E₍vis₎ [MeV]", ylabel="(Data-Model)/√Model")
-
-        residuals = (data_to_plot .- total_model) ./ sqrt.(total_model .+ 1e-9)
-        hlines!(ax5, 0.0, color=:red, linestyle=:dash)
-        ylims!(ax5, -5, 5) 
-
-        errorbars!(ax5, E_vis, residuals, ones(length(residuals)), color=:black)
-        scatter!(ax5, E_vis, residuals, color=:black)
-
-        return fig
+        return f
     end
 
     return plot
