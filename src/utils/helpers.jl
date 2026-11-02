@@ -1,5 +1,7 @@
 module Helpers
 
+using ..Newtrinos
+
 using SpecialFunctions: erf
 
 """
@@ -24,6 +26,30 @@ function bin(df, out_edges; col=1)
 end
 
 """
+    project_to_bins(image_edges, counts, target_edges)
+
+Energy scale distortion as a count-conserving bin projection (official `AxisDistortionMatrixPointwise`): the events of
+source bin j, assumed uniform within it, are mapped to [image_edges[j], image_edges[j+1]] (monotonic distortion) and
+shared among the `target_edges` bins in proportion to the overlap. Events mapped outside the target range are lost.
+"""
+function project_to_bins(image_edges, counts, target_edges)
+    T = promote_type(eltype(image_edges), eltype(counts))
+    out = zeros(T, length(target_edges) - 1)
+    nt = length(target_edges) - 1
+    @inbounds for j in eachindex(counts)
+        A, B = image_edges[j], image_edges[j+1]
+        B > A || continue
+        k0 = max(searchsortedlast(target_edges, A), 1)
+        k1 = min(searchsortedlast(target_edges, B), nt)
+        for k in k0:k1
+            overlap = min(B, target_edges[k+1]) - max(A, target_edges[k])
+            overlap > 0 && (out[k] += counts[j] * overlap / (B - A))
+        end
+    end
+    out
+end
+
+"""
     rebin(df, out_centers; var_col=1, count_col=2)
 
 Rebins a table of (observable, count) pairs in DataFrame or Matrix `df` into `out_centers`.
@@ -42,6 +68,29 @@ function rebin(df, out_edges; var_col=1, count_col=2)
         end
     end
     return counts
+end
+
+"""
+    rebin_index(fine_edges, coarse_edges)
+
+Index of the coarse bin each fine bin falls into (0 outside); the coarse edges must be a subset of the fine ones.
+"""
+function rebin_index(fine_edges, coarse_edges)
+    @assert all(any(isapprox.(fine_edges, e; atol = 1e-9)) for e in coarse_edges) "coarse edges are not on the fine grid"
+    idx = zeros(Int, length(fine_edges) - 1)
+    for i in eachindex(idx)
+        k = searchsortedlast(coarse_edges, fine_edges[i] + 1e-9)
+        1 <= k < length(coarse_edges) && (idx[i] = k)
+    end
+    idx
+end
+
+function rebin(counts, idx, n)
+    out = zeros(eltype(counts), n)
+    @inbounds for i in eachindex(counts, idx)
+        idx[i] > 0 && (out[idx[i]] += counts[i])
+    end
+    out
 end
 
 """
@@ -68,6 +117,29 @@ function not_a_knot_spline(x::Vector{Float64}, y::Vector{Float64}, xnew::Abstrac
         a, c = x[k+1] - t, t - x[k]
         (M[k] * a^3 + M[k+1] * c^3) / (6h[k]) + (y[k] / h[k] - M[k] * h[k] / 6) * a + (y[k+1] / h[k] - M[k+1] * h[k] / 6) * c
     end
+end
+
+"""
+    smear_bin_centres(counts, σ, edges; nσ = 8)
+
+Energy resolution as in the official model (`HistSmearNormalMatrixBC`): the events of each bin i are smeared with a
+Gaussian of width σ[i] around its centre, evaluated at the centres of the bins of the same binning (times the bin
+width).
+"""
+function smear_bin_centres(counts, σ, edges; nσ = 8)
+    T = promote_type(eltype(counts), eltype(σ))
+    c = (edges[1:end-1] .+ edges[2:end]) ./ 2
+    out = zeros(T, length(c))
+    @inbounds for i in eachindex(counts, σ)
+        iszero(counts[i]) && continue
+        lo = searchsortedfirst(c, c[i] - nσ * σ[i])
+        hi = searchsortedlast(c, c[i] + nσ * σ[i])
+        norm = counts[i] / (sqrt(2π) * σ[i])
+        for j in lo:hi
+            out[j] += norm * (edges[j+1] - edges[j]) * exp(-0.5 * ((c[j] - c[i]) / σ[i])^2)
+        end
+    end
+    out
 end
  
 # standard normal CDF and the antiderivative of the CDF, Ψ(z) = ∫_{-∞}^{z} Φ(t) dt = z Φ(z) + φ(z)
@@ -134,6 +206,53 @@ function smear_erf(counts::AbstractVector, σ::AbstractVector, edges::AbstractVe
         end
     end
     return out
+end
+
+"""
+    refine_lsnl(E, f; refine_times = 4, newmin = 0.5, newmax = 12.1)
+
+LSNL curve processing of the official model (`refine_lsnl_data`): the relative curve f = Evis/Escint is converted to the
+absolute Evis(Escint), interpolated with a cubic spline on a `refine_times` finer grid and extrapolated linearly (with
+the outermost fine segments) to [`newmin`, `newmax`]. Returns the fine Escint grid and Evis on it.
+"""
+function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}; refine_times = 4, newmin = 0.7, newmax = 12.0)
+    xfine = collect(range(E[1], E[end], length = (length(E) - 1) * refine_times + 1))
+    yfine = not_a_knot_spline(E, f .* E, xfine)
+    step = xfine[2] - xfine[1]
+    xleft = collect(newmin:step:xfine[1]-step*1e-9)
+    stepright = xfine[end] - xfine[end-1]
+    xright = collect(xfine[end]:stepright:newmax+stepright*1e-6)[2:end]
+    sl = (yfine[2] - yfine[1]) / (xfine[2] - xfine[1])
+    sr = (yfine[end] - yfine[end-1]) / (xfine[end] - xfine[end-1])
+    yleft = @. yfine[1] + sl * (xleft - xfine[1])
+    yright = @. yfine[end] + sr * (xright - xfine[end])
+    vcat(xleft, xfine, xright), vcat(yleft, yfine, yright)
+end
+
+"""
+    wrap_func(func, pars, keep)
+
+Wrap a function `func` s.t. it only takes arguments provided by `keep` of all arguments `pars`.
+Returns the wrapped function, the kept arguments and the skipped arguments
+"""
+function wrap_func(func, pars, keep)
+    skipped_pars = []
+    for n in keys(pars)
+        #println(n)
+        if !(n in keep)
+            push!(skipped_pars, n)
+        end
+    end
+    skip = NamedTuple((k, pars[k]) for k in skipped_pars)
+    kept_pars = NamedTuple((key, pars[key]) for key in keep)
+    println(kept_pars)
+    @assert length(kept_pars) + length(skip) == length(pars)
+    function wrapped_func(p)
+        arg = Newtrinos.safe_merge(p, skip)
+        return func(arg)
+    end
+
+    return wrapped_func, kept_pars, skip
 end
 
 

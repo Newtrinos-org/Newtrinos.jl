@@ -176,53 +176,6 @@ function get_assets(datadir = @__DIR__)
     )
 end
 
-"""
-    refine_lsnl(E, f; refine_times = 4, newmin = 0.5, newmax = 12.1)
-
-LSNL curve processing of the official model (`refine_lsnl_data`): the relative curve f = Evis/Escint is converted to the
-absolute Evis(Escint), interpolated with a cubic spline on a `refine_times` finer grid and extrapolated linearly (with
-the outermost fine segments) to [`newmin`, `newmax`]. Returns the fine Escint grid and Evis on it.
-"""
-function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}; refine_times = 4, newmin = 0.7, newmax = 12.0)
-    xfine = collect(range(E[1], E[end], length = (length(E) - 1) * refine_times + 1))
-    yfine = Newtrinos.Helpers.not_a_knot_spline(E, f .* E, xfine)
-    step = xfine[2] - xfine[1]
-    xleft = collect(newmin:step:xfine[1]-step*1e-9)
-    stepright = xfine[end] - xfine[end-1]
-    xright = collect(xfine[end]:stepright:newmax+stepright*1e-6)[2:end]
-    sl = (yfine[2] - yfine[1]) / (xfine[2] - xfine[1])
-    sr = (yfine[end] - yfine[end-1]) / (xfine[end] - xfine[end-1])
-    yleft = @. yfine[1] + sl * (xleft - xfine[1])
-    yright = @. yfine[end] + sr * (xright - xfine[end])
-    vcat(xleft, xfine, xright), vcat(yleft, yfine, yright)
-end
-
-
-
-"""
-    project_to_bins(image_edges, counts, target_edges)
-
-Energy scale distortion as a count-conserving bin projection (official `AxisDistortionMatrixPointwise`): the events of
-source bin j, assumed uniform within it, are mapped to [image_edges[j], image_edges[j+1]] (monotonic distortion) and
-shared among the `target_edges` bins in proportion to the overlap. Events mapped outside the target range are lost.
-"""
-function project_to_bins(image_edges, counts, target_edges)
-    T = promote_type(eltype(image_edges), eltype(counts))
-    out = zeros(T, length(target_edges) - 1)
-    nt = length(target_edges) - 1
-    @inbounds for j in eachindex(counts)
-        A, B = image_edges[j], image_edges[j+1]
-        B > A || continue
-        k0 = max(searchsortedlast(target_edges, A), 1)
-        k1 = min(searchsortedlast(target_edges, B), nt)
-        for k in k0:k1
-            overlap = min(B, target_edges[k+1]) - max(A, target_edges[k])
-            overlap > 0 && (out[k] += counts[j] * overlap / (B - A))
-        end
-    end
-    out
-end
-
 function get_eres()
     data = readdlm(joinpath(@__DIR__, "tao_data/tao_energy_resolution.txt"), skipstart=27)
     E = data[:, 1]
@@ -234,9 +187,9 @@ function get_eres()
     eres_diff = rel_eres_nom .+ difference
     # reuse refine_lsnl, it multiplies the nominal curve with energy
     # which is exactly what we want here to get the absolute energy resolution
-    x, nom = refine_lsnl(E, rel_eres_nom)
+    x, nom = Newtrinos.Helpers.refine_lsnl(E, rel_eres_nom)
     nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
-    pull_term = refine_lsnl(E, eres_diff)[2] - nom
+    pull_term = Newtrinos.Helpers.refine_lsnl(E, eres_diff)[2] - nom
     pull_itp = linear_interpolation(x, pull_term, extrapolation_bc = Line())
 
     function _eres(E, pull)
@@ -244,28 +197,6 @@ function get_eres()
     end
 end
 
-"""
-    rebin_index(fine_edges, coarse_edges)
-
-Index of the coarse bin each fine bin falls into (0 outside); the coarse edges must be a subset of the fine ones.
-"""
-function rebin_index(fine_edges, coarse_edges)
-    @assert all(any(isapprox.(fine_edges, e; atol = 1e-9)) for e in coarse_edges) "coarse edges are not on the fine grid"
-    idx = zeros(Int, length(fine_edges) - 1)
-    for i in eachindex(idx)
-        k = searchsortedlast(coarse_edges, fine_edges[i] + 1e-9)
-        1 <= k < length(coarse_edges) && (idx[i] = k)
-    end
-    idx
-end
-
-function rebin(counts, idx, n)
-    out = zeros(eltype(counts), n)
-    @inbounds for i in eachindex(counts, idx)
-        idx[i] > 0 && (out[idx[i]] += counts[i])
-    end
-    out
-end
 
 function get_forward_model(physics, assets; debug = false)
 
@@ -289,7 +220,7 @@ function get_forward_model(physics, assets; debug = false)
     E_vis_edges = R.evis_edges
     E_vis_c = (E_vis_edges[1:end-1] + E_vis_edges[2:end]) / 2
 
-    final_rebin_idx = rebin_index(E_vis_edges, E_ana)
+    final_rebin_idx = Newtrinos.Helpers.rebin_index(E_vis_edges, E_ana)
 
     # IBD integration as in the official model: in each deposited energy bin a two-fold Gauss-Legendre quadrature
     # over Edep (order 5) and the positron angle cosθ ∈ [-1, 1] (order 3), with exact kinematics Eν(Edep, cosθ),
@@ -377,7 +308,7 @@ function get_forward_model(physics, assets; debug = false)
         
         scaled_eres = eres(E_vis_c, params.tao_eres_pull)
         erec_spectrum = Newtrinos.Helpers.smear_erf(evis_spectrum, scaled_eres, E_vis_edges)
-        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_norm
+        coarse_counts = Newtrinos.Helpers.rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_norm
         if debug
             return MvNormal(coarse_counts, Diagonal(assets.observed_err.^2))
         end
