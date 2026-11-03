@@ -86,8 +86,8 @@ function get_params()
 
     reactor_thermal_power_scale = ones(9)
 
-    eres_unc_scale = zeros(17)
-    #eres_unc_scale = 1.0
+    #eres_unc_scale = zeros(17)
+    eres_unc_scale = 1.0
     e_scale = 1.0
 
     lsnl_pull = 0.0
@@ -99,9 +99,9 @@ function get_params()
         juno_world_reactor_rate = world_reactors,
         juno_bipo_rate = bipo,
         juno_other_rate = other_rate,
-        juno_eres_a = 0.033,
-        juno_eres_b = 0.01,
-        juno_eres_c = 0.0,
+        #juno_eres_a = 0.033,
+        #juno_eres_b = 0.01,
+        #juno_eres_c = 0.0,
         juno_taishan_snf_scale = juno_taishan_snf_scale,
         juno_yangjiang_snf_scale = juno_yangjiang_snf_scale,
         juno_dayabay_snf_scale = juno_dayabay_snf_scale,
@@ -198,15 +198,15 @@ function get_priors()
     juno_dayabay_neq_scale = MvNormal(mu, Diagonal(sigma.^2))
 
     tps_mu = ones(9)
-    # assume 10% uncertainty for Taishan cores (outage sometime) and 3 % for all other cores
-    tps_sigma = [0.1, 0.1, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]
+    # values estimated by claude
+    tps_sigma = [0.05, 0.12, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]
     thermal_power_scale = MvNormal(tps_mu, Diagonal(tps_sigma.^2))
     #thermal_power_scale = Normal(1, 0.01)
 
     #global_rate = Normal(36.02, 0.81)
 
-    eres_unc_scale = Uniform.(-ones(17), ones(17))
-    #eres_unc_scale = Normal(1, 0.05)
+    #eres_unc_scale = Uniform.(-ones(17), ones(17))
+    eres_unc_scale = Normal(1, 0.05)
     # assume 0.5% energy scale uncertainty as per 59day Juno paper
     e_scale = Normal(1.0, 0.005)
 
@@ -228,9 +228,9 @@ function get_priors()
         juno_bipo_rate = bipo,
         juno_other_rate = other,
         #juno_IBD_rate = IBD_rate,
-        juno_eres_a = Truncated(Normal(0.0261, 0.0002), 0.0, Inf),
-        juno_eres_b = Truncated(Normal(0.0082, 0.0001), 0.0, Inf),
-        juno_eres_c = Truncated(Normal(0.0123, 0.0004), 0.0, Inf),
+        #juno_eres_a = Truncated(Normal(0.0261, 0.0002), 0.0, Inf),
+        #juno_eres_b = Truncated(Normal(0.0082, 0.0001), 0.0, Inf),
+        #juno_eres_c = Truncated(Normal(0.0123, 0.0004), 0.0, Inf),
         juno_efficiency = efficiency,
         juno_taishan_neq_scale = juno_taishan_neq_scale,
         juno_yangjiang_neq_scale = juno_yangjiang_neq_scale,
@@ -316,7 +316,7 @@ function get_assets(datadir = @__DIR__)
         IBD_Rate_per_day = [7.5, 7.6, 4.8, 4.7, 4.8, 4.8, 4.9, 4.9, 3.0], 
         Relative_Flux_percent = [16.0, 16.1, 10.1, 10.1, 10.3, 10.2, 10.4, 10.4, 6.4],
         # thanks claude: compiled from CNEA and IAEA data, translated and compiled into a table by our machine overlords
-        load_factor = [0.633, 0.431, 0.921, 0.946, 0.890, 0.886, 0.956, 0.912, 0.918], 
+        load_factor = [0.698, 0.41, 0.921, 0.946, 0.890, 0.886, 0.956, 0.912, 0.918],
     )
 
     data = readdlm(joinpath(@__DIR__, "207_days/data_207_days.txt"), skipstart=29)
@@ -356,8 +356,8 @@ function get_assets(datadir = @__DIR__)
     other_shape = other_counts ./ sum(other_counts)
 
     # read in uncoscillated expectation
-    data = readdlm(joinpath(@__DIR__, "207_days/unoscillated_207_days.txt"), skipstart=14)
-    no_osc = convert.(Float64, data[:, 4]) .* hist_to_count
+    #data = readdlm(joinpath(@__DIR__, "207_days/unoscillated_207_days.txt"), skipstart=14)
+    #no_osc = convert.(Float64, data[:, 4]) .* hist_to_count
     #observed = no_osc
 
     assets = (;
@@ -378,7 +378,7 @@ function get_assets(datadir = @__DIR__)
         hist_to_count,
         n_protons,
         signal_mle,
-        no_osc,
+        #no_osc,
         observed
     )
 end
@@ -612,8 +612,8 @@ function get_forward_model(physics, assets; debug = false)
         evis_spectrum = Newtrinos.Helpers.project_to_bins(E_vis_edges, spec .* lsnl_mask, E_fine)
         scaled_eres = zeros(T, length(sigma_E))
         #scaled_eres = eres_parameterised(E_fine_c, a=params.juno_eres_a, b=params.juno_eres_b, c=params.juno_eres_c)
-        scaled_eres .+= sigma_E .* eres_corr(params.juno_eres_unc_scale)
-        #scaled_eres .+= sigma_E .* params.juno_eres_unc_scale
+        #scaled_eres .+= sigma_E .* eres_corr(params.juno_eres_unc_scale)
+        scaled_eres .+= sigma_E .* params.juno_eres_unc_scale
         erec_spectrum = Newtrinos.Helpers.smear_erf(evis_spectrum, scaled_eres, E_fine)
         coarse_counts = Newtrinos.Helpers.rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency
         if debug

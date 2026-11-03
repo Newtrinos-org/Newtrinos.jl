@@ -268,8 +268,9 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, 
             7.675,
             8.65,
         ]
-        =#
-        spec_edges = unique(vcat([collect(1.8:0.15:4.0), (4.0:0.5:8.6)]...))
+            =#
+    
+        spec_edges = unique(vcat([LinRange(2.0, 6.4, 23), [7.5, 8.6,]]...))
 
     elseif N_pulls == 34
         spec_edges = unique(vcat([collect(1.8:0.1:4.0), (4.0:0.4:8.6)]...))
@@ -310,7 +311,7 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, 
         =#
 
         k = [clamp(searchsortedlast(spec_edges, e), 1, length(spec_edges) - 1) for e in E]
-        t = clamp.([(e - spec_edges[kk]) / (spec_edges[kk+1] - spec_edges[kk]) for (e, kk) in zip(E, k)], 0.0, 1.0)
+        t = clamp.([(e - spec_edges[kk]) / (spec_edges[kk+1] - spec_edges[kk]) for (e, kk) in zip(E, k)], 0, 1)
         #spectrum_correction(pulls) = @. exp(pulls[k] + t * (pulls[k+1] - pulls[k]))
         spectrum_correction(pulls) = @. (1 + pulls[k] + t * (pulls[k+1] - pulls[k]))
         # `correction` can be passed in when it is shared by several reactors (it depends only on `pulls`)
