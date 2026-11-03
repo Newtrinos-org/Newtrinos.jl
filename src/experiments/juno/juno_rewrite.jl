@@ -17,7 +17,7 @@ using ArraysOfArrays
 import YAML
 import ..Newtrinos
 
-const RHO = 2.84            # g/cm³
+const RHO = 2.5          # g/cm³
 const YE = 0.5
 
 @kwdef struct JUNO <: Newtrinos.Experiment
@@ -86,17 +86,22 @@ function get_params()
 
     reactor_thermal_power_scale = ones(9)
 
-    eres_unc_scale = 0.0
+    eres_unc_scale = zeros(17)
+    #eres_unc_scale = 1.0
     e_scale = 1.0
 
     lsnl_pull = 0.0
 
+    e_bias = 0.0
     params = (
         juno_lihe_rate = lihe,
         juno_geo_rate = geo,
         juno_world_reactor_rate = world_reactors,
         juno_bipo_rate = bipo,
         juno_other_rate = other_rate,
+        juno_eres_a = 0.033,
+        juno_eres_b = 0.01,
+        juno_eres_c = 0.0,
         juno_taishan_snf_scale = juno_taishan_snf_scale,
         juno_yangjiang_snf_scale = juno_yangjiang_snf_scale,
         juno_dayabay_snf_scale = juno_dayabay_snf_scale,
@@ -112,6 +117,7 @@ function get_params()
         juno_eres_unc_scale = eres_unc_scale,
         juno_e_scale = e_scale,
         juno_lsnl_pull = lsnl_pull,
+        juno_e_bias = e_bias,
         #juno_taishan_tps = 1.0,
         #juno_yangjiang_tps = 1.0,
         #juno_dayabay_tps = 1.0,
@@ -199,14 +205,17 @@ function get_priors()
 
     #global_rate = Normal(36.02, 0.81)
 
-    eres_unc_scale = Normal(0., 1.)
+    eres_unc_scale = Uniform.(-ones(17), ones(17))
+    #eres_unc_scale = Normal(1, 0.05)
     # assume 0.5% energy scale uncertainty as per 59day Juno paper
     e_scale = Normal(1.0, 0.005)
 
     unc = 0.05
-    e_bias = Normal(0, unc)
+    #e_bias = Normal(0, unc)
 
     lsnl_pull = Normal(0.0, 1.0)
+
+    e_bias = Normal(0, 1.0)
 
     taishan_tps = Normal(1.0, 0.05)
     yangjiang_tps = Normal(1.0, 0.05)
@@ -219,9 +228,9 @@ function get_priors()
         juno_bipo_rate = bipo,
         juno_other_rate = other,
         #juno_IBD_rate = IBD_rate,
-        #juno_res_a = Truncated(Normal(0.0261, 0.0002), 0.0, Inf),
-        #juno_res_b = Truncated(Normal(0.0082, 0.0001), 0.0, Inf),
-        #juno_res_c = Truncated(Normal(0.0123, 0.0004), 0.0, Inf),
+        juno_eres_a = Truncated(Normal(0.0261, 0.0002), 0.0, Inf),
+        juno_eres_b = Truncated(Normal(0.0082, 0.0001), 0.0, Inf),
+        juno_eres_c = Truncated(Normal(0.0123, 0.0004), 0.0, Inf),
         juno_efficiency = efficiency,
         juno_taishan_neq_scale = juno_taishan_neq_scale,
         juno_yangjiang_neq_scale = juno_yangjiang_neq_scale,
@@ -237,6 +246,7 @@ function get_priors()
         #juno_dayabay_tps = dayabay_tps,
         juno_reactor_thermal_power_scale = thermal_power_scale,
         juno_e_scale = e_scale,
+        juno_e_bias = e_bias,
         juno_eres_unc_scale = eres_unc_scale,
         juno_lsnl_pull = lsnl_pull,
     )
@@ -245,7 +255,6 @@ end
 
 function get_lsnl_correction()
     lsnl = readdlm(joinpath(@__DIR__, "207_days/lsnl_207_days.txt"), skipstart=25)
-    # TODO: add uncertainty through nuisance param
     E_lsnl = lsnl[:, 1]
     lsnl_nom = lsnl[:, 2]
     errm = lsnl[:, 5]
@@ -255,9 +264,9 @@ function get_lsnl_correction()
     m = mean((errm, errp))
 
 
-    x, nom = refine_lsnl(E_lsnl, lsnl_nom)
+    x, nom = Newtrinos.Helpers.refine_lsnl(E_lsnl, lsnl_nom)
     nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
-    pull_curve = refine_lsnl(E_lsnl, lsnl_nom .+ m)[2] - nom
+    pull_curve = Newtrinos.Helpers.refine_lsnl(E_lsnl, lsnl_nom .+ m)[2] - nom
     pull_itp = linear_interpolation(x, pull_curve, extrapolation_bc = Line())
 
     function _lsnl(E, pull)
@@ -273,7 +282,7 @@ function get_eres()
     rel_eres_nom = data[:, 3] .* 0.01
     # reuse refine_lsnl, it multiplies the nominal curve with energy
     # which is exactly what we want here to get the absolute energy resolution
-    x, nom = refine_lsnl(E, rel_eres_nom)
+    x, nom = Newtrinos.Helpers.refine_lsnl(E, rel_eres_nom)
     nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
     function _eres(E)
         @. nom_itp(E)
@@ -349,6 +358,7 @@ function get_assets(datadir = @__DIR__)
     # read in uncoscillated expectation
     data = readdlm(joinpath(@__DIR__, "207_days/unoscillated_207_days.txt"), skipstart=14)
     no_osc = convert.(Float64, data[:, 4]) .* hist_to_count
+    #observed = no_osc
 
     assets = (;
         reactors,
@@ -391,97 +401,6 @@ end
 
 const lsnl_min_energy = 0.7    # MeV, lower end of the refined LSNL curves
 
-"""
-    refine_lsnl(E, f; refine_times = 4, newmin = 0.5, newmax = 12.1)
-
-LSNL curve processing of the official model (`refine_lsnl_data`): the relative curve f = Evis/Escint is converted to the
-absolute Evis(Escint), interpolated with a cubic spline on a `refine_times` finer grid and extrapolated linearly (with
-the outermost fine segments) to [`newmin`, `newmax`]. Returns the fine Escint grid and Evis on it.
-"""
-function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}; refine_times = 4, newmin = 0.7, newmax = 12.0)
-    xfine = collect(range(E[1], E[end], length = (length(E) - 1) * refine_times + 1))
-    yfine = Newtrinos.Helpers.not_a_knot_spline(E, f .* E, xfine)
-    step = xfine[2] - xfine[1]
-    xleft = collect(newmin:step:xfine[1]-step*1e-9)
-    stepright = xfine[end] - xfine[end-1]
-    xright = collect(xfine[end]:stepright:newmax+stepright*1e-6)[2:end]
-    sl = (yfine[2] - yfine[1]) / (xfine[2] - xfine[1])
-    sr = (yfine[end] - yfine[end-1]) / (xfine[end] - xfine[end-1])
-    yleft = @. yfine[1] + sl * (xleft - xfine[1])
-    yright = @. yfine[end] + sr * (xright - xfine[end])
-    vcat(xleft, xfine, xright), vcat(yleft, yfine, yright)
-end
-
-"""
-    project_to_bins(image_edges, counts, target_edges)
-
-Energy scale distortion as a count-conserving bin projection (official `AxisDistortionMatrixPointwise`): the events of
-source bin j, assumed uniform within it, are mapped to [image_edges[j], image_edges[j+1]] (monotonic distortion) and
-shared among the `target_edges` bins in proportion to the overlap. Events mapped outside the target range are lost.
-"""
-function project_to_bins(image_edges, counts, target_edges)
-    T = promote_type(eltype(image_edges), eltype(counts))
-    out = zeros(T, length(target_edges) - 1)
-    nt = length(target_edges) - 1
-    @inbounds for j in eachindex(counts)
-        A, B = image_edges[j], image_edges[j+1]
-        B > A || continue
-        k0 = max(searchsortedlast(target_edges, A), 1)
-        k1 = min(searchsortedlast(target_edges, B), nt)
-        for k in k0:k1
-            overlap = min(B, target_edges[k+1]) - max(A, target_edges[k])
-            overlap > 0 && (out[k] += counts[j] * overlap / (B - A))
-        end
-    end
-    out
-end
-
-"""
-    smear_bin_centres(counts, σ, edges; nσ = 8)
-
-Energy resolution as in the official model (`HistSmearNormalMatrixBC`): the events of each bin i are smeared with a
-Gaussian of width σ[i] around its centre, evaluated at the centres of the bins of the same binning (times the bin
-width).
-"""
-function smear_bin_centres(counts, σ, edges; nσ = 8)
-    T = promote_type(eltype(counts), eltype(σ))
-    c = (edges[1:end-1] .+ edges[2:end]) ./ 2
-    out = zeros(T, length(c))
-    @inbounds for i in eachindex(counts, σ)
-        iszero(counts[i]) && continue
-        lo = searchsortedfirst(c, c[i] - nσ * σ[i])
-        hi = searchsortedlast(c, c[i] + nσ * σ[i])
-        norm = counts[i] / (sqrt(2π) * σ[i])
-        for j in lo:hi
-            out[j] += norm * (edges[j+1] - edges[j]) * exp(-0.5 * ((c[j] - c[i]) / σ[i])^2)
-        end
-    end
-    out
-end
-
-"""
-    rebin_index(fine_edges, coarse_edges)
-
-Index of the coarse bin each fine bin falls into (0 outside); the coarse edges must be a subset of the fine ones.
-"""
-function rebin_index(fine_edges, coarse_edges)
-    @assert all(any(isapprox.(fine_edges, e; atol = 1e-9)) for e in coarse_edges) "coarse edges are not on the fine grid"
-    idx = zeros(Int, length(fine_edges) - 1)
-    for i in eachindex(idx)
-        k = searchsortedlast(coarse_edges, fine_edges[i] + 1e-9)
-        1 <= k < length(coarse_edges) && (idx[i] = k)
-    end
-    idx
-end
-
-function rebin(counts, idx, n)
-    out = zeros(eltype(counts), n)
-    @inbounds for i in eachindex(counts, idx)
-        idx[i] > 0 && (out[idx[i]] += counts[i])
-    end
-    out
-end
-
 function get_forward_model(physics, assets; debug = false)
 
     layers = StructArray{Newtrinos.Layer}((radius = [6371.0], p_density = [RHO * YE], n_density = [RHO * (1 - YE)]))
@@ -491,7 +410,15 @@ function get_forward_model(physics, assets; debug = false)
     E_fine = collect(E_ana[1]:0.02:E_ana[end])
     E_fine_c = (E_fine[1:end-1] + E_fine[2:end]) / 2
 
-    final_rebin_idx = rebin_index(E_fine, E_ana)
+    final_rebin_idx = Newtrinos.Helpers.rebin_index(E_fine, E_ana)
+
+    #eres_scale_binc = vcat([0.7], collect(1:0.5:8), [10])
+    eres_scale_binc = collect(0.8:0.5:8.8)
+    #eres_scale_idx = searchsortedlast.(Ref(eres_scale_binc), E_fine_c)
+
+    k = [clamp(searchsortedlast(eres_scale_binc, e), 1, length(eres_scale_binc) - 1) for e in E_fine_c]
+    t = [(e - eres_scale_binc[kk]) / (eres_scale_binc[kk+1] - eres_scale_binc[kk]) for (e, kk) in zip(E_fine_c, k)]
+    eres_corr(pulls) =  @. (1 + pulls[k] + t * (pulls[k+1] - pulls[k]))
 
     load_factor = assets.reactors[!, "load_factor"]
     # IBD integration as in the official model: in each deposited energy bin a two-fold Gauss-Legendre quadrature
@@ -637,6 +564,7 @@ function get_forward_model(physics, assets; debug = false)
                 eltype(params.juno_other_rate),
                 eltype(params.juno_eres_unc_scale),
                 eltype(params.juno_e_scale),
+                eltype(params.juno_e_bias),
                 eltype(params.juno_lsnl_pull),
                 eltype(params.spectrum_pulls),
                 eltype(params.energy_per_fission),
@@ -673,17 +601,21 @@ function get_forward_model(physics, assets; debug = false)
             # nominal flux and neq correction scale with sum(daily thermal power * daily eff livetime); the SNF is
             # independent of the actual thermal power (spent fuel) and scales with the eff livetime
             flux_r, snf_r = fluxes[r]
-            @. interm_spec += (flux_norm[r] * flux_r + spec_prefac_snf[r] * snf_r)  * P[r]
+            @. interm_spec += (flux_norm[r] * flux_r + spec_prefac_snf[r] * snf_r) * P[r]
         end
         interm_spec .*= integral_weights
         spec = vec(sum(reshape(interm_spec, NQ, NFc), dims = 1))
 
-        E_vis_edges = lsnl(E_fine, params.juno_lsnl_pull) .* params.juno_e_scale
-        evis_spectrum = project_to_bins(E_vis_edges, spec .* lsnl_mask, E_fine)
+        #E_vis_edges = lsnl(E_fine .+ params.juno_e_bias, params.juno_lsnl_pull) .* params.juno_e_scale
+        E_vis_edges = lsnl(E_fine, params.juno_lsnl_pull) .* params.juno_e_scale .+ params.juno_e_bias
+        #E_vis_edges = lsnl(E_fine, params.juno_lsnl_pull) .* params.juno_e_scale
+        evis_spectrum = Newtrinos.Helpers.project_to_bins(E_vis_edges, spec .* lsnl_mask, E_fine)
         scaled_eres = zeros(T, length(sigma_E))
-        scaled_eres .+= sigma_E .* (1 + 0.05 * params.juno_eres_unc_scale)
+        #scaled_eres = eres_parameterised(E_fine_c, a=params.juno_eres_a, b=params.juno_eres_b, c=params.juno_eres_c)
+        scaled_eres .+= sigma_E .* eres_corr(params.juno_eres_unc_scale)
+        #scaled_eres .+= sigma_E .* params.juno_eres_unc_scale
         erec_spectrum = Newtrinos.Helpers.smear_erf(evis_spectrum, scaled_eres, E_fine)
-        coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency
+        coarse_counts = Newtrinos.Helpers.rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.juno_efficiency
         if debug
             return coarse_counts, bg
         end
@@ -696,12 +628,12 @@ end
 
 function get_plot(physics, assets)
     function plot(params)
-       fwd = Newtrinos.juno_rewrite.get_forward_model(physics, assets, debug=true)
+        fwd = Newtrinos.juno_rewrite.get_forward_model(physics, assets, debug=true)
         f = Figure()
-        ax = Axis(f[1, 1])
-        ax2 = Axis(f[2, 1])
+        ax = Axis(f[1, 1], ylabel="Counts / 40keV")
+        ax2 = Axis(f[2, 1], ylabel="Ratio", xlabel="Prompt energy [MeV]")
         Ec = assets.Ec
-        
+
         cols = Makie.wong_colors()
         colors = (lihe=cols[1], geo=cols[4], bipo=cols[2], world=cols[3], other=:grey)
 
@@ -714,18 +646,22 @@ function get_plot(physics, assets)
 
         Ec = assets.Ec
         stephist!(ax, Ec, weights = assets.signal_mle, bins=assets.Ebins, color=:pink, label="Juno signal")
-        scatter!(ax, Ec, assets.observed ./assets.hist_to_count, color=:grey, label="Observed")
+        #scatter!(ax, Ec, assets.observed ./assets.hist_to_count, color=:grey, label="Observed")
+        stephist!(ax, Ec, weights=assets.observed ./assets.hist_to_count,bins=assets.Ebins, color=:grey, label="Observed")
         stephist!(ax, Ec, weights=(sig .+ all_bg) ./ assets.hist_to_count, bins=assets.Ebins, color="red", label="Newtrinos.jl, signal+bg")
         stephist!(ax, Ec, weights=sig ./ assets.hist_to_count, bins=assets.Ebins, label="Newtrinos.jl, signal")
         stephist!(ax2, Ec, weights = sig ./ assets.observed, bins=assets.Ebins, label="Newtrinos.jl signal / Juno signal")
         stephist!(ax2, Ec, weights = (sig .+ all_bg) ./ assets.observed, bins=assets.Ebins, label="Newtrinos.jl exp / observed")
 
-        axislegend(ax, position=:rt)
+        #axislegend(ax, position=:rt)
         rowsize!(f.layout, 1, Relative(2/3))
         ylims!(ax2, .9, 1.1)
+        #xlims!(ax, 1.5, 6)
+        #xlims!(ax2, 1.5, 6)
+        #ylims!(ax,100, 260)
         f
 
-        return f
+        return f, ax, ax2
     end
 
     return plot

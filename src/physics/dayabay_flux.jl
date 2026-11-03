@@ -239,9 +239,44 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, 
     # free spectrum correction: one parameter per edge of the official segmentation
     if N_pulls == 19
         spec_edges = convert(Array{Float64, 1}, readdlm(joinpath(datadir, "dayabay_data/parameters/reactor_antineutrino_spectrum_edges.tsv"))[2:end])
+    elseif N_pulls == 25
+        #=
+        spec_edges = [
+            1.925,
+            2.175,
+            2.425,
+            2.675,
+            2.925,
+            3.175,
+            3.425,
+            3.675,
+            3.925,
+            4.175,
+            4.425,
+            4.675,
+            4.925,
+            5.175,
+            5.425,
+            5.675,
+            5.925,
+            6.175,
+            6.425,
+            6.675,
+            6.925,
+            7.175,
+            7.425,
+            7.675,
+            8.65,
+        ]
+        =#
+        spec_edges = unique(vcat([collect(1.8:0.15:4.0), (4.0:0.5:8.6)]...))
+
+    elseif N_pulls == 34
+        spec_edges = unique(vcat([collect(1.8:0.1:4.0), (4.0:0.4:8.6)]...))
     else
         spec_edges = collect(LinRange(1.8, 10, N_pulls))
     end
+
 
 
     # SNF: fissions per second of a reactor at nominal thermal power, fission fractions and energies per fission
@@ -276,7 +311,8 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, 
 
         k = [clamp(searchsortedlast(spec_edges, e), 1, length(spec_edges) - 1) for e in E]
         t = clamp.([(e - spec_edges[kk]) / (spec_edges[kk+1] - spec_edges[kk]) for (e, kk) in zip(E, k)], 0.0, 1.0)
-        spectrum_correction(pulls) = @. exp(pulls[k] + t * (pulls[k+1] - pulls[k]))
+        #spectrum_correction(pulls) = @. exp(pulls[k] + t * (pulls[k+1] - pulls[k]))
+        spectrum_correction(pulls) = @. (1 + pulls[k] + t * (pulls[k+1] - pulls[k]))
         # `correction` can be passed in when it is shared by several reactors (it depends only on `pulls`)
         function flux(thermal_power_scale, energy_per_fission, fission_fractions_scale, pulls, neq_scale, snf_scale, reac_idx;
             correction = spectrum_correction(pulls))
