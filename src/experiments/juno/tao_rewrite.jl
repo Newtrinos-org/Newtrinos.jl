@@ -49,27 +49,19 @@ end
 function get_params()
 
     tao_taishan_ffs = ones(4)
-    tao_taishan_snf_scale = 0.0
-    tao_taishan_neq_scale = zeros(4)
     tao_reactor_thermal_power_scale = 1.0
-
-    tao_e_bias = 0.0
     tao_e_scale = 1.0
-
-    tao_norm = 1.0
     tao_lsnl_pull = 0.0
     tao_eres_pull = 0.0
+    tao_efficiency = 0.466
 
     params = (;
         tao_eres_pull,
-        tao_e_bias,
         tao_e_scale,
         tao_taishan_ffs,
-        tao_taishan_snf_scale,
-        tao_taishan_neq_scale,
         tao_reactor_thermal_power_scale,
         tao_lsnl_pull,
-        tao_norm,
+        tao_efficiency,
     )
 
 end
@@ -93,42 +85,24 @@ function get_priors()
 
     cov_mat = corr_mat .* scale
     tao_taishan_ffs = MvNormal(mu, cov_mat)
-    # snf correction
-    file = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days/dayabay_data/parameters/reactor_snf.yaml"))
-    snf_mu = Float64(file["parameters"]["snf_scale"][1])
-    snf_sigma = snf_mu * Float64(file["parameters"]["snf_scale"][2]) * 0.01   # percent
-    tao_taishan_snf_scale = 0.
 
-    ## non-equilibrium correction
-    file = YAML.load_file(joinpath(@__DIR__, "../daya_bay/daya_bay_3158days/dayabay_data/parameters/reactor_nonequilibrium_correction.yaml"))
-    mu = file["parameters"]["nonequilibrium_scale"][1] .* ones(4)
-    sigma = mu .* file["parameters"]["nonequilibrium_scale"][2] .* 0.01 # percent
-
-    tao_taishan_neq_scale = zeros(4)
-   
     tps_mu = 1.0
     tps_sigma = tps_mu * 0.02
     tao_reactor_thermal_power_scale = Normal(tps_mu, tps_sigma)
     tao_reactor_thermal_power_scale = 1.0
 
-    tao_e_bias = 0.0
     tao_e_scale = Normal(1., 0.006)
-
-    tao_norm = Uniform(0, 10)
-
+    tao_efficiency = Normal(0.466, 0.05)
     tao_lsnl_pull = Normal(0.0, 1.0)
     tao_eres_pull = Normal(0.0, 1.0)
 
     priors = (;
         tao_eres_pull,
-        tao_e_bias,
         tao_e_scale,
         tao_taishan_ffs,
-        tao_taishan_snf_scale,
-        tao_taishan_neq_scale,
         tao_reactor_thermal_power_scale,
         tao_lsnl_pull,
-        tao_norm,
+        tao_efficiency,
     )
 end
 
@@ -148,17 +122,14 @@ function get_assets(datadir = @__DIR__)
 
     ana_mask = Ec .<= 8.0
     # observed has negative entries bc expected background is subtracted -> stat. fluctuations mean negative entries
-    hist_to_count = diff(Ebins)
     Ewidth = diff(Ebins)
     
     observed_err = convert(Vector{Float64}, data[:, 5])
     observed_all = convert(Vector{Float64}, data[:, 4])
-    observed = observed_all[ana_mask]
+    observed = observed_all#[ana_mask]
     n_protons = 2e29 # estimate from claude
     nominal_livetime = 31.3
     nominal_livetime_seconds = nominal_livetime * 60 * 60 * 24
-
-
 
     assets = (;
         nominal_livetime,
@@ -255,7 +226,7 @@ function get_forward_model(physics, assets; debug = false)
 
     function reactor_fluxes(params)
         main, neq, snf, correction = mesh_flux(params.tao_reactor_thermal_power_scale, params.energy_per_fission,
-            params.tao_taishan_ffs, params.spectrum_pulls, params.tao_taishan_neq_scale, params.tao_taishan_snf_scale, 1)
+            params.tao_taishan_ffs, params.spectrum_pulls, zeros(4), 0.0, 1)
         (main .* correction .+ neq, snf)
     end
     L = assets.Baseline_m
@@ -275,16 +246,9 @@ function get_forward_model(physics, assets; debug = false)
 
     function forward_model(params)
         T = promote_type(
-                #eltype(params.tao_eres_a),
-                #eltype(params.tao_eres_b),
-                #eltype(params.tao_eres_c),
                 eltype(params.tao_eres_pull),
                 eltype(params.tao_reactor_thermal_power_scale),
                 eltype(params.tao_taishan_ffs),
-                eltype(params.tao_taishan_neq_scale),
-                eltype(params.tao_taishan_snf_scale),
-                #eltype(params.tao_eres_unc_scale),
-                eltype(params.tao_e_bias),
                 eltype(params.tao_e_scale),
                 eltype(params.spectrum_pulls),
                 eltype(params.energy_per_fission),
@@ -304,15 +268,15 @@ function get_forward_model(physics, assets; debug = false)
         #different to juno implementation, for TAO we smear the flux to different bins
         #as for the dayabat IAV matrix (same physical concept)
         #this also applies the lsnl directly, hence the binning stays the same in this step
-        evis_spectrum = Newtrinos.TAOLeakage.fold(R, spec; pull=params.tao_lsnl_pull, scale=params.tao_e_scale, bias=params.tao_e_bias, band=:symmetric)  
+        evis_spectrum = Newtrinos.TAOLeakage.fold(R, spec; pull=params.tao_lsnl_pull, scale=params.tao_e_scale, band=:symmetric)  
         
         scaled_eres = eres(E_vis_c, params.tao_eres_pull)
         erec_spectrum = Newtrinos.Helpers.smear_erf(evis_spectrum, scaled_eres, E_vis_edges)
-        coarse_counts = Newtrinos.Helpers.rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_norm
+        coarse_counts = Newtrinos.Helpers.rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_efficiency
         if debug
             return MvNormal(coarse_counts, Diagonal(assets.observed_err.^2))
         end
-        return MvNormal(coarse_counts[ana_mask], Diagonal(assets.observed_err[ana_mask].^2))
+        return MvNormal(coarse_counts, Diagonal(assets.observed_err.^2))
     end
 end
 
