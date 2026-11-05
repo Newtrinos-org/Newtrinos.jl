@@ -240,7 +240,6 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, 
     if N_pulls == 19
         spec_edges = convert(Array{Float64, 1}, readdlm(joinpath(datadir, "dayabay_data/parameters/reactor_antineutrino_spectrum_edges.tsv"))[2:end])
     elseif N_pulls == 25
-        #=
         spec_edges = [
             1.925,
             2.175,
@@ -268,9 +267,8 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, 
             7.675,
             8.65,
         ]
-            =#
     
-        spec_edges = unique(vcat([LinRange(2.0, 6.4, 23), [7.5, 8.6,]]...))
+        #spec_edges = unique(vcat([LinRange(2.0, 6.4, 23), [7.5, 8.6,]]...))
 
     elseif N_pulls == 34
         spec_edges = unique(vcat([collect(1.8:0.1:4.0), (4.0:0.4:8.6)]...))
