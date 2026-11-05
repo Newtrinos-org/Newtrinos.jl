@@ -209,14 +209,18 @@ function smear_erf(counts::AbstractVector, σ::AbstractVector, edges::AbstractVe
 end
 
 """
-    refine_lsnl(E, f; refine_times = 4, newmin = 0.5, newmax = 12.1)
+    refine_lsnl(E, f; refine_times = 4, newmin = 0.7, newmax = 12.1)
 
 LSNL curve processing of the official model (`refine_lsnl_data`): the relative curve f = Evis/Escint is converted to the
 absolute Evis(Escint), interpolated with a cubic spline on a `refine_times` finer grid and extrapolated linearly (with
 the outermost fine segments) to [`newmin`, `newmax`]. Returns the fine Escint grid and Evis on it.
 """
-function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}; refine_times = 4, newmin = 0.7, newmax = 12.0)
+function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}, refine_times::Int64; newmin = 0.7, newmax = 12.0)
     xfine = collect(range(E[1], E[end], length = (length(E) - 1) * refine_times + 1))
+    refine_lsnl(E, f, xfine, newmin=newmin, newmax=newmax)
+end
+
+function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}, xfine::Vector{Float64}; newmin = 0.7, newmax = 12.0)
     yfine = not_a_knot_spline(E, f .* E, xfine)
     step = xfine[2] - xfine[1]
     xleft = collect(newmin:step:xfine[1]-step*1e-9)
@@ -228,7 +232,6 @@ function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}; refine_times = 4, n
     yright = @. yfine[end] + sr * (xright - xfine[end])
     vcat(xleft, xfine, xright), vcat(yleft, yfine, yright)
 end
-
 """
     wrap_func(func, pars, keep)
 

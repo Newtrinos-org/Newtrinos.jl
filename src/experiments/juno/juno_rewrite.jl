@@ -35,7 +35,7 @@ function default_physics()
     osc = Newtrinos.osc.configure()
     #osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction = Newtrinos.osc.SI(), eigen_method = Newtrinos.BargerEigen()))
     xsec = Newtrinos.ibd_xsec.configure(Newtrinos.ibd_xsec.VogelBeacomO1())
-    flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average=true, N_pulls=19))
+    flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average=true, N_pulls=25))
     (; osc, xsec, flux)
 end
 
@@ -121,6 +121,8 @@ function get_params()
         #juno_taishan_tps = 1.0,
         #juno_yangjiang_tps = 1.0,
         #juno_dayabay_tps = 1.0,
+        juno_emp_corr_amp = 0.01,
+        juno_emp_corr_pos = 3.0
     )
 
 end
@@ -221,6 +223,9 @@ function get_priors()
     yangjiang_tps = Normal(1.0, 0.05)
     dayabay_tps = Normal(1.0, 0.05)
 
+    juno_emp_corr_amp = Normal(0, 0.03)
+    juno_emp_corr_pos = Normal(2.7, 0.8)
+
     priors = (
         juno_lihe_rate = lihe,
         juno_geo_rate = geo,
@@ -249,10 +254,12 @@ function get_priors()
         juno_e_bias = e_bias,
         juno_eres_unc_scale = eres_unc_scale,
         juno_lsnl_pull = lsnl_pull,
+        juno_emp_corr_amp = juno_emp_corr_amp,
+        juno_emp_corr_pos = juno_emp_corr_pos,
     )
 end
 
-
+#=
 function get_lsnl_correction()
     lsnl = readdlm(joinpath(@__DIR__, "207_days/lsnl_207_days.txt"), skipstart=25)
     E_lsnl = lsnl[:, 1]
@@ -273,16 +280,45 @@ function get_lsnl_correction()
 
         return @. nom_itp(E) + pull * pull_itp(E)
     end
+
+    =#
+
+function get_lsnl_correction()
+    coarse = readdlm(joinpath(@__DIR__, "207_days/lsnl_nom_coarse.txt"), skipstart=11)
+    Efine = collect(LinRange(coarse[1, 1], coarse[end, 1], 400))
+    Enom, lsnl_nom = Newtrinos.Helpers.refine_lsnl(coarse[:, 1], coarse[:, 2], Efine)
+
+    coarse_itp = linear_interpolation(Enom, lsnl_nom, extrapolation_bc=Line())
+
+    lsnl = readdlm(joinpath(@__DIR__, "207_days/lsnl_207_days.txt"), skipstart=25)
+    E_lsnl = lsnl[:, 1]
+    #lsnl_nom = lsnl[:, 2]
+    errm = lsnl[:, 5]
+    errp = lsnl[:, 6]
+
+    # errors are largely symmetric, use mean to create one pull term as in DayaBay model
+    m = mean((errm, errp))
+    pull_curve = abs.(Newtrinos.Helpers.refine_lsnl(E_lsnl, coarse_itp(E_lsnl) ./ E_lsnl .+ m, Efine)[2] - lsnl_nom)
+
+    pull_itp = linear_interpolation(Enom, pull_curve, extrapolation_bc = Line()); 
+
+    #additional gauss term: should lower lsnl around 3MeV a bit
+
+
+    function _lsnl(E, pull)
+
+        return @. coarse_itp(E) + pull * pull_itp(E)
+    end
 end
 
 
 function get_eres()
     data = readdlm(joinpath(@__DIR__, "207_days/eres_207_days.txt"), skipstart=19)
     E = data[:, 1]
-    rel_eres_nom = data[:, 3] .* 0.01
+    rel_eres_nom = data[:, 8] .* 0.01
     # reuse refine_lsnl, it multiplies the nominal curve with energy
     # which is exactly what we want here to get the absolute energy resolution
-    x, nom = Newtrinos.Helpers.refine_lsnl(E, rel_eres_nom)
+    x, nom = Newtrinos.Helpers.refine_lsnl(E, rel_eres_nom, 4)
     nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
     function _eres(E)
         @. nom_itp(E)

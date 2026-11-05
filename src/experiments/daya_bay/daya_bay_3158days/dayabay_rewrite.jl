@@ -289,8 +289,8 @@ defined on [0.5, 12.1] MeV (events below are dropped in the forward model, as in
 """
 function get_lsnl_correction(datadir = @__DIR__)
     lsnl = read_lsnl_correction(datadir)
-    x, nom = Newtrinos.Helpers.refine_lsnl(lsnl.E, lsnl.f_nom)
-    curves = [Newtrinos.Helpers.refine_lsnl(lsnl.E, lsnl.f_nom .+ rel)[2] .- nom for rel in (lsnl.rel_0, lsnl.rel_1, lsnl.rel_2, lsnl.rel_3)]
+    x, nom = Newtrinos.Helpers.refine_lsnl(lsnl.E, lsnl.f_nom, 4)
+    curves = [Newtrinos.Helpers.refine_lsnl(lsnl.E, lsnl.f_nom .+ rel, 4)[2] .- nom for rel in (lsnl.rel_0, lsnl.rel_1, lsnl.rel_2, lsnl.rel_3)]
     nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
     pull_itps = [linear_interpolation(x, c, extrapolation_bc = Line()) for c in curves]
 

@@ -29,7 +29,7 @@ end
 
 function default_physics()
     xsec = Newtrinos.ibd_xsec.configure(Newtrinos.ibd_xsec.VogelBeacomO1())
-    flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average=true, N_pulls=19))
+    flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average=true, N_pulls=25))
     (;xsec, flux)
 end
 
@@ -158,9 +158,9 @@ function get_eres()
     eres_diff = rel_eres_nom .+ difference
     # reuse refine_lsnl, it multiplies the nominal curve with energy
     # which is exactly what we want here to get the absolute energy resolution
-    x, nom = Newtrinos.Helpers.refine_lsnl(E, rel_eres_nom)
+    x, nom = Newtrinos.Helpers.refine_lsnl(E, rel_eres_nom, 4)
     nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
-    pull_term = Newtrinos.Helpers.refine_lsnl(E, eres_diff)[2] - nom
+    pull_term = Newtrinos.Helpers.refine_lsnl(E, eres_diff, 4)[2] - nom
     pull_itp = linear_interpolation(x, pull_term, extrapolation_bc = Line())
 
     function _eres(E, pull)
