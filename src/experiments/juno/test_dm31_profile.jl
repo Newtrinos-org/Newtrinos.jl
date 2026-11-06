@@ -81,7 +81,7 @@ save("combined_output/dm21_theta12_juno_tao.png", f)
 
 
 dayabay_NO = Normal(2.5413e-3, 0.060e-3)
-dayabay_IO = Normal(−2.4957, 0.060e-3)
+dayabay_IO = Normal(-2.4957e-3, 0.060e-3)
 
 
 f = Figure()
