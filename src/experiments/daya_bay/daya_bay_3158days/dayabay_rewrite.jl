@@ -1,4 +1,5 @@
 module dayabay_rewrite
+
 using DataFrames
 using CSV
 using LinearAlgebra
@@ -27,7 +28,7 @@ end
 function default_physics()
     osc = Newtrinos.osc.configure()
     xsec = Newtrinos.ibd_xsec.configure(Newtrinos.ibd_xsec.VogelBeacomO1())
-    flux = Newtrinos.dayabay_flux.configure()
+    flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(N_pulls=25))
     (; osc, xsec, flux)
 end
 
@@ -279,27 +280,6 @@ function read_lsnl_correction(datadir = @__DIR__)
 end
 
 """
-    refine_lsnl(E, f; refine_times = 4, newmin = 0.5, newmax = 12.1)
-
-LSNL curve processing of the official model (`refine_lsnl_data`): the relative curve f = Evis/Escint is converted to the
-absolute Evis(Escint), interpolated with a cubic spline on a `refine_times` finer grid and extrapolated linearly (with
-the outermost fine segments) to [`newmin`, `newmax`]. Returns the fine Escint grid and Evis on it.
-"""
-function refine_lsnl(E::Vector{Float64}, f::Vector{Float64}; refine_times = 4, newmin = 0.5, newmax = 12.1)
-    xfine = collect(range(E[1], E[end], length = (length(E) - 1) * refine_times + 1))
-    yfine = Newtrinos.Helpers.not_a_knot_spline(E, f .* E, xfine)
-    step = xfine[2] - xfine[1]
-    xleft = collect(newmin:step:xfine[1]-step*1e-9)
-    stepright = xfine[end] - xfine[end-1]
-    xright = collect(xfine[end]:stepright:newmax+stepright*1e-6)[2:end]
-    sl = (yfine[2] - yfine[1]) / (xfine[2] - xfine[1])
-    sr = (yfine[end] - yfine[end-1]) / (xfine[end] - xfine[end-1])
-    yleft = @. yfine[1] + sl * (xleft - xfine[1])
-    yright = @. yfine[end] + sr * (xright - xfine[end])
-    vcat(xleft, xfine, xright), vcat(yleft, yfine, yright)
-end
-
-"""
     get_lsnl_correction(datadir)
 
 LSNL as in the official model: the nominal and the four nuisance curves are refined and extrapolated with
@@ -309,8 +289,8 @@ defined on [0.5, 12.1] MeV (events below are dropped in the forward model, as in
 """
 function get_lsnl_correction(datadir = @__DIR__)
     lsnl = read_lsnl_correction(datadir)
-    x, nom = refine_lsnl(lsnl.E, lsnl.f_nom)
-    curves = [refine_lsnl(lsnl.E, lsnl.f_nom .+ rel)[2] .- nom for rel in (lsnl.rel_0, lsnl.rel_1, lsnl.rel_2, lsnl.rel_3)]
+    x, nom = Newtrinos.Helpers.refine_lsnl(lsnl.E, lsnl.f_nom, 4)
+    curves = [Newtrinos.Helpers.refine_lsnl(lsnl.E, lsnl.f_nom .+ rel, 4)[2] .- nom for rel in (lsnl.rel_0, lsnl.rel_1, lsnl.rel_2, lsnl.rel_3)]
     nom_itp = linear_interpolation(x, nom, extrapolation_bc = Line())
     pull_itps = [linear_interpolation(x, c, extrapolation_bc = Line()) for c in curves]
 
@@ -326,75 +306,6 @@ function eres(E, a, b, c)
     sigma_E = @. sqrt(a^2 * E^2 + b^2 * E + c^2)
 end
 
-"""
-    project_to_bins(image_edges, counts, target_edges)
-
-Energy scale distortion as a count-conserving bin projection (official `AxisDistortionMatrixPointwise`): the events of
-source bin j, assumed uniform within it, are mapped to [image_edges[j], image_edges[j+1]] (monotonic distortion) and
-shared among the `target_edges` bins in proportion to the overlap. Events mapped outside the target range are lost.
-"""
-function project_to_bins(image_edges, counts, target_edges)
-    T = promote_type(eltype(image_edges), eltype(counts))
-    out = zeros(T, length(target_edges) - 1)
-    nt = length(target_edges) - 1
-    @inbounds for j in eachindex(counts)
-        A, B = image_edges[j], image_edges[j+1]
-        B > A || continue
-        k0 = max(searchsortedlast(target_edges, A), 1)
-        k1 = min(searchsortedlast(target_edges, B), nt)
-        for k in k0:k1
-            overlap = min(B, target_edges[k+1]) - max(A, target_edges[k])
-            overlap > 0 && (out[k] += counts[j] * overlap / (B - A))
-        end
-    end
-    out
-end
-
-"""
-    smear_bin_centres(counts, σ, edges; nσ = 8)
-
-Energy resolution as in the official model (`HistSmearNormalMatrixBC`): the events of each bin i are smeared with a
-Gaussian of width σ[i] around its centre, evaluated at the centres of the bins of the same binning (times the bin
-width).
-"""
-function smear_bin_centres(counts, σ, edges; nσ = 8)
-    T = promote_type(eltype(counts), eltype(σ))
-    c = (edges[1:end-1] .+ edges[2:end]) ./ 2
-    out = zeros(T, length(c))
-    @inbounds for i in eachindex(counts, σ)
-        iszero(counts[i]) && continue
-        lo = searchsortedfirst(c, c[i] - nσ * σ[i])
-        hi = searchsortedlast(c, c[i] + nσ * σ[i])
-        norm = counts[i] / (sqrt(2π) * σ[i])
-        for j in lo:hi
-            out[j] += norm * (edges[j+1] - edges[j]) * exp(-0.5 * ((c[j] - c[i]) / σ[i])^2)
-        end
-    end
-    out
-end
-
-"""
-    rebin_index(fine_edges, coarse_edges)
-
-Index of the coarse bin each fine bin falls into (0 outside); the coarse edges must be a subset of the fine ones.
-"""
-function rebin_index(fine_edges, coarse_edges)
-    @assert all(any(isapprox.(fine_edges, e; atol = 1e-9)) for e in coarse_edges) "coarse edges are not on the fine grid"
-    idx = zeros(Int, length(fine_edges) - 1)
-    for i in eachindex(idx)
-        k = searchsortedlast(coarse_edges, fine_edges[i] + 1e-9)
-        1 <= k < length(coarse_edges) && (idx[i] = k)
-    end
-    idx
-end
-
-function rebin(counts, idx, n)
-    out = zeros(eltype(counts), n)
-    @inbounds for i in eachindex(counts, idx)
-        idx[i] > 0 && (out[idx[i]] += counts[i])
-    end
-    out
-end
 
 function get_proton_number(datadir = @__DIR__)
     data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/detector_n_protons_nominal.yaml"))
@@ -472,6 +383,45 @@ function get_params(datadir = @__DIR__)
     lsnl_scale_nom = dict["parameters"]["lsnl_scale_a"][1]
     lsnl_pull = lsnl_scale_nom .* ones(4)
 
+
+
+    ## reactor params specific to DayaBay setup
+    ## reactor thermal power
+    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_thermal_power_uncertainty.yaml"))
+    reactor_thermal_power_scale = data["parameters"]["thermal_power_scale"][1] .* ones(6)
+
+    ## fission fraction scales
+    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions_scale.yaml"), dicttype=OrderedDict{String,Any})
+    fraction_scale = data["parameters"]["fission_fractions_scale"]
+    #println(fraction_scale)
+
+    ## neq scale
+    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_nonequilibrium_correction.yaml"))
+    mu = file["parameters"]["nonequilibrium_scale"][1]
+
+    neq_scale_R1 = ones(4) .* mu
+    neq_scale_R2 = ones(4) .* mu
+    neq_scale_R3 = ones(4) .* mu
+    neq_scale_R4 = ones(4) .* mu
+    neq_scale_R5 = ones(4) .* mu
+    neq_scale_R6 = ones(4) .* mu
+
+    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_snf.yaml"))
+    mu = file["parameters"]["snf_scale"][1]
+
+    snf_scale = ones(6) .* mu
+
+    names = data["correlations"]["fission_fractions_scale"]["names"]
+    #println(names)
+    fission_fractions_scale_R1 = collect([Float64(fraction_scale[name][1]) for name in names])
+    fission_fractions_scale_R2 = collect([Float64(fraction_scale[name][1]) for name in names])
+    fission_fractions_scale_R3 = collect([Float64(fraction_scale[name][1]) for name in names])
+    fission_fractions_scale_R4 = collect([Float64(fraction_scale[name][1]) for name in names])
+    fission_fractions_scale_R5 = collect([Float64(fraction_scale[name][1]) for name in names])
+    fission_fractions_scale_R6 = collect([Float64(fraction_scale[name][1]) for name in names])
+    spectrum_pulls = zeros(19)
+    
+
     params = (;
         amc_unc_scale,
         acc_scale,
@@ -491,6 +441,20 @@ function get_params(datadir = @__DIR__)
         eff_eres_AD34,
         lsnl_pull,
         iav_offdiag_scale,
+         reactor_thermal_power_scale,
+        neq_scale_R1,
+        neq_scale_R2,
+        neq_scale_R3,
+        neq_scale_R4,
+        neq_scale_R5,
+        neq_scale_R6,
+        snf_scale,
+        fission_fractions_scale_R1,
+        fission_fractions_scale_R2,
+        fission_fractions_scale_R3,
+        fission_fractions_scale_R4,
+        fission_fractions_scale_R5,
+        fission_fractions_scale_R6,
     )
     return params
 end
@@ -595,15 +559,71 @@ function get_priors(datadir = @__DIR__)
     lsnl_scale_unc = dict["parameters"]["lsnl_scale_a"][2]
     lsnl_pull = Distributions.MvNormal(lsnl_scale_nom .* ones(4), lsnl_scale_unc^2 .* ones(4))
 
+
+    ### reactor priors specific to DayaBay setup
+    ## reactor thermal power uncertainty
+    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_thermal_power_uncertainty.yaml"))
+    mu = data["parameters"]["thermal_power_scale"][1]
+    sigma = data["parameters"]["thermal_power_scale"][2] * mu * 0.01  # percent
+    reactor_thermal_power_scale = Distributions.MvNormal(mu .* ones(6), Diagonal(sigma.^2 .* ones(6)))
+
+    ## fission fraction scale
+    data = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions_scale.yaml"), dicttype=OrderedDict{String,Any})
+    fraction_scale = data["parameters"]["fission_fractions_scale"]
+
+    isotopes = ["U235", "U238", "Pu239", "Pu241"]
+    scale = zeros((4, 4))
+    for i in 1:4
+        for j in 1:4
+            scale[i, j] = fraction_scale[isotopes[i]][1] * fraction_scale[isotopes[i]][2] * fraction_scale[isotopes[j]][1] * fraction_scale[isotopes[j]][2] * 0.01 * 0.01   # percent
+        end
+    end
+
+    mu = collect([Float64(fraction_scale[name][1]) for name in isotopes])
+    corr_mat = hcat(data["correlations"]["fission_fractions_scale"]["matrix"]...)
+
+
+    cov_mat = corr_mat .* scale
+    fission_fractions_scale_R1 = Distributions.MvNormal(mu, cov_mat)
+    fission_fractions_scale_R2 = Distributions.MvNormal(mu, cov_mat)
+    fission_fractions_scale_R3 = Distributions.MvNormal(mu, cov_mat)
+    fission_fractions_scale_R4 = Distributions.MvNormal(mu, cov_mat)
+    fission_fractions_scale_R5 = Distributions.MvNormal(mu, cov_mat)
+    fission_fractions_scale_R6 = Distributions.MvNormal(mu, cov_mat)
+
+    # free parameters (official: unbounded); exp(±1) is far outside any fitted value
+    spectrum_pulls = Distributions.Uniform.(-ones(19), ones(19))
+
+    ## non-equilibrium correction
+    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_nonequilibrium_correction.yaml"))
+    mu = file["parameters"]["nonequilibrium_scale"][1] .* ones(4)
+    sigma = mu .* file["parameters"]["nonequilibrium_scale"][2] .* 0.01 # percent
+
+
+    neq_scale_R1 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+    neq_scale_R2 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+    neq_scale_R3 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+    neq_scale_R4 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+    neq_scale_R5 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+    neq_scale_R6 = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+
+    # snf correction
+    file = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_snf.yaml"))
+    mu = file["parameters"]["snf_scale"][1] .* ones(6)
+    sigma = mu .* file["parameters"]["snf_scale"][2] .* 0.01   # percent
+    snf_scale = Distributions.MvNormal(mu, Diagonal(sigma.^2))
+
+    
+
     priors = (
-        amc_unc_scale=amc_unc_scale,  # done
-        acc_scale=acc_scale,   # done
-        lihe_unc_scale=lihe_unc_scale,  # done
-        fast_n_unc_scale=fast_n_unc_scale,   # done
-        alpha_n_rate=alpha_n_rate,   # done
-        eres_a=eres_a,  # done
-        eres_b=eres_b,  # done
-        eres_c=eres_c,  # done
+        amc_unc_scale=amc_unc_scale,
+        acc_scale=acc_scale,
+        lihe_unc_scale=lihe_unc_scale,
+        fast_n_unc_scale=fast_n_unc_scale,
+        alpha_n_rate=alpha_n_rate,
+        eres_a=eres_a,
+        eres_b=eres_b,
+        eres_c=eres_c,
         eff_eres_AD11=eff_eres_AD11,
         eff_eres_AD12=eff_eres_AD12,
         eff_eres_AD21=eff_eres_AD21,
@@ -613,7 +633,21 @@ function get_priors(datadir = @__DIR__)
         eff_eres_AD33=eff_eres_AD33,
         eff_eres_AD34=eff_eres_AD34,
         lsnl_pull,
-        iav_offdiag_scale=iav_offdiag_scale,   # done
+        iav_offdiag_scale=iav_offdiag_scale,
+        reactor_thermal_power_scale,
+        neq_scale_R1,
+        neq_scale_R2,
+        neq_scale_R3,
+        neq_scale_R4,
+        neq_scale_R5,
+        neq_scale_R6,
+        snf_scale,
+        fission_fractions_scale_R1,
+        fission_fractions_scale_R2,
+        fission_fractions_scale_R3,
+        fission_fractions_scale_R4,
+        fission_fractions_scale_R5,
+        fission_fractions_scale_R6,
     )
 end
 
@@ -771,11 +805,12 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     df_exp = assets.df_exp
     detector_list = assets.detector_list
 
-    xsec = physics.xsec.xsec
     n_protons = get_proton_number(datadir)
 
     iav_func = get_iav_matrix(datadir)
     lsnl = get_lsnl_correction(datadir)
+
+    nominal_thermal_power = assets.nominal_thermal_power
 
 
     osc = physics.osc
@@ -815,16 +850,17 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
     lsnl_mask = fine_binning_Edep[1:end-1] .>= lsnl_min_energy - 1e-9
 
     # the reactor fluxes on the integration mesh depend only on the reactor parameters: computed once per evaluation
-    # and shared by all AD-periods; (main × correction + neq, snf) per reactor
+    # and shared by all AD-periods; (main × correction + neq, snf / nom_thermal_power) per reactor
     mesh_flux = physics.flux.flux_on_mesh(E_nu_mesh)
     ffs_symbols = [Symbol("fission_fractions_scale_R$(i)") for i=1:6]
     neq_symbols = [Symbol("neq_scale_R$(i)") for i=1:6]
     function reactor_fluxes(params)
-        map(1:6) do r
-            main, neq, snf, correction = mesh_flux(params.reactor_thermal_power_scale[r], params.energy_per_fission,
-                params[ffs_symbols[r]], params.spectrum_pulls, params[neq_symbols[r]], params.snf_scale[r], r)
-            (main .* correction .+ neq, snf)
-        end
+        flux_r(r; kw...) = mesh_flux(params.reactor_thermal_power_scale[r], params.energy_per_fission,
+            params[ffs_symbols[r]], params.spectrum_pulls, params[neq_symbols[r]], params.snf_scale[r], r; kw...)
+        # the free spectrum correction is common to all reactors: computed once
+        main1, neq1, snf1, correction = flux_r(1)
+        vcat([(main1 .* correction .+ neq1, snf1)],
+             [(main .* correction .+ neq, snf) for (main, neq, snf, _) in (flux_r(r; correction) for r in 2:6)])
     end
     # survival probabilities per AD (shared by its periods)
     baselines_km = Dict(ad => collect(df_exp[findfirst(df_exp[!, "AD"] .== ad), [:R1, :R2, :R3, :R4, :R5, :R6]]) ./ 1e3 for ad in unique(df_exp[!, "AD"]))
@@ -837,7 +873,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         standard_osc || return Dict(ad => osc.osc_prob(E_nu_GeV, L, params, anti=true)[:, :, 1, 1] for (ad, L) in baselines_km)
         Dict(ad => nue_survival(E_nu_GeV, L, params) for (ad, L) in baselines_km)
     end
-    final_rebin_idx = rebin_index(fine_binning_Edep, coarse_binning)
+    final_rebin_idx = Newtrinos.Helpers.rebin_index(fine_binning_Edep, coarse_binning)
 
     ## create background model functions, taking parameter NamedTuple as arg
     background_models = OrderedDict()
@@ -918,7 +954,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
         # convert the cross section from e-41cm2 to m2 -> multiply by 1e-4
         flux_norm = 1e-45 * n_p .* P_th_seconds .* invL2
 
-        spec_prefac_snf = 1e-45 * n_p * sum(output.eff_livetime_seconds) .* invL2
+        spec_prefac_snf = nominal_thermal_power * 1e-45 * n_p * sum(output.eff_livetime_seconds) .* invL2
         function neutrino_counts(params, fluxes, P)
             # value type promoted over all parameter inputs, so intermediate
             # arrays stay dual even when only a subset of the parameters is dual
@@ -970,7 +1006,7 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
                 # nominal flux and neq correction scale with sum(daily thermal power * daily eff livetime); the SNF is
                 # independent of the actual thermal power (spent fuel) and scales with the eff livetime
                 flux_r, snf_r = fluxes[r]
-                @. interm_spec += (flux_norm[r] * flux_r + spec_prefac_snf[r] * snf_r) * P[:, r]
+                @views @. interm_spec += (flux_norm[r] * flux_r + spec_prefac_snf[r] * snf_r) * P[:, r]
             end
             # integrate over each Edep bin: multiply with cross section × Jacobian × quadrature weights and sum
             interm_spec .*= integral_weights
@@ -981,12 +1017,12 @@ function get_forward_model(physics, assets; datadir = @__DIR__, debug = false)
             # LSNL and the relative energy scale (eff_eres[2]) as one count-conserving distortion of the Escint bins onto
             # the Evis bins (same 50 keV binning); bins below the LSNL curve range are dropped (as in the official model)
             E_vis_edges = lsnl(fine_binning_Edep, params.lsnl_pull) .* eff_eres[2]
-            evis_spectrum = project_to_bins(E_vis_edges, smeared_spectrum .* lsnl_mask, fine_binning_Edep)
+            evis_spectrum = Newtrinos.Helpers.project_to_bins(E_vis_edges, smeared_spectrum .* lsnl_mask, fine_binning_Edep)
 
             # energy resolution from the Evis bin centres onto the Erec bins (same binning), then rebin to the final bins
             sigma_E = eres(fine_binning_Edep_c, params.eres_a, params.eres_b, params.eres_c)
-            erec_spectrum = smear_bin_centres(evis_spectrum, sigma_E, fine_binning_Edep)
-            coarse_counts = rebin(erec_spectrum, final_rebin_idx, length(coarse_binning) - 1)            
+            erec_spectrum = Newtrinos.Helpers.smear_bin_centres(evis_spectrum, sigma_E, fine_binning_Edep)
+            coarse_counts = Newtrinos.Helpers.rebin(erec_spectrum, final_rebin_idx, length(coarse_binning) - 1)            
             return eff_eres[1] .* coarse_counts .* assets.efficiency
         end
 
