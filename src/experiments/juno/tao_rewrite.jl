@@ -52,6 +52,7 @@ function get_params()
     tao_reactor_thermal_power_scale = 1.0
     tao_e_scale = 1.0
     tao_lsnl_pull = 0.0
+    tao_lsnl_juno_pull = 0.
     tao_eres_pull = 0.0
     tao_efficiency = 0.466
 
@@ -61,6 +62,7 @@ function get_params()
         tao_taishan_ffs,
         tao_reactor_thermal_power_scale,
         tao_lsnl_pull,
+        tao_lsnl_juno_pull,
         tao_efficiency,
     )
 
@@ -94,6 +96,7 @@ function get_priors()
     tao_e_scale = Normal(1., 0.006)
     tao_efficiency = Normal(0.466, 0.05)
     tao_lsnl_pull = Normal(0.0, 1.0)
+    tao_lsnl_juno_pull = Normal(0.0, 1.0)
     tao_eres_pull = Normal(0.0, 1.0)
 
     priors = (;
@@ -102,6 +105,7 @@ function get_priors()
         tao_taishan_ffs,
         tao_reactor_thermal_power_scale,
         tao_lsnl_pull,
+        tao_lsnl_juno_pull,
         tao_efficiency,
     )
 end
@@ -146,6 +150,31 @@ function get_assets(datadir = @__DIR__)
         ana_mask,
     )
 end
+
+
+function get_lsnl_correction()
+    data = readdlm(joinpath(@__DIR__, "tao_data/TAO_Fig25b_nonlinearity.txt"), skipstart=42)
+    E = convert(Vector{Float64}, data[1:end-1, 1])
+    f = convert(Vector{Float64}, data[1:end-1, 2])
+
+    x, nom = Newtrinos.Helpers.refine_lsnl(E, f, 4)
+    nom_itp = linear_interpolation(x, nom, extrapolation_bc=Line())
+    xlo, xhi = convert(Vector{Float64}, data[1:end-1, 3]), convert(Vector{Float64}, data[1:end-1, 4])
+    m = mean((f .- xlo, xhi .- f))
+
+    pull_curve = Newtrinos.Helpers.refine_lsnl(E, nom_itp(E) ./E .+ m, x)[2] - nom
+    pull_itp = linear_interpolation(x, pull_curve, extrapolation_bc=Line()) 
+
+    juno = readdlm(joinpath(@__DIR__, "207_days/lsnl_nom_coarse.txt"), skipstart=11)
+    E_juno = juno[:, 1]
+    juno_pull = Newtrinos.Helpers.refine_lsnl(E_juno, juno[:, 2], x)[2] - nom
+    juno_itp = linear_interpolation(x, juno_pull, extrapolation_bc=Line())
+
+    function _lsnl(E, pull, juno_pull)
+        return @. nom_itp(E) + pull * pull_itp(E) + juno_pull * juno_itp(E)
+    end
+end
+
 
 function get_eres()
     data = readdlm(joinpath(@__DIR__, "tao_data/tao_energy_resolution.txt"), skipstart=27)
@@ -243,6 +272,8 @@ function get_forward_model(physics, assets; debug = false)
     flux_norm = 1e-45 * n_p * P_th_seconds * invL2
     spec_prefac_snf = 1e-45 * n_p * P_th_seconds * invL2
 
+    lsnl = get_lsnl_correction()
+
 
     function forward_model(params)
         T = promote_type(
@@ -250,6 +281,8 @@ function get_forward_model(physics, assets; debug = false)
                 eltype(params.tao_reactor_thermal_power_scale),
                 eltype(params.tao_taishan_ffs),
                 eltype(params.tao_e_scale),
+                eltype(params.tao_lsnl_pull),
+                eltype(params.tao_lsnl_juno_pull),
                 eltype(params.spectrum_pulls),
                 eltype(params.energy_per_fission),
             )
@@ -268,8 +301,8 @@ function get_forward_model(physics, assets; debug = false)
         #different to juno implementation, for TAO we smear the flux to different bins
         #as for the dayabat IAV matrix (same physical concept)
         #this also applies the lsnl directly, hence the binning stays the same in this step
-        evis_spectrum = Newtrinos.TAOLeakage.fold(R, spec; pull=params.tao_lsnl_pull, scale=params.tao_e_scale, band=:symmetric)  
-        
+        lsnl_func(x) = lsnl(x, params.tao_lsnl_pull, params.tao_lsnl_juno_pull)
+        evis_spectrum = Newtrinos.TAOLeakage.fold(R, spec, lsnl_func, scale=params.tao_e_scale)  
         scaled_eres = eres(E_vis_c, params.tao_eres_pull)
         erec_spectrum = Newtrinos.Helpers.smear_erf(evis_spectrum, scaled_eres, E_vis_edges)
         coarse_counts = Newtrinos.Helpers.rebin(erec_spectrum, final_rebin_idx, length(E_ana) - 1) .* params.tao_efficiency

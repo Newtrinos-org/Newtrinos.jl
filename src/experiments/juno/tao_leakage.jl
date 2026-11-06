@@ -255,12 +255,12 @@ The keyword form uses the precomputed TAO table (`LeakResponse(...; nl=...)`); `
 _evalpoints(R::LeakResponse) = R.integrate ? R.etrue_edges : R.Ec
 _firstpoint(R::LeakResponse) = R.jfirst            # same index for edges (lower edge of bin jfirst) and centres
 
-function peak_positions(R::LeakResponse, f; bias::Real=0)
+function peak_positions(R::LeakResponse, f; bias::Real=0, scale::Real=1)
     X = _evalpoints(R)
-    P = typeof(float(X[end] * f(X[end]) + bias))
+    P = typeof(float(scale * f(X[end]) + bias))
     p = zeros(P, length(X))
     @inbounds for j in _firstpoint(R):length(X)
-        p[j] = X[j] * f(X[j]) + bias
+        p[j] = scale * f(X[j]) + bias
     end
     return p
 end
@@ -396,7 +396,7 @@ end
     fold(R, spectrum, f; bias=0) -> Vector
 
 Visible-energy spectrum from a true-energy spectrum (events per E_true bin), using the TAO positron
-non-linearity moved by `pull`/`scale` (needs `LeakResponse(...; nl=...)`) or any curve `f(E) = E_vis/E_true`.
+non-linearity moved by `pull`/`scale` (needs `LeakResponse(...; nl=...)`) or any curve `f(Etrue) = E_vis`.
 `scale` multiplies and `bias` (MeV) is added to the peak position: E_peak = scale * E_true * f(E_true) + bias.
 `band = :symmetric` uses the average band width for the pull (smooth at pull = 0); see `positron_nl`.
 Events falling outside the E_vis grid (e.g. below a 0.7-MeV threshold) are dropped, as in the selection.
@@ -408,8 +408,8 @@ function fold(R::LeakResponse, spectrum::AbstractVector; pull::Real=0, scale::Re
     return fold!(out, R, spectrum, peaks)
 end
 
-function fold(R::LeakResponse, spectrum::AbstractVector, f; bias::Real=0)
-    peaks = peak_positions(R, f; bias=bias)
+function fold(R::LeakResponse, spectrum::AbstractVector, f; bias::Real=0, scale::Real=1)
+    peaks = peak_positions(R, f; bias=bias, scale=scale)
     out = zeros(promote_type(eltype(peaks), eltype(spectrum)), nvis(R))
     return fold!(out, R, spectrum, peaks)
 end
