@@ -1,0 +1,44 @@
+# JUNO, arXiv:2609.37895v1, Fig. 1b: nominal positron energy non-linearity (solid red "best fit" e+ line),
+# given at the 33 vertices with which the curve is stored in the PDF (page 5). Between vertices the plotted
+# curve is a straight line; these are the exact points drawn, with no interpolation.
+# Axis calibration from the tick marks (x: 0-10 MeV true energy; y: 0.85-1.10).
+# Precision: the vertex coordinates are exact to the PDF's precision (~1e-5 MeV in E, ~1e-6 in the
+# non-linearity); the axis calibration from the tick marks is good to ~1e-4 relative.
+# The vertices are unevenly spaced (dense near threshold, sparse at high energy) because the plotting software
+# dropped points lying on straight segments within about 0.1 pt (about 3e-4 in non-linearity); linear
+# interpolation between them reproduces the original curve to that level.
+#
+#E_true_MeV   nl_nominal
+1.02198      0.893698
+1.03076      0.891361
+1.04394      0.890998
+1.05272      0.891156
+1.07688      0.892560
+1.17569      0.900979
+1.22620      0.905472
+1.31843      0.913690
+1.37553      0.918617
+1.63026      0.937826
+1.69833      0.942235
+1.93330      0.955295
+2.16607      0.965689
+2.51743      0.977834
+2.88196      0.987230
+3.02909      0.990393
+3.09058      0.991615
+3.60663      1.000022
+4.20832      1.006925
+5.07792      1.013529
+5.36120      1.015118
+5.53908      1.016008
+5.87067      1.017403
+6.54922      1.019716
+6.93351      1.020754
+7.10699      1.021160
+7.48690      1.021924
+7.66916      1.022251
+8.08640      1.022891
+8.39603      1.023298
+9.18438      1.024082
+9.55989      1.024343
+10.00128     1.024583
