@@ -47,8 +47,8 @@ include("utils/autodiff.jl")
 include("utils/helpers.jl")
 include("utils/chi2map.jl")
 
+include("experiments/daya_bay/daya_bay_3158days_simple/dayabay.jl")
 include("experiments/daya_bay/daya_bay_3158days/dayabay.jl")
-include("experiments/daya_bay/daya_bay_3158days/dayabay_rewrite.jl")
 include("experiments/minos/minos_sterile_16e20_POT/minos.jl")
 include("experiments/icecube/deepcore_3y_highstats_sample_b/deepcore.jl")  # module deepcore_3y
 include("experiments/icecube/deepcore_8y_verification_sample/deepcore.jl")  # module deepcore_8y
@@ -82,8 +82,11 @@ include("experiments/borexino/borexino_phase3/borexino_ph3.jl")
 include("experiments/borexino/borexino_phase2_spectrum/borexino_ph2_spectrum.jl")
 include("experiments/borexino/borexino_phase1_spectrum/borexino_ph1_spectrum.jl")
 
-include("experiments/juno/juno.jl")
-include("experiments/juno/tao.jl")
+include("experiments/juno/juno_projection/juno.jl")
+include("experiments/juno/juno_projection/tao.jl")
+include("experiments/juno/juno_207days/juno.jl")
+include("experiments/juno/tao_31days/tao.jl")
+include("experiments/juno/tao_31days/tao_leakage.jl")
 include("experiments/gerda/gerda.jl")
 include("experiments/katrin/katrin.jl")
 end

@@ -1,4 +1,4 @@
-module juno
+module juno_projection
 
 using DataFrames
 using CSV

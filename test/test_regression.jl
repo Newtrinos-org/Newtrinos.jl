@@ -8,7 +8,8 @@ using Printf
 # 2026-10-26 (feature/earth-model): all experiments with matter effects updated for the exact chord split in the
 # zone containing the detector (earth_layers.compute_paths) and N_A = 6.02214076e23; |Δ log L| ≤ 0.005.
 const ALL_REFERENCE_VALUES = (
-    dayabay      = -168.90003273508322,
+    dayabay =    -16188.2392767153,
+    dayabay_simple = -168.90003273508322,
     kamland      = -144.6386861120536,
     minos        = -268.4046154382636,
     deepcore     = -942.5712342465076,

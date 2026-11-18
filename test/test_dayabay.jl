@@ -6,14 +6,14 @@ using Newtrinos
 @testset "DayaBay" begin
     @testset "Meta" begin
         p_AD = "6ADAD11"
-        @test 11 == Newtrinos.dayabay_rewrite.retrieve_AD(p_AD)
-        @test 6 == Newtrinos.dayabay_rewrite.retrieve_period(p_AD)
-        @test 1 == Newtrinos.dayabay_rewrite.retrieve_EH(p_AD)
+        @test 11 == Newtrinos.dayabay.retrieve_AD(p_AD)
+        @test 6 == Newtrinos.dayabay.retrieve_period(p_AD)
+        @test 1 == Newtrinos.dayabay.retrieve_EH(p_AD)
     end
 
-    db = Newtrinos.dayabay_rewrite.configure()
+    db = Newtrinos.dayabay.configure()
     @testset "IAV" begin
-        iav_func = Newtrinos.dayabay_rewrite.get_iav_matrix()
+        iav_func = Newtrinos.dayabay.get_iav_matrix()
         iav = iav_func(1.0)
         N = size(iav)[1]
         for i in 1:20
@@ -40,8 +40,8 @@ using Newtrinos
     end
 
     @testset "LSNL" begin
-        lsnl_data = Newtrinos.dayabay_rewrite.read_lsnl_correction()
-        lsnl = Newtrinos.dayabay_rewrite.get_lsnl_correction()
+        lsnl_data = Newtrinos.dayabay.read_lsnl_correction()
+        lsnl = Newtrinos.dayabay.get_lsnl_correction()
         # absolute Evis(Escint); the refined curves pass through the tabulated points
         E = lsnl_data.E
         @test isapprox(lsnl(E, [0, 0, 0, 0]), lsnl_data.f_nom .* E)
@@ -55,7 +55,7 @@ using Newtrinos
     end
 
     @testset "energy response" begin
-        D = Newtrinos.dayabay_rewrite
+        D = Newtrinos.dayabay
         params = db.params
         edges = collect(0.0:0.05:12.0)
         c = (edges[1:end-1] .+ edges[2:end]) ./ 2
@@ -82,7 +82,7 @@ using Newtrinos
                             (Newtrinos.osc.OscillationConfig(flavour = Newtrinos.osc.ThreeFlavour(ordering = :IO)), -2.45e-3))
             osc = Newtrinos.osc.configure(cfg)
             p = merge(Newtrinos.osc.get_params(cfg), (θ₁₃ = 0.15, Δm²₃₁ = dm31))
-            @test isapprox(Newtrinos.dayabay_rewrite.nue_survival(E, L, p), osc.osc_prob(E, L, p, anti = true)[:, :, 1, 1]; atol = 1e-12)
+            @test isapprox(Newtrinos.dayabay.nue_survival(E, L, p), osc.osc_prob(E, L, p, anti = true)[:, :, 1, 1]; atol = 1e-12)
         end
     end
 

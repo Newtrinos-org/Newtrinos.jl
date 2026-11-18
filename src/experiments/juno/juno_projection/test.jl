@@ -9,7 +9,7 @@ using CairoMakie
 using DataFrames
 using CSV
 
-experiments = (juno = Newtrinos.juno.configure(),)
+experiments = (juno = Newtrinos.juno_projection.configure(),)
 
 p = Newtrinos.get_params(experiments)
 
