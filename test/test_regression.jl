@@ -7,10 +7,13 @@ using Printf
 # To update: run the experiment and replace the reference value.
 # 2026-10-26 (feature/earth-model): all experiments with matter effects updated for the exact chord split in the
 # zone containing the detector (earth_layers.compute_paths) and N_A = 6.02214076e23; |Δ log L| ≤ 0.005.
+# 2026-11-19: kamland switched to the Daya Bay flux model (dayabay_flux + Vogel–Beacom IBD as in
+# JUNO: official two-fold Gauss-Legendre IBD integration, free energy-per-fission, 19 spectrum pulls, shared
+# fission-fraction/NEQ/SNF scales; Bugey-4 anchoring and long-lived factor dropped).
 const ALL_REFERENCE_VALUES = (
     dayabay =    -16188.2392767153,
     dayabay_simple = -168.90003273508322,
-    kamland      = -144.6386861120536,
+    kamland      = -146.56758213520033,
     minos        = -268.4046154382636,
     deepcore     = -942.5712342465076,
     super_k      = -3432.5322914241383,
