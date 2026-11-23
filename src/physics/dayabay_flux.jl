@@ -38,6 +38,7 @@ Config for Daya Bay specific reactor flux model
     average::Bool = false
     N_pulls::Int64 = 19
     corr_mode = :exp
+    overwrite_fission_fractions = nothing
 end
 
 struct DayaBayFlux <: FluxModel end
@@ -51,6 +52,7 @@ struct DayaBayFlux <: FluxModel end
     datadir::String
     average::Bool
     corr_mode::Symbol
+    overwrite_fission_fractions
 end
 
 function configure(cfg::ReactorFluxConfig = ReactorFluxConfig())
@@ -58,11 +60,12 @@ function configure(cfg::ReactorFluxConfig = ReactorFluxConfig())
         cfg=cfg,
         params = get_params(cfg.flux_model, datadir=cfg.datadir, N_pulls=cfg.N_pulls),
         priors = get_priors(cfg.flux_model, datadir=cfg.datadir, N_pulls=cfg.N_pulls),
-        flux = get_flux(cfg.flux_model, datadir=cfg.datadir, average=cfg.average, corr_mode=cfg.corr_mode, N_pulls=cfg.N_pulls),
-        flux_on_mesh = get_flux_on_mesh(cfg.flux_model, datadir=cfg.datadir, average=cfg.average, corr_mode=cfg.corr_mode, N_pulls=cfg.N_pulls),
+        flux = get_flux(cfg.flux_model, datadir=cfg.datadir, average=cfg.average, corr_mode=cfg.corr_mode, N_pulls=cfg.N_pulls, overwrite_fission_fractions=cfg.overwrite_fission_fractions),
+        flux_on_mesh = get_flux_on_mesh(cfg.flux_model, datadir=cfg.datadir, average=cfg.average, corr_mode=cfg.corr_mode, N_pulls=cfg.N_pulls, overwrite_fission_fractions=cfg.overwrite_fission_fractions),
         datadir = cfg.datadir,
         average=cfg.average,
-        corr_mode=cfg.corr_mode
+        corr_mode=cfg.corr_mode,
+        overwrite_fission_fractions=cfg.overwrite_fission_fractions,
     )
 end
 
@@ -216,14 +219,19 @@ snf_scale, reac_idx; correction)` gives `(main, neq, snf, correction)` at the an
 Everything that does not depend on the parameters (isotope spectra, NEQ and SNF corrections, interpolation weights of
 the free spectrum correction) is tabulated once for the mesh `E`.
 """
-function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, N_pulls = 19, corr_mode = :exp)
+function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, N_pulls = 19, corr_mode = :exp, overwrite_fission_fractions = nothing)
 
     # fixed ordering of isotopes
     names = (:U235, :U238, :Pu239, :Pu241)
     # get fission fractions for fixed weighting
-    fractions = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions.yaml"), dicttype=OrderedDict{String,Any})["parameters"]["fission_fractions"]
-    fractions = [Float64(fractions[string(iso)]) for iso in names]
-
+    if overwrite_fission_fractions !== nothing
+        @assert length(overwrite_fission_fractions) == 4
+        fractions = overwrite_fission_fractions
+        println(fractions)
+    else
+        fractions = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions.yaml"), dicttype=OrderedDict{String,Any})["parameters"]["fission_fractions"]
+        fractions = [Float64(fractions[string(iso)]) for iso in names]
+    end
     fluxes = extract_reactor_spectra(datadir; average=average)
 
     # Huber-Mueller spectra [ν/fission/MeV], interpolated exponentially (log-linear) as in the official model
@@ -352,8 +360,8 @@ antineutrino spectrum per GW thermal power [ν/s/MeV/GW] and the extra flux from
 SNF flux [ν/s/MeV] of a reactor at nominal power, and the free spectrum correction, which multiplies only `main` (as
 in the official model). For repeated evaluation on a fixed mesh use [`get_flux_on_mesh`](@ref).
 """
-function get_flux(cfg::DayaBayFlux; datadir = datadir, average = false, corr_mode = :exp, N_pulls = 19)
-    on_mesh = get_flux_on_mesh(cfg; datadir = datadir, average = average, corr_mode = corr_mode, N_pulls = N_pulls)
+function get_flux(cfg::DayaBayFlux; datadir = datadir, average = false, corr_mode = :exp, N_pulls = 19, overwrite_fission_fractions = nothing)
+    on_mesh = get_flux_on_mesh(cfg; datadir = datadir, average = average, corr_mode = corr_mode, N_pulls = N_pulls, overwrite_fission_fractions = overwrite_fission_fractions)
     function reactor_flux(E, args...)
         E isa Number && return map(first, on_mesh([E])(args...))
         on_mesh(collect(Float64, E))(args...)

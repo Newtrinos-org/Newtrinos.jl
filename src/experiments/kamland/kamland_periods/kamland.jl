@@ -43,6 +43,7 @@ const ΔE_NU = 0.782 + 0.010
 const RESOLUTION = 0.064                         # σ_E / E = 6.4 % / √(E/MeV)
 const BEST_FIT = (θ₁₂ = atan(sqrt(0.481)), θ₁₃ = asin(sqrt(0.010)), θ₂₃ = 0.785, δCP = 0.0, Δm²₂₁ = 7.54e-5, Δm²₃₁ = 2.4e-3)
 const ESCALE_UNC = 0.018
+const fission_fractions = [0.567, 0.078, 0.298, 0.057]
 
 """Data sets: `:periods2013` (PRD 88, 033001: Periods 1–3, default) and `:kamland2011` (PRD 83, 052002: 2002–2009 as one
 spectrum, Fig. 1). Per data set: period names, spectrum files (rates per live day), live days, calendar ranges,
@@ -71,13 +72,13 @@ end
 
 default_physics() = (osc = Newtrinos.osc.configure(Newtrinos.osc.OscillationConfig(interaction = Newtrinos.osc.SI())),
                      xsec = Newtrinos.ibd_xsec.configure(Newtrinos.ibd_xsec.VogelBeacomO1()),
-                     flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average = true)))
+                     flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average = true, overwrite_fission_fractions=fission_fractions)))
 
 function configure(physics = default_physics(); dataset = :periods2013)
     # a physics tuple shared with other experiments may lack the flux or the IBD cross section: use the defaults then
     physics = (; physics.osc,
                xsec = haskey(physics, :xsec) ? physics.xsec : Newtrinos.ibd_xsec.configure(Newtrinos.ibd_xsec.VogelBeacomO1()),
-               flux = haskey(physics, :flux) ? physics.flux : Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average = true)))
+               flux = haskey(physics, :flux) ? physics.flux : Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average = true, overwrite_fission_fractions = fission_fractions)))
     ds = DATASETS[dataset]
     assets = get_assets(physics, ds)
     KamLAND(physics = physics, params = get_params(ds), priors = get_priors(ds), assets = assets,
@@ -219,6 +220,7 @@ rate_factor(params, ds, p) = 1 + ds.rate_unc[1] * params.kamland_flux_scale + (p
 
 "Expected events per period (vectors of 17 bins)."
 function get_expected(params, physics, assets)
+    #ds = dataset
     ds = assets.ds
     reac = reactor_events(params, physics, assets; ε = ESCALE_UNC * params.kamland_energy_scale)
     map(eachindex(assets.periods)) do p
