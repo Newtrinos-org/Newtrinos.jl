@@ -227,7 +227,6 @@ function get_flux_on_mesh(cfg::DayaBayFlux; datadir = datadir, average = false, 
     if overwrite_fission_fractions !== nothing
         @assert length(overwrite_fission_fractions) == 4
         fractions = overwrite_fission_fractions
-        println(fractions)
     else
         fractions = YAML.load_file(joinpath(datadir, "dayabay_data/parameters/reactor_fission_fractions.yaml"), dicttype=OrderedDict{String,Any})["parameters"]["fission_fractions"]
         fractions = [Float64(fractions[string(iso)]) for iso in names]
