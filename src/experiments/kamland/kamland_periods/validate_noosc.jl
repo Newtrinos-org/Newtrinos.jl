@@ -3,13 +3,16 @@
 # expectation for the 2002–2009 data (PRD 83, 052002, Fig. 1: data/noosc_2011.csv, with that data set's efficiency
 # data/efficiency_2011.csv); shapes compared, rate as a ratio.
 #   julia --project=<Newtrinos.jl> validate_noosc.jl
-using Newtrinos, Printf, CSV, DataFrames
+using Newtrinos, Printf, CSV, DataFrames, Accessors, FileIO
 const K = Newtrinos.kamland
 const D = joinpath(@__DIR__, "data")
 noosc = CSV.read(joinpath(D, "noosc_2011.csv"), DataFrame; comment = "#")[1:length(K.EDGES)-1, :]
 eff = CSV.read(joinpath(D, "efficiency_2011.csv"), DataFrame; comment = "#")
 eff2011(e) = K.lin(clamp(e, eff.E_MeV[1], eff.E_MeV[end]), eff.E_MeV, eff.efficiency)
 flux = Newtrinos.dayabay_flux.configure(Newtrinos.dayabay_flux.ReactorFluxConfig(average = true))
+# load DayaBays' best fitting spectrum pulls
+spec_pulls_mle = FileIO.load(joinpath(@__DIR__, "../../juno/juno_207days/spectrum_pulls_cov.jld2"))["mle"]
+@reset flux.params.spectrum_pulls = spec_pulls_mle
 xsec = Newtrinos.ibd_xsec.configure(Newtrinos.ibd_xsec.VogelBeacomO1())
 E_fine = collect(0.7:0.025:8.45)
 E_fine_c = (E_fine[1:end-1] + E_fine[2:end]) / 2
