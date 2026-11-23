@@ -39,6 +39,7 @@ const KAMLAND_POS = (36.4225, 137.3153, -1.0)     # lat, lon [deg], depth ~1 km
 const TARGET_PROTONS = 5.98e31
 const WORLD_FRACTION = 0.011
 const EDGES = collect(0.9:0.425:8.125)
+const ΔE_NU = 0.782 + 0.010 
 const RESOLUTION = 0.064                         # σ_E / E = 6.4 % / √(E/MeV)
 const BEST_FIT = (θ₁₂ = atan(sqrt(0.481)), θ₁₃ = asin(sqrt(0.010)), θ₂₃ = 0.785, δCP = 0.0, Δm²₂₁ = 7.54e-5, Δm²₃₁ = 2.4e-3)
 const ESCALE_UNC = 0.018
@@ -189,27 +190,27 @@ function get_assets(physics, ds = DATASETS.periods2013)
     (; observed = NamedTuple{ds.names}(Tuple(pd.observed for pd in periods)), ds, E_fine, E_fine_c,
        E_nu_mesh = mesh.E_nu_mesh, E_nu_GeV, integral_weights = mesh.integral_weights, NQ = mesh.NQ, NFc = mesh.NFc,
        final_rebin_idx = Newtrinos.Helpers.rebin_index(E_fine, EDGES), periods, flux_norm, L,
-       sites = vcat(ex.sites, "WORLD"), layers)
+       sites = vcat(ex.sites, "WORLD"), layers, mesh_flux = physics.flux.flux_on_mesh(mesh.E_nu_mesh))
 end
 
 "Assets with the flux on the IBD integration mesh attached (the setup reads the flux tables, so compute it once)."
-with_mesh_flux(physics, a) = merge(a, (; mesh_flux = physics.flux.flux_on_mesh(a.E_nu_mesh)))
+# with_mesh_flux(physics, a) = merge(a, (; mesh_flux = physics.flux.flux_on_mesh(assets.E_nu_mesh)))
 
 "Expected reactor events per period (vectors of 17 bins): IBD folding, oscillations, resolution, energy scale and
 selection efficiency."
-function reactor_events(params, physics, a; ε = zero(eltype(params.Δm²₂₁)))
-    main, neq, snf, correction = a.mesh_flux(1.0, params.energy_per_fission, params.kamland_ffs, params.spectrum_pulls,
+function reactor_events(params, physics, assets; ε = zero(eltype(params.Δm²₂₁)))
+    main, neq, snf, correction = assets.mesh_flux(1.0, params.energy_per_fission, params.kamland_ffs, params.spectrum_pulls,
         params.kamland_neq_scale, params.kamland_snf_scale, 1)
     flux_r = main .* correction .+ neq
-    Pmat = hcat(Newtrinos.Helpers.survival_probabilities(physics.osc, a.E_nu_GeV, a.L, a.layers, params)...)
-    map(eachindex(a.periods)) do p
-        pd = a.periods[p]
-        interm = (flux_r + snf) .* (Pmat * a.flux_norm[:, p])
-        interm .*= a.integral_weights
-        spec = vec(sum(reshape(interm, a.NQ, a.NFc), dims = 1))
-        iszero(ε) || (spec = Newtrinos.Helpers.project_to_bins(a.E_fine .* (1 + ε), spec, a.E_fine))
-        spec = Newtrinos.Helpers.smear_erf(spec, RESOLUTION * sqrt.(a.E_fine_c), a.E_fine)
-        Newtrinos.Helpers.rebin(spec .* pd.eff.(a.E_fine_c), a.final_rebin_idx, length(EDGES) - 1)
+    Pmat = hcat(Newtrinos.Helpers.survival_probabilities(physics.osc, assets.E_nu_GeV, assets.L, assets.layers, params)...)
+    map(eachindex(assets.periods)) do p
+        pd = assets.periods[p]
+        interm = (flux_r + snf) .* (Pmat * assets.flux_norm[:, p])
+        interm .*= assets.integral_weights
+        spec = vec(sum(reshape(interm, assets.NQ, assets.NFc), dims = 1))
+        iszero(ε) || (spec = Newtrinos.Helpers.project_to_bins(assets.E_fine .* (1 + ε), spec, assets.E_fine))
+        spec = Newtrinos.Helpers.smear_erf(spec, RESOLUTION * sqrt.(assets.E_fine_c), assets.E_fine)
+        Newtrinos.Helpers.rebin(spec .* pd.eff.(assets.E_fine_c), assets.final_rebin_idx, length(EDGES) - 1)
     end
 end
 
@@ -217,34 +218,32 @@ end
 rate_factor(params, ds, p) = 1 + ds.rate_unc[1] * params.kamland_flux_scale + (p > 1 ? ds.rate_unc[2] * params.kamland_flux_scale_late : 0.0)
 
 "Expected events per period (vectors of 17 bins)."
-function get_expected(params, physics, a)
-    ds = a.ds
-    reac = reactor_events(params, physics, a; ε = ESCALE_UNC * params.kamland_energy_scale)
-    map(eachindex(a.periods)) do p
-        pd = a.periods[p]
+function get_expected(params, physics, assets)
+    ds = assets.ds
+    reac = reactor_events(params, physics, assets; ε = ESCALE_UNC * params.kamland_energy_scale)
+    map(eachindex(assets.periods)) do p
+        pd = assets.periods[p]
         reac[p] .* rate_factor(params, ds, p) .+ pd.acc .+ pd.alpha_n .* (1 + ds.alpha_n_unc * params.kamland_alpha_n) .+
             pd.li9 .* (1 + ds.li9_unc * params.kamland_li9) .+ pd.geo_u .* params.kamland_geo_u .+ pd.geo_th .* params.kamland_geo_th
     end
 end
 
 function get_forward_model(physics, assets)
-    a = with_mesh_flux(physics, assets)
     function forward_model(params)
-        μ = get_expected(params, physics, a)
-        distprod(; (a.ds.names[p] => distprod(Poisson.(max.(μ[p], 1e-9))) for p in eachindex(μ))...)
+        μ = get_expected(params, physics, assets)
+        distprod(; (assets.ds.names[p] => distprod(Poisson.(max.(μ[p], 1e-9))) for p in eachindex(μ))...)
     end
 end
 
-function get_plot(physics, a)
-    function plot(params, data = a.observed)
-        am = with_mesh_flux(physics, a)
-        m = get_expected(params, physics, am)
+function get_plot(physics, assets)
+    function plot(params, data = assets.observed)
+        m = get_expected(params, physics, assets)
         Ec = 0.5 .* (EDGES[1:end-1] .+ EDGES[2:end]); n = length(Ec)
-        np = length(a.periods)
+        np = length(assets.periods)
         f = Figure(size = (600, 270 * np))
         for p in 1:np
-            ax = Axis(f[p, 1], ylabel = "events / 0.425 MeV", title = "KamLAND $(a.ds.names[p])", xlabel = p == np ? "E_prompt [MeV]" : "")
-            scatter!(ax, Ec, data[a.ds.names[p]], color = :black)
+            ax = Axis(f[p, 1], ylabel = "events / 0.425 MeV", title = "KamLAND $(assets.ds.names[p])", xlabel = p == np ? "E_prompt [MeV]" : "")
+            scatter!(ax, Ec, data[assets.ds.names[p]], color = :black)
             stairs!(ax, Ec, m[p], step = :center, color = :blue)
         end
         f
