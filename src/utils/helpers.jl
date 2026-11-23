@@ -3,6 +3,7 @@ module Helpers
 using ..Newtrinos
 
 using SpecialFunctions: erf
+using ArraysOfArrays: VectorOfVectors
 
 """
     bin(df, out_centers; col=1)
@@ -258,5 +259,71 @@ function wrap_func(func, pars, keep)
     return wrapped_func, kept_pars, skip
 end
 
+"""
+    ibd_integral_mesh(xsec, E_fine)
+
+IBD integration as in the official Daya Bay model: in each deposited-energy bin of `E_fine` [MeV] a two-fold
+Gauss-Legendre quadrature over Edep (order 5) and the positron angle cosθ ∈ [-1, 1] (order 3), with the exact
+kinematics Eν(Edep, cosθ), the first order cross section dσ/dcosθ and the Jacobian dEν/dEdep of `xsec`
+(`Newtrinos.ibd_xsec.IBDXsec`). Returns `(; E_nu_mesh, integral_weights, NQ, NFc)`: the neutrino energies and the
+weights (cross section × Jacobian × quadrature weights) of all `NQ × NFc` points, both flattened in quadrature-major
+order, so a spectrum on the neutrino-energy mesh is folded to deposited energy with
+`sum(reshape(spec .* integral_weights, NQ, NFc), dims = 1)`.
+"""
+function ibd_integral_mesh(xsec, E_fine)
+    gl5 = ([-0.9061798459386640, -0.5384693101056831, 0.0, 0.5384693101056831, 0.9061798459386640],
+           [0.2369268850561891, 0.4786286704993665, 0.5688888888888889, 0.4786286704993665, 0.2369268850561891])
+    gl3 = ([-0.7745966692414834, 0.0, 0.7745966692414834], [0.5555555555555556, 0.8888888888888888, 0.5555555555555556])
+    NQ = length(gl5[1]) * length(gl3[1])
+    NFc = length(E_fine) - 1
+    E_nu_mesh = zeros(NQ, NFc)
+    integral_weights = zeros(NQ, NFc)
+    for i in 1:NFc
+        lo, hi = E_fine[i], E_fine[i+1]
+        q = 0
+        for (ξ, wE) in zip(gl5...), (c, wc) in zip(gl3...)
+            q += 1
+            Edep = (lo + hi) / 2 + (hi - lo) / 2 * ξ
+            Enu = xsec.Enu(Edep, c)
+            E_nu_mesh[q, i] = Enu
+            integral_weights[q, i] = (hi - lo) / 2 * wE * wc * xsec.xsec(Enu, c) * xsec.jacobian(Enu, Edep, c)
+        end
+    end
+    (; E_nu_mesh = vec(E_nu_mesh), integral_weights = vec(integral_weights), NQ, NFc)
+end
+
+"""
+    nue_survival(E, L, params)
+
+Vacuum three-flavour survival probability P(ν̄e → ν̄e) = 1 - 4 Σᵢ<ⱼ |Uₑᵢ|²|Uₑⱼ|² sin²(Δm²ⱼᵢ L / 4E) for energies `E` [GeV]
+and baselines `L` [km], with the phase convention of `Newtrinos.osc` (`F_units`).
+"""
+function nue_survival(E, L, params)
+    s12², s13² = sin(params.θ₁₂)^2, sin(params.θ₁₃)^2
+    ue1, ue2, ue3 = (1 - s12²) * (1 - s13²), s12² * (1 - s13²), s13²
+    dm21, dm31 = params.Δm²₂₁, params.Δm²₃₁
+    dm32 = dm31 - dm21
+    k = Newtrinos.osc.F_units / 2
+    @. 1 - 4 * (ue1 * ue2 * sin(k * dm21 * L' / E)^2 + ue1 * ue3 * sin(k * dm31 * L' / E)^2 + ue2 * ue3 * sin(k * dm32 * L' / E)^2)
+end
+
+"""
+    survival_probabilities(osc, E_nu_GeV, baselines_km, layers, params)
+
+P(ν̄e → ν̄e) [MeV input] of `osc` on the energy vector `E_nu_GeV` [GeV] for each baseline of `baselines_km` [km],
+returning one probability vector per baseline: the closed form [`nue_survival`](@ref) for the standard three-flavour
+vacuum configuration (much cheaper with dual numbers), matter-effect `osc_prob` on `layers` for three-flavour SI,
+otherwise the generic `osc_prob`.
+"""
+function survival_probabilities(osc, E_nu_GeV, baselines_km, layers, params)
+    oc = osc.cfg
+    standard_osc = oc.flavour isa Newtrinos.osc.ThreeFlavour && oc.interaction isa Newtrinos.osc.Vacuum &&
+                   oc.propagation isa Newtrinos.osc.Basic && oc.states isa Newtrinos.osc.All
+    matter_osc = oc.flavour isa Newtrinos.osc.ThreeFlavour && oc.interaction isa Newtrinos.osc.SI &&
+                 oc.propagation isa Newtrinos.osc.Basic && oc.states isa Newtrinos.osc.All
+    matter_osc && return [osc.osc_prob(E_nu_GeV, VectorOfVectors{Newtrinos.Path}([[Newtrinos.Path(L, 1)]]), layers, params, anti = true)[:, 1, 1, 1] for L in baselines_km]
+    standard_osc || return [osc.osc_prob(E_nu_GeV, [L], params, anti = true)[:, 1, 1, 1] for L in baselines_km]
+    [nue_survival(E_nu_GeV, L, params) for L in baselines_km]
+end
 
 end # module Helpers
