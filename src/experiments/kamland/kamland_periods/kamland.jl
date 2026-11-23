@@ -54,7 +54,7 @@ const DATASETS = (
                    live_days = (1486.0, 1154.0, 351.0),
                    dates = ((Date(2002, 3, 9), Date(2007, 5, 15)), (Date(2007, 5, 16), Date(2011, 8, 1)), (Date(2011, 10, 12), Date(2012, 11, 20))),
                    efficiency = ("efficiency.csv", (1, 2, 3)),
-                   rate_unc = (0.035, sqrt(0.040^2 - 0.035^2)), alpha_n_unc = 0.11, li9_unc = 0.06, geo_reference = (U = 109.0, Th = 27.0)),
+                   rate_unc = (0.035, sqrt(0.040^2 - 0.035^2)), alpha_n_unc = 0.10, li9_unc = 0.06, geo_reference = (U = 109.0, Th = 27.0)),
     kamland2011 = (names = (:all,), files = ("kamland2011.csv",), live_days = (2135.0,),
                    dates = ((Date(2002, 3, 9), Date(2009, 11, 4)),),
                    efficiency = ("efficiency_2011.csv", nothing),
